@@ -26,6 +26,8 @@ export const selectRequest = <Route extends { readonly access?: "board" | "appli
 		const matched =
 			matcher.find(request.method, target) ?? (request.method === "HEAD" ? matcher.find("GET", target) : undefined);
 		if (!matched) return envelope ? yield* refused() : null;
+		if (Object.entries(matched.params).some(([name, value]) => name !== "*" && value === ""))
+			return envelope ? yield* refused() : null;
 		if (envelope && matched.handler.access !== "application-managed") return yield* refused();
 		return { matched, target, envelope };
 	});

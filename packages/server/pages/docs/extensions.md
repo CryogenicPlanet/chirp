@@ -236,7 +236,7 @@ Rehearsal records suppressed helper calls and disabled cron registrations in its
 
 `api.on("message.created", (payload, ctx) => effect)` handles matching published events sequentially. Exact types, trailing-prefix wildcards and `*` are supported. `ctx.event` is the complete event. These hooks have generation-local cursors; a replacement starts at its load fence. They are best-effort, not durable delivery. Use the bundled [subscriptions extension](subscriptions.md) for persisted cursors and retries.
 
-Returned Promises are awaited on cancellation because JavaScript cannot cancel them. A hung Promise can prevent graceful drain; detached timers and native external side effects are outside scoped ownership. Use Effect scopes for interruptible work. Unexpected raw handler or hook failures disable only that extension; typed input/authorization failures do not. Diagnostics publish only while live through the shared outbox.
+Returned Promises are awaited on cancellation because JavaScript cannot cancel them. A hung Promise can prevent graceful drain; detached timers and native external side effects are outside scoped ownership. Use Effect scopes for interruptible work. An ordinary route failure returns `handler_failed` for that request and leaves the extension loaded. Three route defects within one minute disable only that extension; earlier defects are reported as diagnostics. Hook failures still disable their extension immediately, while typed input and authorization failures do not. Diagnostics publish only while live through the shared outbox.
 
 `api.page("/dashboard", ctx => "<h1>Dashboard</h1>")` registers a human-only HTML route. It does not write files under `/p`; filesystem edits use the edit API.
 

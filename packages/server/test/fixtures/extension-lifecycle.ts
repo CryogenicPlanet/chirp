@@ -40,7 +40,7 @@ const run = Effect.gen(function* () {
 			trace.push(yield* read());
 		}
 		yield* changeState("live");
-		yield* extensions.dispatch(Effect.succeed(HttpServerResponse.empty())).pipe(
+		const failRoute = extensions.dispatch(Effect.succeed(HttpServerResponse.empty())).pipe(
 			Effect.provideService(
 				HttpServerRequest.HttpServerRequest,
 				HttpServerRequest.fromWeb(
@@ -55,8 +55,9 @@ const run = Effect.gen(function* () {
 					}),
 				),
 			),
-			Effect.forkScoped,
 		);
+		for (let attempt = 0; attempt < 2; attempt++) yield* failRoute.pipe(Effect.exit);
+		yield* failRoute.pipe(Effect.forkScoped);
 		while (!(yield* read()).endsWith("closing,")) yield* Effect.sleep("5 millis");
 		yield* changeState("frozen");
 		trace.push(yield* read());

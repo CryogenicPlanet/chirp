@@ -56,7 +56,8 @@ export default api => {
  })});
  api.route("GET", "/managed/private", {description:"Private precedence",scope:"read",handler:async()=>Response.json("private")});
  api.route("GET", "/managed/denied", {description:"App admission",access:"application-managed",handler:async()=>new Response("Password needed",{status:401,headers:{"x-chirp-ingress-challenge":"credential_required"}})});
- api.route("GET", "/managed/broken", {description:"Fail closed",access:"application-managed",handler:async()=>{throw Error("broken");}});
+ api.route("GET", "/managed/broken", {description:"Request failure",access:"application-managed",handler:async()=>{throw Error("broken");}});
+ api.route("GET", "/managed/defect", {description:"Defect threshold",access:"application-managed",handler:()=>Effect.die("defective")});
 };`,
 	);
 	let app = await fixture.launch(join(seed, "server.ts"));
@@ -209,7 +210,23 @@ export default api => {
 	const api = await (await fetch(`${app.url}/api`, { headers: { cookie } })).json();
 	expect(api.paths["/managed/{id}"].post).toMatchObject({ security: [], "x-chirp-access": "application-managed" });
 	expect(api.paths["/managed/private"].get.security.length).toBeGreaterThan(0);
-	expect((await fetch(`${app.url}/managed/broken`)).status).toBe(500);
+	for (let attempt = 0; attempt < 2; attempt++) {
+		const failed = await fetch(`${app.url}/managed/broken`);
+		expect(failed.status).toBe(500);
+		expect(await failed.json()).toMatchObject({ error: { code: "handler_failed", retriable: false } });
+	}
+	expect(await (await fetch(`${app.url}/api/ext`, { headers: { cookie } })).json()).toEqual(
+		expect.arrayContaining([expect.objectContaining({ name: "managed.ts", status: "loaded", error: null })]),
+	);
+	expect((await fetch(`${app.url}/managed/hello`)).status).toBe(200);
+	for (let attempt = 0; attempt < 2; attempt++) {
+		const defective = await fetch(`${app.url}/managed/defect`);
+		expect(defective.status).toBe(500);
+		expect(await defective.json()).toMatchObject({ error: { code: "handler_failed", retriable: false } });
+	}
+	const threshold = await fetch(`${app.url}/managed/defect`);
+	expect(threshold.status).toBe(500);
+	expect(await threshold.json()).toMatchObject({ error: { code: "extension_disabled", retriable: false } });
 	expect((await fetch(`${app.url}/managed/hello`)).status).toBe(500);
 	expect((await fetch(`${app.url}/managed/hello`, { headers: { authorization } })).status).toBe(500);
 	await app.stop();

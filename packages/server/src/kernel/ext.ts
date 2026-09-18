@@ -42,6 +42,8 @@ type Registration = RouteOptions & {
 	readonly path: `/${string}`;
 	readonly operation?: OpenApi.OpenAPISpecOperation;
 };
+const defectLimit = 3;
+const defectWindowMs = 60_000;
 
 interface Status {
 	readonly name: string;
@@ -84,6 +86,7 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 			readonly cursor: Ref.Ref<number>;
 			readonly shutdown: ReadonlyArray<Hook>;
 			readonly scope: Ref.Ref<Scope.Closeable | null>;
+			readonly defects: Ref.Ref<ReadonlyArray<number>>;
 		}> = [];
 		const diagnostic = (
 			name: string,
@@ -282,6 +285,7 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 				effects,
 				shutdown: stops,
 				scope: activeScope,
+				defects: yield* Ref.make<ReadonlyArray<number>>([]),
 			});
 		}
 		// A failed factory may have owned a narrower private route. Its absence must not expose a broader route.
@@ -588,14 +592,29 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 									cause.reasons.every((reason) => reason._tag === "Fail" && Schema.is(KernelError)(reason.error))
 								)
 									return yield* expected.error;
-								yield* transitions.withPermit(
+								if (!cause.reasons.some((reason) => reason._tag === "Die")) return yield* Effect.failCause(cause);
+								const observedAt = (yield* DateTime.nowAsDate).getTime();
+								const disabled = yield* transitions.withPermit(
 									Effect.gen(function* () {
-										yield* failed(route.extension, cause, "ext.error");
 										const extension = extensions.find((item) => item.name === route.extension);
-										if (extension) yield* stop(extension);
+										if (!extension) return false;
+										if ((yield* Ref.get(statuses)).find((item) => item.name === route.extension)?.status !== "loaded")
+											return true;
+										const defects = [
+											...(yield* Ref.get(extension.defects)).filter((at) => observedAt - at <= defectWindowMs),
+											observedAt,
+										];
+										yield* Ref.set(extension.defects, defects);
+										if (defects.length < defectLimit) {
+											yield* diagnostic(route.extension, "ext.error", Cause.pretty(cause).slice(-8192));
+											return false;
+										}
+										yield* failed(route.extension, cause, "ext.error");
+										yield* stop(extension);
+										return true;
 									}).pipe(Effect.uninterruptible),
 								);
-								return unavailable();
+								return disabled ? unavailable() : yield* Effect.failCause(cause);
 							}),
 						),
 					);

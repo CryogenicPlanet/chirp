@@ -28,7 +28,11 @@ export default api => {${core ? "api.mount(CoreApi,coreHandlers(api));" : ""}api
 	);
 	await writeFile(
 		join(seed, "ext/throws.ts"),
-		'export default api => api.route("GET","/api/throws",{description:"Throwing handler",scope:"read",handler:async()=>{throw Error("handler failed")}});',
+		`import {Effect} from "effect";
+export default api => {
+ api.route("GET","/api/fails",{description:"Failing handler",scope:"read",handler:async()=>{throw Error("handler failed")}});
+ api.route("GET","/api/defects",{description:"Defective handler",scope:"read",handler:()=>Effect.die("handler defect")});
+};`,
 	);
 	await writeFile(
 		join(seed, "ext/reserved.ts"),
@@ -51,10 +55,24 @@ export default api => {${core ? "api.mount(CoreApi,coreHandlers(api));" : ""}api
 	for (const secret of ["x-boot-secret", "authorization", "cookie"]) expect(identity.headers[secret]).toBeUndefined();
 	expect((await get("/api/partial")).status).toBe(404);
 	for (let attempt = 0; attempt < 2; attempt++) {
-		const disabled = await get("/api/throws");
-		expect(disabled.status).toBe(500);
-		expect(await disabled.json()).toMatchObject({ error: { code: "extension_disabled", retriable: false } });
+		const failed = await get("/api/fails");
+		expect(failed.status).toBe(500);
+		expect(await failed.json()).toMatchObject({ error: { code: "handler_failed", retriable: false } });
 	}
+	expect(await (await get("/api/ext")).json()).toEqual(
+		expect.arrayContaining([expect.objectContaining({ name: "throws.ts", status: "loaded", error: null })]),
+	);
+	for (let attempt = 0; attempt < 2; attempt++) {
+		const defective = await get("/api/defects");
+		expect(defective.status).toBe(500);
+		expect(await defective.json()).toMatchObject({ error: { code: "handler_failed", retriable: false } });
+	}
+	const threshold = await get("/api/defects");
+	expect(threshold.status).toBe(500);
+	expect(await threshold.json()).toMatchObject({ error: { code: "extension_disabled", retriable: false } });
+	const disabled = await get("/api/fails");
+	expect(disabled.status).toBe(500);
+	expect(await disabled.json()).toMatchObject({ error: { code: "extension_disabled", retriable: false } });
 	expect((await get("/api/standup")).status).toBe(200);
 	expect((await fetch(`${app.url}/api/head`, { method: "HEAD", headers: { cookie } })).headers.get("x-head")).toBe(
 		"explicit",
@@ -71,7 +89,7 @@ export default api => {${core ? "api.mount(CoreApi,coreHandlers(api));" : ""}api
 			expect.objectContaining({
 				name: "throws.ts",
 				status: "disabled",
-				error: expect.stringContaining("handler failed"),
+				error: expect.stringContaining("handler defect"),
 			}),
 			expect.objectContaining({ name: "zz-example.ts", status: "loaded" }),
 			expect.objectContaining({ name: "reserved.ts", status: "disabled", registrations: [] }),
@@ -206,10 +224,13 @@ export default api => Effect.gen(function*(){
 			}),
 		]),
 	);
-	expect(result.diagnostics.filter((entry: { type: string }) => entry.type === "ext.error")).toEqual([
+	const errors = result.diagnostics.filter((entry: { type: string }) => entry.type === "ext.error");
+	expect(errors).toEqual([
 		expect.objectContaining({
 			payload: { extension: "a-cleanup.ts", error: expect.stringContaining("cleanup exploded") },
 		}),
+		expect.objectContaining({ payload: { extension: "scoped", error: expect.stringContaining("route failure") } }),
+		expect.objectContaining({ payload: { extension: "scoped", error: expect.stringContaining("route failure") } }),
 		expect.objectContaining({ payload: { extension: "scoped", error: expect.stringContaining("route failure") } }),
 	]);
 });
