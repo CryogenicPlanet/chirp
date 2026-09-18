@@ -25,13 +25,13 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 	const fixture = await conversation(test);
 	const seed = join(fixture.root, "seed");
 	await cp(join(import.meta.dirname, "../src"), seed, { recursive: true });
-	await cp(join(import.meta.dirname, "../pages/tooling/mcp"), join(seed, "ext/mcp"), { recursive: true });
+	await cp(join(import.meta.dirname, "../../../examples/extensions/mcp"), join(seed, "ext/mcp"), { recursive: true });
 	for (const file of ["index.ts", "oauth.ts", "tools.ts"]) {
 		const path = join(seed, `ext/mcp/${file}`);
 		await writeFile(
 			path,
 			(await readFile(path, "utf8"))
-				.replace("../../../src/kernel/extension-api.ts", "../../kernel/extension-api.ts")
+				.replace("../../../packages/server/src/kernel/extension-api.ts", "../../kernel/extension-api.ts")
 				.replace("https://your-board.example", "https://comms.test"),
 		);
 	}

@@ -36,6 +36,10 @@
 !packages/ui/public/**
 !packages/ui/index.html
 !packages/ui/vite.config.ts
+!examples/
+!examples/extensions/
+!examples/extensions/mcp/
+!examples/extensions/mcp/**
 **/.env
 **/.env.*
 **/node_modules

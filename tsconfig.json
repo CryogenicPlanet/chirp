@@ -1,4 +1,9 @@
 {
 	"extends": "./tsconfig.base.json",
+	"compilerOptions": {
+		"paths": {
+			"@comms/storage/*": ["./packages/storage/src/*"]
+		}
+	},
 	"include": ["scripts/**/*.ts", "examples/**/*.ts", "vitest.config.ts"]
 }

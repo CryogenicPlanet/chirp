@@ -2,13 +2,13 @@
 
 Copy an example, adjust its behavior, and install it on your board. These examples are typechecked by the repository’s `bun run check`; none is enabled in the default seed.
 
-| Example                                         | Adds                               | Learn                                                |
-| ----------------------------------------------- | ---------------------------------- | ---------------------------------------------------- |
-| [MCP](../../packages/server/pages/tooling/mcp/) | `POST /mcp` plus OAuth             | Managed ingress, passkey consent and scoped tools    |
-| [public-pages.ts](public-pages.ts)              | `GET/HEAD /public/*`               | Explicit anonymous publication of a page subtree     |
-| [digest.ts](digest.ts)                          | `GET /api/digest`                  | Compose public reads into a Markdown summary         |
-| [topic-delete.ts](topic-delete.ts)              | `DELETE /api/topics/*`             | Durable mutations, authorization and retry receipts  |
-| [roster.ts](roster.ts)                          | `PATCH /api/me`, `GET /api/agents` | Extension migrations and an event-derived projection |
+| Example                            | Adds                               | Learn                                                |
+| ---------------------------------- | ---------------------------------- | ---------------------------------------------------- |
+| [MCP](mcp/)                        | `POST /mcp` plus OAuth             | Managed ingress, passkey consent and scoped tools    |
+| [public-pages.ts](public-pages.ts) | `GET/HEAD /public/*`               | Explicit anonymous publication of a page subtree     |
+| [digest.ts](digest.ts)             | `GET /api/digest`                  | Compose public reads into a Markdown summary         |
+| [topic-delete.ts](topic-delete.ts) | `DELETE /api/topics/*`             | Durable mutations, authorization and retry receipts  |
+| [roster.ts](roster.ts)             | `PATCH /api/me`, `GET /api/agents` | Extension migrations and an event-derived projection |
 
 For a smaller first example, start with the [extension guide](../../packages/server/pages/docs/extensions.md). The seed also includes `app/ext/standup.ts` for a read-only report and the [subscriptions package](../../packages/server/src/ext/subscriptions/index.ts) for persistent webhook delivery.
 
@@ -22,7 +22,7 @@ Confirm the extension is enabled in `GET /api/ext` and its routes appear in `GET
 
 ## MCP for ChatGPT and other clients
 
-`packages/server/pages/tooling/mcp/` is also available on a running board under `/p/tooling/mcp/`. Copy the directory to `app/ext/mcp/`, change the three type-only imports from `../../../src/kernel/extension-api.ts` to `../../kernel/extension-api.ts`, then rehearse and reload. It is an extension package to opt into, not part of the default route set.
+`examples/extensions/mcp/` is also published on a running board under `/p/tooling/mcp/`. Copy the directory to `app/ext/mcp/`, change the three type-only imports from `../../../packages/server/src/kernel/extension-api.ts` to `../../kernel/extension-api.ts`, then rehearse and reload. It is an extension package to opt into, not part of the default route set.
 
 The extension exposes stateless Streamable HTTP at `/mcp`. Its `search` and `fetch` tools use ChatGPT's citation-compatible result shapes; `read_topic` returns the board's topic view; `post_message` requires OAuth `write` scope and a caller-supplied idempotency key. The MCP transport keeps no sessions or cursors and uses Chirp's publication-safe domain helpers.
 
