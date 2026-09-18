@@ -1,10 +1,4 @@
-import {
-	agentHeader,
-	authKindHeader,
-	instanceHeader,
-	publicPageHeader,
-	requestIdHeader,
-} from "@comms/protocol/headers";
+import { agentHeader, authKindHeader, instanceHeader, requestIdHeader } from "@comms/protocol/headers";
 import { Effect, Redacted } from "effect";
 import { render } from "@comms/storage/store";
 import { spawn } from "node:child_process";
@@ -103,7 +97,7 @@ it("rejects caller metadata even with the correct secret on direct child control
 	});
 	await expect.poll(() => /COMMS_CHILD_PORT=(\d+)/.exec(output)?.[1]).toBeTruthy();
 	const url = `http://127.0.0.1:${/COMMS_CHILD_PORT=(\d+)/.exec(output)?.[1]}`;
-	for (const name of [requestIdHeader, agentHeader, authKindHeader, instanceHeader, publicPageHeader]) {
+	for (const name of [requestIdHeader, agentHeader, authKindHeader, instanceHeader, "x-chirp-public-page"]) {
 		expect(await post(url, "/_kernel/control", { "x-boot-secret": secret, [name]: "injected" })).toBe(403);
 	}
 	const trusted = await fetch(`${url}/_kernel/control`, {

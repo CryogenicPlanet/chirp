@@ -1,8 +1,28 @@
-import { assertionHeader } from "@comms/protocol/headers";
+import { assertionHeader, ingressChallengeHeader } from "@comms/protocol/headers";
 import { cp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { conversation } from "./fixtures/conversation.ts";
+
+const boardChallenge = async (url: string) => {
+	for (const path of [
+		"/",
+		"/t/topic?x=1",
+		"/ext",
+		"/@agent",
+		"/p/private.md",
+		"/api/messages",
+		"/not-registered",
+		"/quickstart.md",
+	]) {
+		const response = await fetch(url + path, { headers: { accept: "text/html" }, redirect: "manual" });
+		expect(response.status, path).toBe(302);
+		expect(response.headers.get("location")).toBe(`/auth/login?next=${encodeURIComponent(path)}`);
+		const api = await fetch(url + path, { headers: { accept: "application/json" } });
+		expect(api.status, path).toBe(401);
+		expect(api.headers.get(ingressChallengeHeader)).toBeNull();
+	}
+};
 
 it("requires operator opt-in and persists explicitly managed writes with service authority", async (test) => {
 	const fixture = await conversation(test);
@@ -23,7 +43,7 @@ export default api => {
   return Response.json(yield* ctx.messages.create({topic:"managed",body},req.headers["idempotency-key"]));
  })});
  api.route("GET", "/managed/private", {description:"Private precedence",scope:"read",handler:async()=>Response.json("private")});
- api.route("GET", "/managed/denied", {description:"App admission",access:"application-managed",handler:async()=>new Response("Password needed",{status:401})});
+ api.route("GET", "/managed/denied", {description:"App admission",access:"application-managed",handler:async()=>new Response("Password needed",{status:401,headers:{"x-chirp-ingress-challenge":"credential_required"}})});
  api.route("GET", "/managed/broken", {description:"Fail closed",access:"application-managed",handler:async()=>{throw Error("broken");}});
 };`,
 	);
@@ -31,6 +51,7 @@ export default api => {
 	await app.setup();
 	let cookie = await app.login();
 	await app.ready(cookie);
+	await boardChallenge(app.url);
 	const authorization = `Bearer chirp_app_${"a".repeat(43)}`;
 	expect((await fetch(`${app.url}/managed/hello`)).status).toBe(401);
 	expect((await fetch(`${app.url}/managed/hello`, { headers: { authorization } })).status).toBe(401);
@@ -40,6 +61,7 @@ export default api => {
 	app = await fixture.launch(join(seed, "server.ts"));
 	cookie = await app.login();
 	await app.ready(cookie);
+	await boardChallenge(app.url);
 	const response = await fetch(`${app.url}/managed/hello?tag=a&tag=b`, {
 		headers: {
 			cookie: "chirp_app_gate=approved; unrelated=hidden",
@@ -89,6 +111,15 @@ export default api => {
 		"/_boot/status",
 	])
 		expect((await fetch(`${app.url}${path}`, { headers: { authorization } })).status).toBeGreaterThanOrEqual(400);
+	const bearerPrivate = await fetch(`${app.url}/managed/private`, {
+		headers: { authorization, accept: "text/html" },
+		redirect: "manual",
+	});
+	expect(bearerPrivate.status).toBe(401);
+	expect(bearerPrivate.headers.get("location")).toBeNull();
+	expect(await bearerPrivate.json()).toMatchObject({
+		error: { code: "credential_required", hint: expect.any(String), retriable: false },
+	});
 	const signed = await (
 		await fetch(`${app.url}/managed/hello`, { headers: { cookie: `${cookie}; chirp_app_gate=approved` } })
 	).json();
@@ -96,9 +127,15 @@ export default api => {
 	expect(signed.authority.actor).toBe("system");
 	expect(signed.cookie).toBe("chirp_app_gate=approved");
 	for (const path of ["/managed/private", "/api/messages", "/p/private.md", "/not-registered"])
-		expect((await fetch(`${app.url}${path}`)).status).toBeGreaterThanOrEqual(400);
+		expect((await fetch(`${app.url}${path}`)).status).toBe(401);
 	expect((await fetch(`${app.url}/managed/hello`, { headers: { authorization: "Bearer invalid" } })).status).toBe(401);
-	expect((await fetch(`${app.url}/managed/denied`)).status).toBe(401);
+	const denied = await fetch(`${app.url}/managed/denied`, { headers: { accept: "text/html" }, redirect: "manual" });
+	expect(denied.status).toBe(401);
+	expect(denied.headers.get("location")).toBeNull();
+	expect(denied.headers.get(ingressChallengeHeader)).toBeNull();
+	expect(await denied.text()).toBe("Password needed");
+	const malformedQuery = await fetch(`${app.url}/api/messages?topic=gen\\eral`, { headers: { cookie } });
+	expect(malformedQuery.status).toBe(404);
 	expect((await fetch(`${app.url}/managed/hello`, { method: "DELETE" })).status).toBeGreaterThanOrEqual(400);
 	const enrollment = await (
 		await app.post("/auth/enroll", { name: "managed-reader", kind: "agent", host: "test" })
@@ -191,12 +228,13 @@ it("closes anonymous ingress when a failed factory could have owned a narrower r
 	await app.setup();
 	const cookie = await app.login();
 	await app.ready(cookie);
-	expect((await fetch(`${app.url}/shared/private`)).status).toBe(500);
+	await boardChallenge(app.url);
+	expect((await fetch(`${app.url}/shared/private`)).status).toBe(401);
 	expect(
 		(await fetch(`${app.url}/shared/private`, { headers: { authorization: `Bearer chirp_app_${"a".repeat(43)}` } }))
 			.status,
-	).toBe(500);
-	expect((await fetch(`${app.url}/shared/otherwise-public`)).status).toBe(500);
+	).toBe(401);
+	expect((await fetch(`${app.url}/shared/otherwise-public`)).status).toBe(401);
 	expect((await fetch(`${app.url}/_boot/status`, { headers: { cookie } })).status).toBe(200);
 	expect(await (await fetch(`${app.url}/api/ext`, { headers: { cookie } })).json()).toEqual(
 		expect.arrayContaining([expect.objectContaining({ name: "b-private.ts", status: "disabled" })]),

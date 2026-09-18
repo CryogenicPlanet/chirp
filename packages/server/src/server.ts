@@ -182,7 +182,7 @@ const server = Effect.gen(function* () {
 										headers: {
 											[writerEpochHeader]: boot.epoch,
 											[kernelProtocolHeader]: "2",
-											[ingressProtocolHeader]: ingressProtocolVersion,
+											...(extensions.ingressReady ? { [ingressProtocolHeader]: ingressProtocolVersion } : {}),
 											[rehearsalReportHeader]: "1",
 										},
 									},
@@ -317,7 +317,6 @@ const server = Effect.gen(function* () {
 						headers: {
 							[writerEpochHeader]: boot.epoch,
 							[kernelProtocolHeader]: "2",
-							[ingressProtocolHeader]: ingressProtocolVersion,
 						},
 					});
 				}

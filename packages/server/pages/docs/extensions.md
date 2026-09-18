@@ -148,6 +148,8 @@ never receives delegated traffic; earlier dispatchers did not preserve applicati
 managed extension after operator opt-in. No sharing, password or approval workflow is built
 into this primitive.
 
+A supplied read-scoped board token cannot authorize a mutation, even when the same managed route deliberately accepts anonymous writes. Omit board credentials when using the route’s independent application admission.
+
 ## Product and storage operations
 
 Start with the domain helpers. They preserve caller attribution and the board’s transaction/publication rules for you.

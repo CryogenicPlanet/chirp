@@ -36,6 +36,9 @@ it.for([
 	const app = await launch(test, "ingress", false, {}, config);
 	await expect.poll(async () => (await app.state()).state).toBe("live");
 	expect((await fetch(`${app.url}/shared`)).status).toBe(401);
+	const browser = await fetch(`${app.url}/shared`, { headers: { accept: "text/html" }, redirect: "manual" });
+	expect(browser.status).toBe(302);
+	expect(browser.headers.get("location")).toBe("/auth/login?next=%2Fshared");
 	expect(
 		(await fetch(`${app.url}/shared`, { headers: { authorization: `Bearer chirp_app_${"a".repeat(43)}` } })).status,
 	).toBe(401);
@@ -50,6 +53,9 @@ it.for(["normal", "ingress-v1"])("refuses incompatible managed ingress generatio
 	const app = await launch(test, mode, false, {}, '{"applicationManagedIngress":true}');
 	await expect.poll(async () => (await app.state()).state).toBe("live");
 	expect((await fetch(`${app.url}/shared`)).status).toBe(401);
+	const browser = await fetch(`${app.url}/shared`, { headers: { accept: "text/html" }, redirect: "manual" });
+	expect(browser.status).toBe(302);
+	expect(browser.headers.get("location")).toBe("/auth/login?next=%2Fshared");
 	expect(
 		(await fetch(`${app.url}/shared`, { headers: { authorization: `Bearer chirp_app_${"a".repeat(43)}` } })).status,
 	).toBe(401);
@@ -150,4 +156,13 @@ it("forwards only exact application bearers through managed ingress without boar
 		outgoing.end();
 	});
 	expect(JSON.parse(hop)).toMatchObject({ authorization: null, agent: null });
+});
+
+it("narrows response cookies only after operator opt-in", async (test) => {
+	const app = await launch(test, "ingress", false, {}, '{"applicationManagedIngress":true}');
+	await expect.poll(async () => (await app.state()).state).toBe("live");
+	const cookies = (await app.fetch(`${app.url}/cookies`)).headers.getSetCookie();
+	expect(cookies.join(";")).toContain("chirp_app_preference=dark");
+	expect(cookies.join(";")).not.toContain("app-preference");
+	expect(cookies.join(";")).not.toContain("__Host-comms_session");
 });

@@ -1,31 +1,5 @@
-export const reserved = (path: string) => {
-	const route = path.replace(/\/+/g, "/").replace(/\/$/, "").toLowerCase();
-	return (
-		[
-			"/_boot",
-			"/_kernel",
-			"/api/fs",
-			"/api/lock",
-			"/api/reload",
-			"/api/revert",
-			"/api/generations",
-			"/api/tokens",
-			"/auth",
-			"/approve",
-			"/setup",
-		].some((prefix) => route === prefix || route.startsWith(prefix + "/")) ||
-		[
-			"/health",
-			"/api",
-			"/api/ext",
-			"/init",
-			"/init.md",
-			"/quickstart",
-			"/quickstart.md",
-			"/.well-known/agent.json",
-		].includes(route)
-	);
-};
+import { reservedIngressRoute as reserved } from "@comms/protocol/headers";
+export { reservedIngressRoute as reserved } from "@comms/protocol/headers";
 export const requestPath = (url: string) => {
 	try {
 		const path = url.startsWith("/") ? url : new URL(url).pathname;

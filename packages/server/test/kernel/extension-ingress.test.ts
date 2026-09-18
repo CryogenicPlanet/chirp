@@ -89,3 +89,10 @@ it("exposes an application bearer only to the managed envelope, including reques
 		expect(web.headers.get("x-boot-secret")).toBeNull();
 	}
 });
+
+it("leaves malformed ordinary query handling to the core router", async () => {
+	const matcher = FindMyWay.make<{ readonly access: "board" }>();
+	matcher.on("GET", "/api/messages", { access: "board" });
+	const request = HttpServerRequest.fromWeb(new Request("http://child/api/messages?topic=gen\\eral"));
+	expect(await Effect.runPromise(selectRequest(matcher, request))).toBeNull();
+});

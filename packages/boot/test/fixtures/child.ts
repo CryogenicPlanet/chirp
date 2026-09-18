@@ -137,6 +137,7 @@ export function serve(mode: string) {
 				const headers = new Headers();
 				headers.append("set-cookie", "__Host-comms_session=forged; Secure; HttpOnly; Path=/");
 				headers.append("set-cookie", "chirp_app_preference=dark; Path=/");
+				headers.append("set-cookie", "app-preference=dark; Path=/");
 				return new Response("cookies", { headers });
 			}
 			if (url.pathname === "/api")

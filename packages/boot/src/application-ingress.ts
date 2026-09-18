@@ -1,4 +1,4 @@
-import { applicationCookiePrefix } from "@comms/protocol/headers";
+import { reservedIngressRoute, applicationCookiePrefix } from "@comms/protocol/headers";
 
 /** Only explicitly namespaced application cookies cross the board credential boundary. */
 export const applicationCookies = (header: string | undefined): string =>
@@ -18,20 +18,5 @@ export const isReservedIngressPath = (pathname: string): boolean => {
 	} catch {
 		return true;
 	}
-	return (
-		[
-			"/_boot",
-			"/_kernel",
-			"/api/fs",
-			"/api/lock",
-			"/api/reload",
-			"/api/revert",
-			"/api/generations",
-			"/api/tokens",
-			"/auth",
-			"/approve",
-			"/setup",
-		].some((prefix) => path === prefix || path.startsWith(`${prefix}/`)) ||
-		["/health", "/api", "/api/ext", "/init", "/init.md", "/quickstart", "/.well-known/agent.json"].includes(path)
-	);
+	return reservedIngressRoute(path);
 };

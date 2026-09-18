@@ -54,8 +54,8 @@ it("rechecks a queued anonymous write against the new generation's private route
 	expect(await (await reload).json()).toMatchObject({ status: "live" });
 	expect((await status()).child.pid).toBe(candidate);
 	if (!pending) throw Error("Missing queued request");
-	expect((await pending).status).toBe(403);
-	expect((await write("after-must-not-write")).status).toBe(403);
+	expect((await pending).status).toBe(401);
+	expect((await write("after-must-not-write")).status).toBe(401);
 	expect(await fixture.sql("SELECT body FROM messages WHERE topic='ingress-cutover' ORDER BY seq")).toEqual([
 		{ body: "before-cutover" },
 	]);

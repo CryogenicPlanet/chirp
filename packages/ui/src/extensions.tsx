@@ -88,7 +88,10 @@ export function Extensions() {
 												{route.method} {route.path}
 											</code>
 											<span className="mt-1 block leading-relaxed text-muted-foreground">
-												{route.description} · {route.scope} scope
+												{route.description} ·{" "}
+												{route.access === "application-managed"
+													? "Application-managed access (app controls authentication when enabled)"
+													: `${route.scope} scope`}
 											</span>
 										</li>
 									))}

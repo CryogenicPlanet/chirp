@@ -4,6 +4,7 @@ import {
 	applicationCookiePrefix,
 	applicationIngressPath,
 	ingressTargetHeader,
+	ingressChallengeHeader,
 	authKindHeader,
 	baseVersionHeader,
 	headerLabel,
@@ -351,7 +352,9 @@ export const proxy = Effect.gen(function* () {
 				}
 				if (!destination) return expires(unavailable());
 				if (managedIngress && !destination.applicationManagedIngress)
-					return authErrorResponse("credential_required", 401);
+					return applicationBearer
+						? authErrorResponse("credential_required", 401)
+						: yield* new AuthError({ code: "session_invalid" });
 				const connectionHeaders = new Set(
 					(request.headers.connection ?? "")
 						.toLowerCase()
@@ -426,6 +429,13 @@ export const proxy = Effect.gen(function* () {
 				return yield* client.execute(outgoing).pipe(
 					Effect.flatMap((response) =>
 						Effect.gen(function* () {
+							if (
+								managedIngress &&
+								!applicationBearer &&
+								response.status === 401 &&
+								response.headers[ingressChallengeHeader] === "credential_required"
+							)
+								return yield* authFailure(Effect.fail(new AuthError({ code: "session_invalid" })));
 							const connection = new Set(
 								(response.headers.connection ?? "")
 									.toLowerCase()
@@ -473,8 +483,11 @@ export const proxy = Effect.gen(function* () {
 								cookies: connection.has("set-cookie")
 									? Cookies.empty
 									: Cookies.fromIterable(
-											Object.values(response.cookies.cookies).filter((cookie) =>
-												cookie.name.startsWith(applicationCookiePrefix),
+											Object.values(response.cookies.cookies).filter(
+												(cookie) =>
+													cookie.name !== sessionCookie &&
+													(ingress?.applicationManagedIngress !== true ||
+														cookie.name.startsWith(applicationCookiePrefix)),
 											),
 										),
 							}).pipe(

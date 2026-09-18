@@ -1,4 +1,4 @@
-import { scopesHeader, authKindHeader } from "@comms/protocol/headers";
+import { scopesHeader, authKindHeader, ingressChallengeHeader } from "@comms/protocol/headers";
 import { selectRequest, exposeRequest } from "./extension-ingress.ts";
 import { assertNoPendingMigration } from "./migration-intent.ts";
 import { encodeError, policy } from "@comms/protocol/errors";
@@ -455,6 +455,7 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 		});
 		for (const route of selected) matcher.on(route.method, route.path, route);
 		return {
+			ingressReady,
 			registrations: selected,
 			openapi: document(selected, documents),
 			diagnostics: Ref.get(diagnostics),
@@ -484,7 +485,23 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 			dispatch: <A, E, R>(fallback: Effect.Effect<A, E, R>) =>
 				Effect.gen(function* () {
 					const incoming = yield* HttpServerRequest.HttpServerRequest;
-					const selectedRequest = yield* selectRequest(matcher, incoming);
+					const selection = yield* selectRequest(matcher, incoming).pipe(Effect.result);
+					if (selection._tag === "Failure")
+						return HttpServerResponse.jsonUnsafe(
+							{
+								error: {
+									code: "credential_required",
+									message: "Board authentication is required.",
+									hint: "Sign in at /auth/login or provide a board access token.",
+									retriable: false,
+								},
+							},
+							{
+								status: 401,
+								headers: { [ingressChallengeHeader]: "credential_required", "cache-control": "no-store" },
+							},
+						);
+					const selectedRequest = selection.success;
 					if (!selectedRequest) return yield* fallback;
 					const { matched, target, envelope } = selectedRequest;
 					if (envelope && !ingressReady) return yield* new KernelError({ code: "extension_disabled" });
@@ -558,6 +575,7 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 							route: HttpRouter.route(route.method, route.path, HttpServerResponse.empty()),
 						}),
 						Effect.map(HttpServerResponse.fromWeb),
+						Effect.map(HttpServerResponse.removeHeader(ingressChallengeHeader)),
 						Effect.catchCause((cause) =>
 							Effect.gen(function* () {
 								if (Cause.hasInterruptsOnly(cause)) return yield* Effect.interrupt;
