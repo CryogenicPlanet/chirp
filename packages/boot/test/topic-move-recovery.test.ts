@@ -127,7 +127,10 @@ it("keeps authentication available while refusing legacy stores across restart, 
 				child: { state: "failed", pid: null, error: expect.stringContaining("topic_move_recovery_required") },
 			});
 		expect((await fetch(`${url}/_boot/status`)).status).toBe(401);
-		expect((await fetch(`${url}/auth/login`)).status).toBe(200);
+		expect(await (await authenticated(`${url}/_boot/auth/state`)).json()).toEqual({
+			setup_required: true,
+			authenticated: true,
+		});
 		expect((await fetch(`${url}/health`)).status).toBe(200);
 		expect((await authenticated(url)).status).toBe(503);
 		const exited = once(child, "exit");
