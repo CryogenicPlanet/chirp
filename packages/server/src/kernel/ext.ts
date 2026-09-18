@@ -594,6 +594,7 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 									return yield* expected.error;
 								if (!cause.reasons.some((reason) => reason._tag === "Die")) return yield* Effect.failCause(cause);
 								const observedAt = (yield* DateTime.nowAsDate).getTime();
+								const defect = new ExtensionError({ message: Cause.pretty(cause).slice(-8192) });
 								const disabled = yield* transitions.withPermit(
 									Effect.gen(function* () {
 										const extension = extensions.find((item) => item.name === route.extension);
@@ -606,7 +607,7 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 										];
 										yield* Ref.set(extension.defects, defects);
 										if (defects.length < defectLimit) {
-											yield* diagnostic(route.extension, "ext.error", Cause.pretty(cause).slice(-8192));
+											yield* diagnostic(route.extension, "ext.error", defect.message);
 											return false;
 										}
 										yield* failed(route.extension, cause, "ext.error");
@@ -614,7 +615,7 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 										return true;
 									}).pipe(Effect.uninterruptible),
 								);
-								return disabled ? unavailable() : yield* Effect.failCause(cause);
+								return disabled ? unavailable() : yield* defect;
 							}),
 						),
 					);

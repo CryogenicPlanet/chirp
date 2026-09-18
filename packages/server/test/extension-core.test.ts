@@ -81,7 +81,7 @@ api.mount(definition,HttpApiBuilder.group(definition,"defective-input",h=>h.hand
 	for (const path of ["/api/mixed-cause", "/api/mixed-input", "/api/defective-input"]) {
 		for (let attempt = 0; attempt < 2; attempt++) {
 			const defective = await get(path);
-			expect(defective.status).toBe(500);
+			expect(defective.status, path).toBe(500);
 			expect(await defective.json()).toMatchObject({ error: { code: "handler_failed", retriable: false } });
 		}
 		const threshold = await get(path);
