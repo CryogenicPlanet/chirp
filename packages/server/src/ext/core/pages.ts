@@ -12,7 +12,7 @@ import { validTopic } from "./messages.ts";
 export class PageRejected extends Schema.TaggedError<PageRejected>()("PageRejected", {
 	code: Schema.Literals(["page_not_found", "page_path_invalid", "pages_unavailable", "pages_move_pending"]),
 }) {}
-const validPath = (name: string) =>
+export const validPagePath = (name: string) =>
 	name === "" ||
 	(!/[\\:]/.test(name) &&
 		Array.from(name).every((char) => char.charCodeAt(0) >= 32 && char.charCodeAt(0) !== 127) &&
@@ -57,7 +57,7 @@ const make = (directory: string) =>
 
 		const resolve = Effect.fn("Pages.resolve")(
 			function* (name: string) {
-				if (!validPath(name)) return yield* new PageRejected({ code: "page_path_invalid" });
+				if (!validPagePath(name)) return yield* new PageRejected({ code: "page_path_invalid" });
 				yield* visible(name);
 				const parent = yield* fs.realPath(path.dirname(directory));
 				const root = path.join(parent, path.basename(directory));

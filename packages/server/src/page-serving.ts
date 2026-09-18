@@ -1,6 +1,6 @@
 import { Cause, Effect, type FileSystem, Option, Scope, Stream } from "effect";
 import { type HttpServerRequest, HttpServerResponse, Mime } from "effect/unstable/http";
-import { PageRejected, type Pages } from "./ext/core/pages.ts";
+import { PageRejected, type Pages, validPagePath } from "./ext/core/pages.ts";
 import type { ExtensionCapabilities } from "./kernel/extension-capabilities.ts";
 import { escapeHtml, pageDocument, pageHref } from "./page-markdown.ts";
 import { htmlHeaders as pageHeaders } from "./html-headers.ts";
@@ -50,6 +50,7 @@ export const servePage = (
 		if (request.method !== "GET" && request.method !== "HEAD")
 			return HttpServerResponse.empty({ status: 405, headers: { allow: "GET, HEAD" } });
 		// Validate before joining: a malformed root must never become a different page subtree.
+		if (!validPagePath(options.root)) return yield* new PageRejected({ code: "page_path_invalid" });
 		if (!options.mount.startsWith("/") || options.mount.endsWith("/") || /[?#%\\]/.test(options.mount))
 			return yield* new PageRejected({ code: "page_path_invalid" });
 		const url = new URL(request.url, "http://localhost");
@@ -64,7 +65,6 @@ export const servePage = (
 			options.root ? selected.slice(options.root.length).replace(/^\//, "") : selected;
 		return yield* read(() =>
 			Effect.gen(function* () {
-				yield* pages.resolve(options.root);
 				let selected = name;
 				let target = yield* pages.resolve(name);
 				if (target.type === "Directory") {

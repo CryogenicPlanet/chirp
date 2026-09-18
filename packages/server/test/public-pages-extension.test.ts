@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, it, type TestContext } from "vitest";
 import { conversation } from "./fixtures/conversation.ts";
 
-async function publishing(test: TestContext, enabled = true, installed = true) {
+async function publishing(test: TestContext, enabled = true, installed = true, extraExtension?: string) {
 	const fixture = await conversation(test);
 	await writeFile(join(fixture.root, "boot.config.json"), JSON.stringify({ applicationManagedIngress: enabled }));
 	const seed = join(fixture.root, "seed");
@@ -15,6 +15,7 @@ async function publishing(test: TestContext, enabled = true, installed = true) {
 			example.replace("../../packages/server/src/kernel/extension-api.ts", "../kernel/extension-api.ts"),
 		);
 	}
+	if (extraExtension) await writeFile(join(seed, "ext/mount-probe.ts"), extraExtension);
 	await mkdir(join(fixture.root, "pages/public/nested"), { recursive: true });
 	await writeFile(join(fixture.root, "pages/private.md"), "private sibling");
 	await writeFile(join(fixture.root, "pages/public/guide.md"), "# Public guide\n\n[asset](asset.bin)\n");
@@ -32,7 +33,7 @@ it("requires both the operator opt-in and installation of the optional extension
 	] as const) {
 		const { app } = await publishing(test, enabled, installed);
 		const response = await fetch(app.url + "/public/guide.md");
-		expect(response.status).toBe(enabled ? 403 : 401);
+		expect(response.status).toBe(401);
 		expect(await response.text()).not.toContain("Public guide");
 		await app.stop();
 	}
@@ -74,12 +75,12 @@ it("publishes only its subtree, with mount-relative navigation, rendered/raw con
 	await rm(join(root, "pages/public/nested/index.md"));
 	expect(await (await fetch(app.url + "/public/nested/")).text()).toBe("markdown wins");
 	for (const path of ["/p/public/guide.md", "/p/private.md", "/api/messages"]) {
-		expect((await fetch(app.url + path)).status, path).toBe(403);
+		expect((await fetch(app.url + path)).status, path).toBe(401);
 	}
 	expect((await fetch(app.url + "/p/private.md", { headers: { cookie } })).status).toBe(200);
 	expect((await fetch(app.url + "/public/private.md")).status).toBe(404);
 	for (const method of ["POST", "PUT", "DELETE"])
-		expect((await fetch(app.url + "/public/guide.md", { method })).status, method).toBe(403);
+		expect((await fetch(app.url + "/public/guide.md", { method })).status, method).toBe(401);
 	expect((await fetch(app.url + "/public/guide.md", { headers: { authorization: "Bearer invalid" } })).status).toBe(
 		401,
 	);
@@ -106,4 +107,57 @@ it("refuses symlinks, traversal and publishing temporaries without exposing sibl
 	expect(listing).not.toContain("linked.md");
 	expect(listing).not.toContain("alias");
 	expect(listing).not.toContain(".comms-");
+}, 20000);
+
+it("keeps a pending move confined to its subtree under the public mount", async (test) => {
+	const { root, app, sql } = await publishing(test);
+	await mkdir(join(root, "pages/public/moving"));
+	await writeFile(join(root, "pages/public/moving/guide.md"), "moving content");
+	await sql(
+		"INSERT INTO topic_page_continuations VALUES (999999,'public/moving','public/moved','pending-mount-test',0)",
+	);
+	const unaffected = await fetch(app.url + "/public/guide.md");
+	expect(unaffected.status).toBe(200);
+	expect(await unaffected.text()).toContain("<h1>Public guide</h1>");
+	for (const path of ["/public/moving/guide.md", "/public/moved/guide.md", "/public/"]) {
+		const response = await fetch(app.url + path);
+		expect(response.status, path).toBe(503);
+		expect(await response.json()).toMatchObject({ error: { code: "pages_move_pending" } });
+	}
+}, 20000);
+
+it("rejects malformed mount roots and symlink roots before serving private siblings", async (test) => {
+	const roots = [
+		"public/",
+		"/public",
+		"public/..",
+		"public//nested",
+		"public\\nested",
+		"public/.comms-hidden",
+		"alias",
+	];
+	const { root, app } = await publishing(
+		test,
+		true,
+		true,
+		`
+import type { Api } from "../kernel/extension-api.ts";
+export default function mountProbe(api: Api) {
+	for (const [index, root] of ${JSON.stringify(roots)}.entries()) {
+		const mount = \`/mount-\${index}\`;
+		api.route("GET", mount + "/*", {
+			access: "application-managed",
+			description: "Probe root validation",
+			handler: (request, ctx) => ctx.pages.serve(request, { root, mount }),
+		});
+	}
+}
+`,
+	);
+	await symlink(join(root, "pages"), join(root, "pages/alias"));
+	for (const index of roots.keys()) {
+		const response = await fetch(app.url + `/mount-${index}/private.md`);
+		expect(response.status, roots[index]).toBe(400);
+		expect(await response.text()).not.toContain("private sibling");
+	}
 }, 20000);
