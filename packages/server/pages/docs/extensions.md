@@ -124,6 +124,7 @@ session cookie or board Authorization header. App cookies also work for signed-i
 An exact `Authorization: Bearer chirp_app_<43 base64url characters>` is an application
 credential, admitted only through enabled managed ingress and exposed only to the selected
 managed handler with `ctx.identity: null`. The shared syntax lives in `@comms/protocol/headers`.
+The `Bearer ` prefix is case-sensitive and requires the capital B shown above.
 Boot checks syntax, not validity: the extension must authenticate this opaque value. Malformed
 values still invoke board authentication and fail closed. Combining an app bearer with a board
 session cookie is refused; send app bearer requests without board credentials. App bearers

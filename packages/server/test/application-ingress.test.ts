@@ -24,6 +24,18 @@ const boardChallenge = async (url: string) => {
 	}
 };
 
+const boardQueryValidation = async (url: string, cookie: string) => {
+	for (const path of ["/api/messages?topic=gen\\eral", "/api/topics?cursor=a\\b"]) {
+		const response = await fetch(url + path, { headers: { cookie } });
+		expect(response.status, path).toBe(400);
+		expect(await response.json()).toMatchObject({ error: { code: "query_invalid" } });
+	}
+	for (const path of ["/api/messages?topic=general", "/api/topics"]) {
+		const response = await fetch(url + path, { headers: { cookie } });
+		expect(response.status, path).toBe(200);
+	}
+};
+
 it("requires operator opt-in and persists explicitly managed writes with service authority", async (test) => {
 	const fixture = await conversation(test);
 	const seed = join(fixture.root, "managed-seed");
@@ -52,6 +64,7 @@ export default api => {
 	let cookie = await app.login();
 	await app.ready(cookie);
 	await boardChallenge(app.url);
+	await boardQueryValidation(app.url, cookie);
 	const authorization = `Bearer chirp_app_${"a".repeat(43)}`;
 	expect((await fetch(`${app.url}/managed/hello`)).status).toBe(401);
 	expect((await fetch(`${app.url}/managed/hello`, { headers: { authorization } })).status).toBe(401);
@@ -62,6 +75,7 @@ export default api => {
 	cookie = await app.login();
 	await app.ready(cookie);
 	await boardChallenge(app.url);
+	await boardQueryValidation(app.url, cookie);
 	const response = await fetch(`${app.url}/managed/hello?tag=a&tag=b`, {
 		headers: {
 			cookie: "chirp_app_gate=approved; unrelated=hidden",
@@ -134,8 +148,6 @@ export default api => {
 	expect(denied.headers.get("location")).toBeNull();
 	expect(denied.headers.get(ingressChallengeHeader)).toBeNull();
 	expect(await denied.text()).toBe("Password needed");
-	const malformedQuery = await fetch(`${app.url}/api/messages?topic=gen\\eral`, { headers: { cookie } });
-	expect(malformedQuery.status).toBe(404);
 	expect((await fetch(`${app.url}/managed/hello`, { method: "DELETE" })).status).toBeGreaterThanOrEqual(400);
 	const enrollment = await (
 		await app.post("/auth/enroll", { name: "managed-reader", kind: "agent", host: "test" })

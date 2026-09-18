@@ -29,6 +29,7 @@ it("uses normal route precedence and never falls back from the anonymous envelop
 		"/API/fs/app",
 		"//host/api/open",
 		"/api\\private",
+		"/api/open?value=a\\b",
 	])
 		await expect(select(path)).rejects.toThrow();
 	await expect(select("/api/open", "POST")).rejects.toThrow();
@@ -90,9 +91,16 @@ it("exposes an application bearer only to the managed envelope, including reques
 	}
 });
 
-it("leaves malformed ordinary query handling to the core router", async () => {
+it("selects the owning core route for ordinary queries requiring handler validation", async () => {
 	const matcher = FindMyWay.make<{ readonly access: "board" }>();
-	matcher.on("GET", "/api/messages", { access: "board" });
-	const request = HttpServerRequest.fromWeb(new Request("http://child/api/messages?topic=gen\\eral"));
-	expect(await Effect.runPromise(selectRequest(matcher, request))).toBeNull();
+	const handler = { access: "board" } as const;
+	matcher.on("GET", "/api/messages", handler);
+	matcher.on("GET", "/api/topics", handler);
+	for (const target of ["/api/messages?topic=gen\\eral", "/api/topics?cursor=a\\b"]) {
+		const request = HttpServerRequest.fromWeb(new Request(`http://child${target}`));
+		const selected = await Effect.runPromise(selectRequest(matcher, request));
+		expect(selected?.matched.handler).toBe(handler);
+		expect(selected?.target).toBe(target);
+		expect(selected?.envelope).toBe(false);
+	}
 });

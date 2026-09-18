@@ -18,8 +18,9 @@ export const selectRequest = <Route extends { readonly access?: "board" | "appli
 		const envelope = request.url === applicationIngressPath;
 		const target = envelope ? request.headers[ingressTargetHeader] : request.url;
 		const refused = () => new KernelError({ code: "scope_required" });
-		if (!target || !target.startsWith("/") || target.startsWith("//") || /[\\\r\n]/.test(target))
-			return envelope ? yield* refused() : null;
+		if (!target) return envelope ? yield* refused() : null;
+		if (envelope && (!target.startsWith("/") || target.startsWith("//") || /[\\\r\n]/.test(target)))
+			return yield* refused();
 		const pathname = requestPath(target);
 		if (pathname === null || reserved(pathname)) return envelope ? yield* refused() : null;
 		const matched =
