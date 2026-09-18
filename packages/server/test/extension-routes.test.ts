@@ -77,9 +77,18 @@ export default api => {
 		method: "POST",
 		params: { target: "value" },
 	});
+	const emptyMessageRef = await fetch(`${app.url}/api/messages/`, {
+		method: "PATCH",
+		headers: { cookie, "content-type": "application/json", origin: "https://comms.test" },
+		body: "{}",
+	});
+	expect(emptyMessageRef.status).toBe(404);
 	expect((await get("/api/ext")).status).toBe(200);
 	expect(await (await get("/api/ext")).json()).toEqual(
-		expect.arrayContaining([expect.objectContaining({ name: "invalid.ts", status: "disabled", registrations: [] })]),
+		expect.arrayContaining([
+			expect.objectContaining({ name: "core.ts", status: "loaded" }),
+			expect.objectContaining({ name: "invalid.ts", status: "disabled", registrations: [] }),
+		]),
 	);
 	const openapi = await (await get("/api")).json();
 	expect(openapi.paths["/api/route-demo/{name}"].get).toMatchObject({
