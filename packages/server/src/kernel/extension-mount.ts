@@ -50,7 +50,9 @@ export const mountApi = <Id extends string, Groups extends HttpApiGroup.Constrai
 			Effect.provideContext(services),
 			Effect.catchCause((cause): Effect.Effect<never, HttpServerError.HttpServerError | KernelError> => {
 				const codes = cause.reasons.map((reason) =>
-					reason._tag === "Fail" ? requestErrorCode(reason.error) : undefined,
+					reason._tag === "Interrupt"
+						? undefined
+						: requestErrorCode(reason._tag === "Fail" ? reason.error : reason.defect),
 				);
 				const code = codes[0];
 				return code && codes.every((value) => value !== undefined)

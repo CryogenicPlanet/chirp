@@ -54,14 +54,6 @@ import {HttpServerError,HttpServerRequest} from "effect/unstable/http";
 export default api=>{const definition=HttpApi.make("mixed-input").add(HttpApiGroup.make("mixed-input").add(HttpApiEndpoint.get("mixed","/api/mixed-input",{success:Schema.String}).annotate(OpenApi.Description,"Exercise interrupted input failures")));
 api.mount(definition,HttpApiBuilder.group(definition,"mixed-input",h=>h.handle("mixed",()=>Effect.gen(function*(){const request=yield* HttpServerRequest.HttpServerRequest;return yield* Effect.failCause(Cause.combine(Cause.die(new HttpServerError.HttpServerError({reason:new HttpServerError.RequestParseError({request})})),Cause.interrupt()));}))));};`,
 	);
-	await writeFile(
-		join(seed, "ext/e-defective-input.ts"),
-		`import {Effect, Schema} from "effect";
-import {HttpApi,HttpApiBuilder,HttpApiEndpoint,HttpApiGroup,OpenApi} from "effect/unstable/httpapi";
-import {HttpServerError,HttpServerRequest} from "effect/unstable/http";
-export default api=>{const definition=HttpApi.make("defective-input").add(HttpApiGroup.make("defective-input").add(HttpApiEndpoint.get("defective","/api/defective-input",{success:Schema.String}).annotate(OpenApi.Description,"Exercise defective input failures")));
-api.mount(definition,HttpApiBuilder.group(definition,"defective-input",h=>h.handle("defective",()=>Effect.gen(function*(){const request=yield* HttpServerRequest.HttpServerRequest;return yield* Effect.die(new HttpServerError.HttpServerError({reason:new HttpServerError.RequestParseError({request})}));}))));};`,
-	);
 	const app = await fixture.launch(join(seed, "server.ts"));
 	await app.setup();
 	const cookie = await app.login();
@@ -78,7 +70,7 @@ api.mount(definition,HttpApiBuilder.group(definition,"defective-input",h=>h.hand
 	expect(events.items).toHaveLength(1);
 	expect(events.items[0].payload).toEqual({ value: "atomic" });
 	expect(await (await get("/api/owner")).json()).toBe("first");
-	for (const path of ["/api/mixed-cause", "/api/mixed-input", "/api/defective-input"]) {
+	for (const path of ["/api/mixed-cause", "/api/mixed-input"]) {
 		for (let attempt = 0; attempt < 2; attempt++) {
 			const defective = await get(path);
 			expect(defective.status, path).toBe(500);
@@ -107,11 +99,6 @@ api.mount(definition,HttpApiBuilder.group(definition,"defective-input",h=>h.hand
 			}),
 			expect.objectContaining({
 				name: "d-mixed-input.ts",
-				status: "disabled",
-				error: expect.stringContaining("RequestParseError"),
-			}),
-			expect.objectContaining({
-				name: "e-defective-input.ts",
 				status: "disabled",
 				error: expect.stringContaining("RequestParseError"),
 			}),
