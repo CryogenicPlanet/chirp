@@ -9,7 +9,13 @@ export const ExtensionStatus = Schema.Struct({
 	events: Schema.Array(Schema.String),
 	cron: Schema.Array(Schema.String),
 	registrations: Schema.Array(
-		Schema.Struct({ method: Schema.String, path: Schema.String, description: Schema.String, scope: Schema.String }),
+		Schema.Struct({
+			method: Schema.String,
+			path: Schema.String,
+			description: Schema.String,
+			scope: Schema.optionalKey(Schema.String),
+			access: Schema.Literals(["board", "application-managed"]),
+		}),
 	),
 });
 export const extGroup = HttpApiGroup.make("ext").add(

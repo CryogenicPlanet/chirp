@@ -31,6 +31,8 @@ const run = Effect.gen(function* () {
 		const first = yield* restarted.changeSettings(saved.params, saved.proof, saved.session);
 		assert.equal(first.revision, 1);
 		assert.deepEqual(first.event_retention, { http_request_days: 2, other_days: 40 });
+		assert.deepEqual(first.public_paths, ["/welcome"]);
+		assert.deepEqual((yield* restarted.settings).public_paths, ["/later"]);
 		assert.equal((yield* restarted.settings).revision, 2);
 		return;
 	}
@@ -42,7 +44,6 @@ const run = Effect.gen(function* () {
 		revision: 0,
 		patch: {
 			storage: { backup_percent: 15, event_percent: 12, headroom_percent: 8 },
-			public_paths: ["/welcome"],
 		},
 	};
 	const proofFor = (input = params, owner = session.id, origin?: string) =>
@@ -54,10 +55,14 @@ const run = Effect.gen(function* () {
 		const proof = yield* proofFor();
 		yield* auth.changeSettings(params, proof, session.id);
 		// Model the persisted accepted receipt emitted by the previous image, including its exact binding/result.
-		const legacy = { ...params, patch: { event_retention: { http_request_days: 2, other_days: 40 }, ...params.patch } };
-		yield* sql`UPDATE settings SET value=json_set(value,'$.binding',${canonicalSettings(legacy, session.id)},'$.result.event_retention',json(${JSON.stringify(legacy.patch.event_retention)})) WHERE key LIKE 'settings.receipt:%'`;
+		const legacy = {
+			...params,
+			patch: { event_retention: { http_request_days: 2, other_days: 40 }, public_paths: ["/welcome"], ...params.patch },
+		};
+		yield* sql`UPDATE settings SET value=json_set(value,'$.binding',${canonicalSettings(legacy, session.id)},'$.result.event_retention',json(${JSON.stringify(legacy.patch.event_retention)}),'$.result.public_paths',json(${JSON.stringify(legacy.patch.public_paths)})) WHERE key LIKE 'settings.receipt:%'`;
 		yield* sql`INSERT INTO settings(key,value) VALUES ('event_retention','historical-malformed-policy')`;
-		const next = { revision: 1, patch: { public_paths: ["/later"] } };
+		yield* sql`UPDATE settings SET value='["/later"]' WHERE key='public_paths'`;
+		const next = { revision: 1, patch: { storage: { backup_percent: 16, event_percent: 12, headroom_percent: 8 } } };
 		yield* auth.changeSettings(next, yield* proofFor(next), session.id);
 		assert.equal("event_retention" in (yield* auth.settings), false);
 		assert.deepEqual(yield* sql`SELECT value FROM settings WHERE key='event_retention'`, [
@@ -90,10 +95,10 @@ const run = Effect.gen(function* () {
 		proof = yield* proofFor();
 		const accepted = yield* auth.changeSettings(params, proof, session.id);
 		assert.equal(accepted.revision, 1);
-		const next = { revision: 1, patch: { public_paths: ["/new"] } };
+		const next = { revision: 1, patch: { storage: { backup_percent: 17, event_percent: 12, headroom_percent: 8 } } };
 		yield* auth.changeSettings(next, yield* proofFor(next), session.id);
 		assert.deepEqual(yield* auth.changeSettings(params, proof, session.id), accepted);
-		assert.deepEqual((yield* auth.settings).public_paths, ["/new"]);
+		assert.deepEqual((yield* auth.settings).storage, next.patch.storage);
 		assert.equal((yield* sql`SELECT * FROM events WHERE type='settings.changed'`).length, 2);
 		yield* fails(
 			auth.changeSettings({ ...params, patch: { public_paths: [] } }, proof, session.id),
@@ -110,7 +115,7 @@ const run = Effect.gen(function* () {
 		yield* sql`UPDATE sessions SET expires_at=0 WHERE id=${session.id}`;
 		const login = yield* auth.startLogin;
 		const nextSession = yield* auth.finishLogin(login.id, device.assertion(login.options.challenge, ++counter));
-		const next = { revision: 1, patch: { public_paths: ["/later"] } };
+		const next = { revision: 1, patch: { storage: { backup_percent: 16, event_percent: 12, headroom_percent: 8 } } };
 		const proof = yield* proofFor(next, nextSession.id);
 		const accepted = yield* auth.changeSettings(next, proof, nextSession.id);
 		assert.equal((yield* sql`SELECT * FROM settings WHERE key LIKE 'settings.receipt:%'`).length, 1);
@@ -216,6 +221,10 @@ const run = Effect.gen(function* () {
 		yield* fails(auth.startSettingsAssertion(legacy, session.id), "invalid_request");
 		const proof = yield* proofFor();
 		yield* fails(auth.changeSettings(legacy, proof, session.id), "invalid_request");
+		const retired = { ...params, patch: { public_paths: ["/welcome"] } };
+		yield* fails(auth.startSettingsAssertion(retired, session.id), "public_paths_retired");
+		yield* fails(auth.changeSettings(retired, proof, session.id), "public_paths_retired");
+		assert.deepEqual((yield* auth.settings).public_paths, []);
 		assert.equal((yield* auth.settings).revision, 0);
 		assert.equal(
 			(yield* sql`SELECT * FROM settings WHERE key='event_retention' OR key LIKE 'settings.receipt:%'`).length,

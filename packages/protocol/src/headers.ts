@@ -74,3 +74,9 @@ export const headerLabel = (name: string): string =>
 		.split("-")
 		.map((part) => (part === "" ? part : part[0]!.toUpperCase() + part.slice(1)))
 		.join("-");
+
+/** Generic boot-to-live ingress; callers cannot supply the target header. */
+export const ingressProtocolHeader = "x-chirp-ingress-protocol";
+export const ingressTargetHeader = "x-chirp-ingress-target";
+export const applicationIngressPath = "/_kernel/ingress";
+export const applicationCookiePrefix = "chirp_app_";

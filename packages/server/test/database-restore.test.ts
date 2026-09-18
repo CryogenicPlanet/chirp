@@ -23,11 +23,19 @@ const setPublic = async (url: string, cookie: string, topic: string, value: bool
 	});
 	expect(response.status).toBe(200);
 };
-const pageGrants = async (url: string, publicTopic: string, privateTopic: string) => {
-	const response = await fetch(`${url}/p/${publicTopic}/index.md?raw=1`);
-	expect(response.status).toBe(200);
-	expect(await response.text()).toBe(`# ${publicTopic}`);
-	expect((await fetch(`${url}/p/${privateTopic}/index.md`)).status).toBe(401);
+const pageGrants = async (url: string, cookie: string, publicTopic: string, privateTopic: string) => {
+	// Legacy metadata is still recovered, but never authorizes anonymous /p reads.
+	for (const [topic, value] of [
+		[publicTopic, true],
+		[privateTopic, false],
+	] as const) {
+		const detail = await fetch(`${url}/api/topics/${topic}`, { headers: { cookie } });
+		expect(await detail.json()).toMatchObject({ meta: { public: value } });
+		const response = await fetch(`${url}/p/${topic}/index.md?raw=1`, { headers: { cookie } });
+		expect(response.status).toBe(200);
+		expect(await response.text()).toBe(`# ${topic}`);
+		expect((await fetch(`${url}/p/${topic}/index.md`)).status).toBe(401);
+	}
 };
 
 it("restores only the selected app data, keeps a fresh safety copy and staging, and replays the exact result without undoing newer writes across restart", async (test) => {
@@ -42,7 +50,7 @@ it("restores only the selected app data, keeps a fresh safety copy and staging, 
 	}
 	await setPublic(app.url, cookie, "public-old", true);
 	await setPublic(app.url, cookie, "public-new", false);
-	await pageGrants(app.url, "public-old", "public-new");
+	await pageGrants(app.url, cookie, "public-old", "public-new");
 	const create = (body: string) => app.post("/api/messages", { topic: "restore", body }, cookie);
 	expect((await create("A before backup")).status).toBe(200);
 	await fixture.force("hourly");
@@ -52,7 +60,7 @@ it("restores only the selected app data, keeps a fresh safety copy and staging, 
 	if (!saved) throw Error("Missing selected backup");
 	await setPublic(app.url, cookie, "public-old", false);
 	await setPublic(app.url, cookie, "public-new", true);
-	await pageGrants(app.url, "public-new", "public-old");
+	await pageGrants(app.url, cookie, "public-new", "public-old");
 	const savedBytes = await readFile(saved.path);
 	expect((await create("B before restore")).status).toBe(200);
 	const beforeMessages = await fixture.sql("SELECT seq,body FROM messages WHERE topic!='system' ORDER BY seq");
@@ -109,7 +117,7 @@ it("restores only the selected app data, keeps a fresh safety copy and staging, 
 	expect(result.generation).toBe(beforeOwner.generation);
 	expect(result.event_seq).toBeGreaterThan(beforeEvents[0]?.seq ?? 0);
 	await app.ready(cookie);
-	await pageGrants(app.url, "public-old", "public-new");
+	await pageGrants(app.url, cookie, "public-old", "public-new");
 	expect(await fixture.sql("SELECT body FROM messages WHERE topic!='system' ORDER BY seq")).toEqual([
 		{ body: "A before backup" },
 	]);
@@ -143,13 +151,13 @@ it("restores only the selected app data, keeps a fresh safety copy and staging, 
 		),
 	).toEqual([{ count: 1 }]);
 	expect(await (await request(app.url)).json()).toEqual(result);
-	await pageGrants(app.url, "public-new", "public-old");
+	await pageGrants(app.url, cookie, "public-new", "public-old");
 	expect(await fixture.sql("SELECT seq,body FROM messages WHERE topic!='system' ORDER BY seq")).toEqual(fresh);
 	await app.stop();
 	const resumed = await fixture.launch();
 	await resumed.ready(cookie);
 	expect(await (await request(resumed.url)).json()).toEqual(result);
-	await pageGrants(resumed.url, "public-new", "public-old");
+	await pageGrants(resumed.url, cookie, "public-new", "public-old");
 	expect(await fixture.sql("SELECT seq,body FROM messages WHERE topic!='system' ORDER BY seq")).toEqual(fresh);
 	expect(
 		await fixture.sql("SELECT seq FROM events WHERE json_extract(event,'$.type')='db.restored'", "boot.db"),
@@ -171,7 +179,7 @@ it("rolls a failed candidate health check back to the fresh safety copy and reco
 	}
 	await setPublic(app.url, cookie, "public-old", true);
 	await setPublic(app.url, cookie, "public-new", false);
-	await pageGrants(app.url, "public-old", "public-new");
+	await pageGrants(app.url, cookie, "public-old", "public-new");
 	expect((await app.post("/api/messages", { topic: "restore", body: "A before backup" }, cookie)).status).toBe(200);
 	await fixture.force("hourly");
 	await expect.poll(async () => (await fixture.backups()).length, { timeout: 10000 }).toBe(1);
@@ -180,7 +188,7 @@ it("rolls a failed candidate health check back to the fresh safety copy and reco
 	if (!saved) throw Error("Missing selected backup");
 	await setPublic(app.url, cookie, "public-old", false);
 	await setPublic(app.url, cookie, "public-new", true);
-	await pageGrants(app.url, "public-new", "public-old");
+	await pageGrants(app.url, cookie, "public-new", "public-old");
 	expect((await app.post("/api/messages", { topic: "restore", body: "B before restore" }, cookie)).status).toBe(200);
 	const messages = await fixture.sql("SELECT seq,body FROM messages WHERE topic!='system' ORDER BY seq");
 	const epoch = await fixture.sql("SELECT epoch FROM kernel_writer");
@@ -222,7 +230,7 @@ it("rolls a failed candidate health check back to the fresh safety copy and reco
 	const result: unknown = await response.json();
 	expect(result).toMatchObject({ status: "failed", backup: saved.id });
 	await app.ready(cookie);
-	await pageGrants(app.url, "public-new", "public-old");
+	await pageGrants(app.url, cookie, "public-new", "public-old");
 	expect(await fixture.sql("SELECT seq,body FROM messages WHERE topic!='system' ORDER BY seq")).toEqual(messages);
 	expect(await fixture.sql("SELECT epoch FROM kernel_writer")).not.toEqual(epoch);
 	expect(await fixture.sql("SELECT phase FROM db_restore_requests", "boot.db")).toEqual([{ phase: "failed" }]);
@@ -234,11 +242,11 @@ it("rolls a failed candidate health check back to the fresh safety copy and reco
 	);
 	const fresh = await fixture.sql("SELECT seq,body FROM messages WHERE topic!='system' ORDER BY seq");
 	expect(await (await request()).json()).toEqual(result);
-	await pageGrants(app.url, "public-new", "public-old");
+	await pageGrants(app.url, cookie, "public-new", "public-old");
 	await app.stop();
 	const resumed = await fixture.launch();
 	await resumed.ready(cookie);
-	await pageGrants(resumed.url, "public-new", "public-old");
+	await pageGrants(resumed.url, cookie, "public-new", "public-old");
 	expect(await fixture.sql("SELECT seq,body FROM messages WHERE topic!='system' ORDER BY seq")).toEqual(fresh);
 	expect(await fixture.sql("SELECT COUNT(*) count FROM child_attempts WHERE opened=1 AND closed=0", "boot.db")).toEqual(
 		[{ count: 1 }],

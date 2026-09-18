@@ -1,5 +1,8 @@
 import {
 	agentHeader,
+	ingressProtocolHeader,
+	ingressTargetHeader,
+	applicationIngressPath,
 	assertionHeader,
 	authKindHeader,
 	instanceHeader,
@@ -35,7 +38,20 @@ export function serve(mode: string) {
 			if (url.pathname === "/health" || url.pathname === "/_kernel/ping")
 				return new Response("ok", {
 					status: mode === "unhealthy" ? 500 : 200,
-					headers: { [writerEpochHeader]: process.env.WRITER_EPOCH ?? "", [kernelProtocolHeader]: "2" },
+					headers: {
+						[writerEpochHeader]: process.env.WRITER_EPOCH ?? "",
+						[kernelProtocolHeader]: "2",
+						...(mode === "ingress" ? { [ingressProtocolHeader]: "1" } : {}),
+					},
+				});
+			if (url.pathname === applicationIngressPath)
+				return Response.json({
+					target: request.headers.get(ingressTargetHeader),
+					method: request.method,
+					body: await request.text(),
+					cookie: request.headers.get("cookie"),
+					authorization: request.headers.get("authorization"),
+					agent: request.headers.get(agentHeader),
 				});
 			if (url.pathname === "/cancelled") return new Response(String(cancelled));
 			if (url.pathname === "/hold-stream")
@@ -118,7 +134,7 @@ export function serve(mode: string) {
 			if (url.pathname === "/cookies") {
 				const headers = new Headers();
 				headers.append("set-cookie", "__Host-comms_session=forged; Secure; HttpOnly; Path=/");
-				headers.append("set-cookie", "app-preference=dark; Path=/");
+				headers.append("set-cookie", "chirp_app_preference=dark; Path=/");
 				return new Response("cookies", { headers });
 			}
 			if (url.pathname === "/api")

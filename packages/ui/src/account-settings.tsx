@@ -7,7 +7,7 @@ import { type BoardError } from "./board-api.ts";
 import { Alert } from "./ui/alert.tsx";
 import { Button } from "./ui/button.tsx";
 import { Card, CardContent } from "./ui/card.tsx";
-import { Input, Textarea } from "./ui/input.tsx";
+import { Input } from "./ui/input.tsx";
 import { SectionHeading } from "./ui/section-heading.tsx";
 
 type Pending = { readonly body: SettingsChange; readonly proof: string; readonly observed: Settings };
@@ -25,10 +25,7 @@ export function AccountSettings() {
 					Refresh settings
 				</Button>
 			</SectionHeading>
-			<p className={hintClass}>
-				Changes require a fresh passkey confirmation. Public paths expose exact app routes without sign-in; child paths
-				are not included.
-			</p>
+			<p className={hintClass}>Changes require a fresh passkey confirmation.</p>
 			{error && (
 				<Alert className="mt-4">
 					{error.message}
@@ -73,7 +70,6 @@ function SettingsForm({
 	const [backup, setBackup] = useState(String(current.storage.backup_percent));
 	const [events, setEvents] = useState(String(current.storage.event_percent));
 	const [headroom, setHeadroom] = useState(String(current.storage.headroom_percent));
-	const [paths, setPaths] = useState(current.public_paths.join("\n"));
 	const [pending, setPending] = useState<Pending | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<BoardError | null>(null);
@@ -100,10 +96,6 @@ function SettingsForm({
 							event_percent: Number(events),
 							headroom_percent: Number(headroom),
 						},
-						public_paths: paths
-							.split("\n")
-							.map((path) => path.trim())
-							.filter(Boolean),
 					},
 				};
 				const attempt = pending ?? {
@@ -183,22 +175,6 @@ function SettingsForm({
 						<p className={hintClass}>
 							Reserve at least 5% free space. All three percentages must total less than 100%.
 						</p>
-						<label className={labelClass} htmlFor="settings-paths">
-							Public app paths — one exact path per line
-						</label>
-						<Textarea
-							className="min-h-[125px]"
-							id="settings-paths"
-							rows={5}
-							value={paths}
-							onChange={(event) => setPaths(event.target.value)}
-							spellCheck={false}
-							placeholder="/public-report"
-						/>
-						<p className={hintClass}>
-							At most 128 unique paths, each starting with /. No wildcards, encoded paths, queries, fragments, or
-							boot/auth/page routes. An empty list makes no additional app paths public.
-						</p>
 					</fieldset>
 					{(changed || pending) && (
 						<Alert className="mt-4">
@@ -211,7 +187,6 @@ function SettingsForm({
 								Current storage: backups {current.storage.backup_percent}%, events {current.storage.event_percent}%,
 								free space {current.storage.headroom_percent}%.
 							</p>
-							<p>Current public paths: {current.public_paths.length ? current.public_paths.join(", ") : "none"}.</p>
 							<Button variant="outline" size="sm" type="button" disabled={busy || readBlocked} onClick={refresh}>
 								Read current settings
 							</Button>{" "}

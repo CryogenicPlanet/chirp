@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import { conversation } from "./fixtures/conversation.ts";
 
-it("serves anonymous GET and HEAD while a source reload holds its operation gate in rehearsal", async (test) => {
+it("serves authenticated GET and HEAD while a source reload holds its operation gate in rehearsal", async (test) => {
 	const fixture = await conversation(test);
 	await mkdir(join(fixture.root, "pages/guide"), { recursive: true });
 	await writeFile(join(fixture.root, "pages/guide/file.md"), "# Published during reload");
@@ -49,15 +49,16 @@ it("serves anonymous GET and HEAD while a source reload holds its operation gate
 		})
 		.toEqual([{ count: 1 }]);
 	expect(settled).toBe(false);
-	const response = await fetch(`${app.url}/p/guide/file.md`);
+	expect((await fetch(`${app.url}/p/guide/file.md`)).status).toBe(401);
+	const response = await fetch(`${app.url}/p/guide/file.md`, { headers: { cookie } });
 	expect(response.status).toBe(200);
 	expect(await response.text()).toContain("Published during reload");
-	const head = await fetch(`${app.url}/p/guide/file.md`, { method: "HEAD" });
+	const head = await fetch(`${app.url}/p/guide/file.md`, { method: "HEAD", headers: { cookie } });
 	expect(head.status).toBe(200);
 	expect(await head.text()).toBe("");
 	expect(settled).toBe(false);
 	const completed = await reload;
 	expect(completed.status).toBe(200);
 	expect(await completed.json()).toMatchObject({ status: "live" });
-	expect((await fetch(`${app.url}/p/guide/file.md`)).status).toBe(200);
+	expect((await fetch(`${app.url}/p/guide/file.md`, { headers: { cookie } })).status).toBe(200);
 }, 20000);

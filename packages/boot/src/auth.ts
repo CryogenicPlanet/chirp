@@ -77,6 +77,7 @@ export class AuthError extends Schema.TaggedError<AuthError>()("AuthError", {
 		"passkey_exists",
 		"passkey_not_found",
 		"passkey_origin_mismatch",
+		"public_paths_retired",
 		"refresh_invalid",
 		"registration_failed",
 		"registration_invalid",

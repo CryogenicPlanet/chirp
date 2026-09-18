@@ -123,6 +123,7 @@ export const makeSettings = <E, R>(
 							}
 							// Retired settings may replay an accepted receipt, but can never create a new mutation.
 							if (params.patch.event_retention !== undefined) return yield* refuse("invalid_request");
+							if (params.patch.public_paths !== undefined) return yield* refuse("public_paths_retired");
 							yield* verify(params, proof, session);
 							yield* liveSession;
 							const before = yield* current;

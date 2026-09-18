@@ -5,6 +5,7 @@ export interface Destination extends Attempt {
 	readonly port: number;
 	readonly pid: number;
 	readonly snapshot: string;
+	readonly applicationManagedIngress?: boolean;
 }
 interface Gate {
 	readonly frozen: boolean;

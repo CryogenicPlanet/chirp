@@ -30,6 +30,7 @@ it("rehearses real hooks with no external delivery, reports suppression, and rol
 		`import {Effect} from "effect";
 import {HttpClientRequest} from "effect/unstable/http";
 export default api => {
+ api.route("GET", "/example-rehearsal", {description:"Explicit managed example",access:"application-managed",handler:async()=>Response.json("example")});
  api.cron("0 0 * * *", () => Effect.void);
  api.on("start", (event,ctx) => Effect.gen(function*(){
   if(event.reason === "rehearsal") {
@@ -70,6 +71,9 @@ export default Effect.gen(function* () {
 	).json();
 	expect(events.items).toHaveLength(1);
 	expect(events.items[0].payload).toEqual({
+		ingress_ready: true,
+		ingress: [{ extension: "effects.ts", method: "GET", path: "/example-rehearsal", access: "application-managed" }],
+		ingress_overflow: 0,
 		suppressed: [
 			{ extension: "effects.ts", kind: "cron", reason: "rehearsal", expression: "0 0 * * *" },
 			{ extension: "effects.ts", kind: "fetch", reason: "rehearsal", method: "GET", destination: origin },

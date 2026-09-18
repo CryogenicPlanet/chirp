@@ -87,6 +87,36 @@ the hint. Do not delete recovery journals or remove a database to get past a ref
 refusal is load-bearing, and the state it is protecting is your board. Clearing the passkey
 table to recover from a lockout is a different thing and is covered below.
 
+## Application-managed ingress
+
+By default, application routes require board authentication. To let editable extensions
+implement additional admission rules, create `DATA_DIR/boot.config.json` outside the app:
+
+```json
+{"applicationManagedIngress":true}
+```
+
+In the container, make this a regular boot-owned file (UID 1000) with mode `0600`, then
+restart boot. A root-owned file must also be readable by boot (`0644` is acceptable; the file
+contains no secrets). It must not be writable by group or others. The setting is read once at startup. Missing configuration disables ingress; invalid
+configuration also disables it and reports a diagnostic in `/_boot/status` without disabling recovery. Setting
+it to false and restarting closes anonymous application ingress.
+
+Enabling this grants trusted editable code the ability to admit anonymous requests on routes
+explicitly declared `access: "application-managed"`. It does not publish an existing folder.
+These handlers can intentionally write, so review their admission rules and method declarations.
+Passkeys, board tokens, board sessions, editing and recovery keep boot's authentication.
+See the [extension guide](../packages/server/pages/docs/extensions.md#application-managed-routes)
+for app credentials, cookies and handler authority.
+
+On an existing board, upgrade both the immutable boot image and the installed editable runtime;
+a new image does not replace installed source. An old runtime without ingress support receives
+no delegated anonymous traffic. Prior `public_paths` settings and topic `meta.public` grants
+stop granting anonymous access on the new boot. Install the desired optional extension through
+the edit API, rehearse it, inspect its access declarations, and only enable the operator setting
+when that policy is ready. This release supplies the extension mechanism, not a sharing or
+approval policy.
+
 ## When you cannot sign in
 
 A passkey only works for the domain it was created for. That is WebAuthn, not a chirp

@@ -27,6 +27,36 @@ export interface RequestContext extends Identity, ExtensionData, ExtensionCapabi
 	readonly params: Readonly<Record<string, string | undefined>>;
 	readonly query: Readonly<Record<string, string | ReadonlyArray<string>>>;
 }
+/** Application policy owns admission. Identity is informational, never implicit helper authority. */
+export interface ManagedRequestContext extends ExtensionData, ExtensionCapabilities {
+	readonly identity: Identity | null;
+	readonly extension: string;
+	readonly authority: { readonly actor: "system"; readonly instance: string; readonly request: "" };
+	readonly db: SqlClient.SqlClient;
+	readonly publicationFence: RequestContext["publicationFence"];
+	readonly params: RequestContext["params"];
+	readonly query: RequestContext["query"];
+}
+export type RouteOptions = {
+	readonly description: string;
+} & (
+	| {
+			readonly access?: "board";
+			readonly scope: "read" | "write" | "fs";
+			readonly handler: (
+				request: HttpServerRequest.HttpServerRequest,
+				context: RequestContext,
+			) => Work<Response, RequestServices>;
+	  }
+	| {
+			readonly access: "application-managed";
+			readonly scope?: never;
+			readonly handler: (
+				request: HttpServerRequest.HttpServerRequest,
+				context: ManagedRequestContext,
+			) => Work<Response, RequestServices>;
+	  }
+);
 export type RequestServices =
 	| HttpServerRequest.HttpServerRequest
 	| HttpServerRequest.ParsedSearchParams
@@ -90,17 +120,6 @@ export interface Api {
 		handler: (context: RequestContext) => Work<Response | string, RequestServices> | Response | string,
 	) => void;
 	readonly cron: (expression: string, handler: (context: CronContext) => Work<void>) => void;
-	readonly route: (
-		method: HttpMethod,
-		path: `/${string}`,
-		options: {
-			readonly description: string;
-			readonly scope: "read" | "write" | "fs";
-			readonly handler: (
-				request: HttpServerRequest.HttpServerRequest,
-				context: RequestContext,
-			) => Work<Response, RequestServices>;
-		},
-	) => void;
+	readonly route: (method: HttpMethod, path: `/${string}`, options: RouteOptions) => void;
 	readonly on: (...args: OnArguments) => void;
 }

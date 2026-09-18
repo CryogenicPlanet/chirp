@@ -37,7 +37,7 @@ import { layer as attemptsLayer, ChildAttempts } from "./child-attempts.ts";
 import { cutover } from "./cutover.ts";
 import { DbOps, layer as backupLayer } from "./db-ops.ts";
 import { BootHttp, type RecoveryPhase } from "./boot-http.ts";
-import { PublicPages, layer as publicPagesLayer } from "./public-pages.ts";
+import { ingressConfiguration } from "./ingress-configuration.ts";
 import { layer as preparationLayer } from "./generation-preparation.ts";
 import { layer as preparationProcessLayer } from "./preparation-process.ts";
 import { makeBackupInventory } from "./backup-inventory.ts";
@@ -62,7 +62,7 @@ export { databaseConfiguration } from "./database-configuration.ts";
 type Handler = Effect.Effect<
 	Effect.Success<typeof proxy>,
 	Effect.Error<typeof proxy>,
-	Exclude<Effect.Services<typeof proxy>, Auth | Events | PublicPages | BootHttp>
+	Exclude<Effect.Services<typeof proxy>, Auth | Events | BootHttp>
 >;
 
 /** Owns the listener and one scoped service graph. Recovery never withdraws authentication. */
@@ -82,6 +82,8 @@ export const boot = Effect.fn("boot")(function* (options: ApplicationSource & { 
 		(value) => value === "1" || value === "true",
 	);
 	yield* fs.makeDirectory(options.dataDirectory, { recursive: true, mode: 0o700 });
+	const ingress = yield* ingressConfiguration(options.dataDirectory, isolated);
+	if (ingress.error) yield* Effect.logWarning(`Application-managed ingress disabled: ${ingress.error}`);
 	const configuration =
 		configured._tag === "file"
 			? configured
@@ -171,7 +173,6 @@ export const boot = Effect.fn("boot")(function* (options: ApplicationSource & { 
 	const graph = Layer.mergeAll(
 		authLayer({ ...options.auth, reopenSetup }),
 		generationsLayer,
-		publicPagesLayer(options.dataDirectory),
 		preparationLayer(options).pipe(Layer.provide(preparationProcessLayer)),
 		attemptsLayer(options.dataDirectory, configuration._tag === "remote").pipe(Layer.provide(kernelBootLayer)),
 		databaseServices,
@@ -280,13 +281,13 @@ export const boot = Effect.fn("boot")(function* (options: ApplicationSource & { 
 			Context.pick(
 				Auth,
 				Events,
-				PublicPages,
 				ChildAttempts,
 				Generations,
-			)(yield* Effect.context<Auth | Events | PublicPages | ChildAttempts | Generations>()),
+			)(yield* Effect.context<Auth | Events | ChildAttempts | Generations>()),
 			BootHttp,
 			{
 				child,
+				ingress,
 				authConfig: options.auth,
 				storeIdentity: (yield* AppRecovery).identityStatus,
 				phase,

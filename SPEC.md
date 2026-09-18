@@ -282,24 +282,29 @@ index built from data it may not see.
 
 **14. Boot imports nothing from the editable tree, and the app cannot shadow boot's paths.**
 This is the guarantee that makes every other risk acceptable, and the one constraint whose
-violation cannot be recovered from inside the product. Note the asymmetry with constraint
-16 and keep it: a path prefix may refuse, never grant.
+violation cannot be recovered from inside the product. Application-managed routes cannot
+replace authentication, editing or recovery endpoints.
 
 **15. Boot names exactly three app tables**, the shared recovery records. The files that
 touch them come and go with ordinary refactoring; the three names are closed, and a fourth
 is a decision about where the boundary sits rather than a patch. A build check enforces it.
 
-**16. Nothing is unauthenticated by prefix.** Every public grant is an exact path. A prefix
-may select where to look for a grant, but never confer one, because a prefix outlives the
-reason it was granted. A public path still authenticates a credential when one is present.
+**16. Application-managed ingress requires deliberate delegation.** Board authentication
+is the default. An operator may enable application-managed ingress outside the editable
+application, after which a live route must explicitly take responsibility for admission.
+A missing policy, failed extension or incompatible generation never falls through to a
+private handler. Method-specific declarations may intentionally permit anonymous writes.
+The editable app owns any additional passwords, sharing rules or public content; boot owns
+only the delegation boundary. Supplying a board credential still invokes board authentication
+and its scope requirements. Legacy exact-path and topic metadata grants no longer admit traffic.
 
-**17. The app never sees a credential, and cannot forge an identity.** Boot strips
-authorization, cookies and its own secret on the way in, so hot code an agent wrote an hour
-ago cannot log or replay a credential. It also strips the whole identity header namespace
-in both directions, so a client cannot forge the identity boot injects and the app cannot
-mint one or set a cookie on the way out. The failure that makes this a constraint rather
-than hygiene is already written on the header module: a prefix check left behind by a
-rename fails open, and silently.
+**17. The app never sees a board credential, and cannot forge a board identity.** Boot
+strips board authorization, session cookies and caller-supplied identity headers. It injects
+only verified identity and protects its own session cookie on the response. Application-owned
+credentials use a separate explicit cookie namespace or custom headers. Their authentication
+and handling belong to editable code. This delegation can expose data if that code is wrong;
+it is not a sandbox for code that already has application database access. Base passkeys,
+tokens, sessions and recovery remain boot-owned.
 
 **18. Three identities, not one.** Boot, the app, and the dependency build run as three
 different operating-system users sharing one group, each spawned with no new privileges and
@@ -571,6 +576,13 @@ reports itself healthy and a platform health check cannot tell the two apart. Th
 code stays 200 on purpose, because a platform that restarts or removes the container on a
 non-200 would take away the recovery surface. The body carries the truth instead. Scheduled
 as a separate change.
+
+**2026-09-17 — Application-managed ingress is an explicit operator choice.**
+Owner: *"yeah so ig a config file to allow application managed ingress make sense and i would say the base auth shouldn't fully be editable but you can add whatever new stuff you want"*
+Owner: *"if someone really wanted to add an annonymous writer not sure we should prevent them just shouldn't happen by mistake"*
+
+Application code may add admission mechanisms after an explicit configuration choice. Base
+authentication stays protected. Deliberate anonymous mutation routes are permitted.
 
 ## 10. Open and accepted
 

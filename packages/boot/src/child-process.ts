@@ -1,4 +1,9 @@
-import { healthReadyHeader, kernelProtocolHeader, writerEpochHeader } from "@comms/protocol/headers";
+import {
+	ingressProtocolHeader,
+	healthReadyHeader,
+	kernelProtocolHeader,
+	writerEpochHeader,
+} from "@comms/protocol/headers";
 import { readRehearsalReport } from "./rehearsal-report.ts";
 import { ChildConfiguration } from "./keeper-configuration.ts";
 import { logRedactor } from "./log-redaction.ts";
@@ -63,6 +68,7 @@ export const launchChild = Effect.fn("launchChild")(function* (options: Launch, 
 	const entry = yield* path.fromFileUrl(new URL(`./child-keeper.${extension}`, import.meta.url));
 	const scope = yield* Scope.fork(yield* Effect.scope);
 	const stderr = yield* Ref.make("");
+	const applicationManagedIngress = yield* Ref.make(false);
 	const redact = logRedactor([options.env.APP_STORE ?? "", options.env.BOOT_SECRET ?? ""]);
 	return yield* Effect.gen(function* () {
 		const configuration = yield* Schema.encodeEffect(Schema.fromJsonString(ChildConfiguration))(options);
@@ -169,14 +175,17 @@ export const launchChild = Effect.fn("launchChild")(function* (options: Launch, 
 					response.status === 200 &&
 					response.headers[writerEpochHeader] === options.env.WRITER_EPOCH &&
 					response.headers[kernelProtocolHeader] === "2"
-				)
-					return yield* readRehearsalReport(response).pipe(
+				) {
+					const report = yield* readRehearsalReport(response).pipe(
 						Effect.catchCause((cause) =>
 							Cause.hasInterruptsOnly(cause)
 								? Effect.interrupt
 								: Effect.fail(new ChildError({ code: "health_failed" })),
 						),
 					);
+					yield* Ref.set(applicationManagedIngress, response.headers[ingressProtocolHeader] === "1");
+					return report;
+				}
 				if (response.headers[healthReadyHeader] === "1") return yield* new ChildError({ code: "health_failed" });
 				yield* Effect.sleep("20 millis");
 			}
@@ -213,6 +222,7 @@ export const launchChild = Effect.fn("launchChild")(function* (options: Launch, 
 		);
 		return {
 			port,
+			applicationManagedIngress: Ref.get(applicationManagedIngress),
 			pid: processId,
 			stderr,
 			control,

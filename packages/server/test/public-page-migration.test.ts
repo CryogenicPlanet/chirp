@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import { conversation } from "./fixtures/conversation.ts";
 
-it("replaces public grants after editable migrations privatize, tombstone or remove topics", async (test) => {
+it("retains legacy projection recovery without public access after editable migrations privatize, tombstone or remove topics", async (test) => {
 	const fixture = await conversation(test);
 	const names = ["kept", "private", "deleted", "dropped"];
 	for (const name of names) {
@@ -25,7 +25,7 @@ it("replaces public grants after editable migrations privatize, tombstone or rem
 				})
 			).status,
 		).toBe(200);
-		expect((await fetch(`${app.url}/p/${name}/file.md`)).status).toBe(200);
+		expect((await fetch(`${app.url}/p/${name}/file.md`)).status).toBe(401);
 	}
 	expect((await app.post("/api/lock", {}, cookie)).status).toBe(200);
 	const stage = (name: string, body: string) =>
@@ -60,11 +60,14 @@ yield* sql\`DELETE FROM topics WHERE path='dropped'\`;
 		})
 		.toEqual([{ count: 1 }]);
 	expect(settled).toBe(false);
-	for (const name of names) expect((await fetch(`${app.url}/p/${name}/file.md`)).status).toBe(200);
+	for (const name of names) expect((await fetch(`${app.url}/p/${name}/file.md`)).status).toBe(401);
 	expect(settled).toBe(false);
 	expect(await (await reload).json()).toMatchObject({ status: "live" });
-	expect((await fetch(`${app.url}/p/kept/file.md`)).status).toBe(200);
+	expect((await fetch(`${app.url}/p/kept/file.md`)).status).toBe(401);
 	for (const name of names.slice(1)) expect((await fetch(`${app.url}/p/${name}/file.md`)).status).toBe(401);
+	for (const name of ["kept", "private", "dropped"])
+		expect((await fetch(`${app.url}/p/${name}/file.md`, { headers: { cookie } })).status).toBe(200);
+	expect((await fetch(`${app.url}/p/deleted/file.md`, { headers: { cookie } })).status).toBe(404);
 	expect(await fixture.sql("SELECT path FROM public_paths ORDER BY path", "boot.db")).toEqual([{ path: "kept" }]);
 	expect((await stage("003_empty", `yield* sql\`UPDATE topics SET meta='{}'\`;`)).status).toBe(200);
 	expect(await (await app.post("/api/reload?release=1", {}, cookie)).json()).toMatchObject({ status: "live" });

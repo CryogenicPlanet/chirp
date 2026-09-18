@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { Deferred, Effect, Fiber } from "effect";
+import { Deferred, Effect, Fiber, Ref } from "effect";
 import { TestClock } from "effect/testing";
 import { expect } from "vitest";
 import { traffic } from "../src/traffic.ts";
@@ -80,6 +80,47 @@ it.effect("keeps queued mutations through the full cutover budget and releases t
 			yield* gate.release;
 			expect(yield* Fiber.join(waiting)).toMatchObject({ _tag: "Success", success: { waited: true } });
 			expect((yield* gate.state).queued).toBe(0);
+		}),
+	),
+);
+
+it.effect("captures ingress capability from the destination admitted after a mutation cutover", () =>
+	Effect.scoped(
+		Effect.gen(function* () {
+			const gate = yield* traffic;
+			const old = {
+				port: 1,
+				pid: 1,
+				snapshot: "old",
+				secret: "old",
+				epoch: "old",
+				host: "localhost",
+				generation: 1,
+				state: "live" as const,
+			};
+			yield* Ref.set(gate.route, { ...old, applicationManagedIngress: true });
+			const requestAdmission = yield* gate.requests.awaitDestination;
+			yield* gate.freeze;
+			const waiting = yield* Effect.scoped(gate.awaitDestination).pipe(Effect.forkScoped);
+			yield* TestClock.adjust("1 millis");
+			expect((yield* gate.state).queued).toBe(1);
+			yield* Ref.set(gate.route, { ...old, epoch: "new", generation: 2, applicationManagedIngress: false });
+			yield* gate.release;
+			const mutationAdmission = yield* Fiber.join(waiting);
+			expect(requestAdmission.destination?.applicationManagedIngress).toBe(true);
+			expect(mutationAdmission).toMatchObject({
+				waited: true,
+				destination: { epoch: "new", applicationManagedIngress: false },
+			});
+			yield* gate.requests.freeze;
+			const restored = yield* Effect.scoped(gate.requests.awaitDestination).pipe(Effect.forkScoped);
+			yield* TestClock.adjust("1 millis");
+			yield* Ref.set(gate.route, { ...old, epoch: "restored", generation: 3 });
+			yield* gate.requests.release;
+			expect(yield* Fiber.join(restored)).toMatchObject({
+				waited: true,
+				destination: { epoch: "restored" },
+			});
 		}),
 	),
 );

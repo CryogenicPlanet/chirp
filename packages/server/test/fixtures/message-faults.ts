@@ -158,7 +158,8 @@ const program = Effect.gen(function* () {
 						cron: () => {},
 						page: () => {},
 					});
-					const handler = registrations[0]?.handler;
+					const selected = registrations[0];
+					const handler = selected?.access !== "application-managed" ? selected?.handler : undefined;
 					if (!handler) return yield* Effect.die("Missing standup handler");
 					const request = HttpServerRequest.fromWeb(new Request("http://localhost/api/standup"));
 					const counts = Effect.gen(function* () {

@@ -11,7 +11,7 @@ export const StoragePolicy = Schema.Struct({
 	headroom_percent: Percent.check(Schema.isGreaterThanOrEqualTo(5)),
 }).check(Schema.makeFilter((value) => value.backup_percent + value.event_percent + value.headroom_percent < 100));
 
-/** Exact canonical application paths only. Boot authorization and page publication remain separate authorities. */
+/** Historical signed requests and receipts keep their path validation and canonical binding. These grants no longer authorize ingress. */
 export const validPublicPath = (path: string) =>
 	/^\/[A-Za-z0-9._~!$&'()+,;=:@/-]*$/.test(path) &&
 	path.length <= 512 &&

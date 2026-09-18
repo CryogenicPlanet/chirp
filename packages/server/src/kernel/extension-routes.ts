@@ -37,8 +37,15 @@ export const requestPath = (url: string) => {
 export const pattern = (route: string) => route.replace(/:[A-Za-z_]\w*/g, ":parameter");
 // OpenAPI treats a terminal wildcard and a named segment as the same templated path shape.
 export const templatePattern = (route: string) => pattern(route).replace(/\/\*$/, "/:parameter");
-export const validateRoute = (method: string, route: string, description: string, scope: string) => {
-	if (!route.startsWith("/") || !description.trim()) throw new Error("Extensions require described absolute paths.");
+export const validateRoute = (
+	method: string,
+	route: string,
+	description: string,
+	scope: string | undefined,
+	access: string = "board",
+) => {
+	if (!route.startsWith("/") || route.length > 1024 || !description.trim())
+		throw new Error("Extensions require described absolute paths.");
 	const segments = route.slice(1).split("/");
 	const names = segments.filter((segment) => segment.startsWith(":"));
 	if (
@@ -52,7 +59,9 @@ export const validateRoute = (method: string, route: string, description: string
 		)
 	)
 		throw new Error("Use static paths, named :parameters, and an optional terminal /* wildcard.");
-	if (!["read", "write", "fs"].includes(scope)) throw new Error("Invalid extension scope.");
+	if (access !== "board" && access !== "application-managed") throw new Error("Invalid extension access policy.");
+	if (access === "application-managed" ? scope !== undefined : !["read", "write", "fs"].includes(scope ?? ""))
+		throw new Error("Board routes require scope; application-managed routes must omit scope.");
 	if (!["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].includes(method))
 		throw new Error("Invalid extension method.");
 	if (reserved(route)) throw new Error("Reserved boot or kernel route.");

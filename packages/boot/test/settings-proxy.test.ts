@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import { expect, test } from "vitest";
 import { launch } from "./fixtures/proxy-launch.ts";
 
-test("configured public paths preserve auth floors and are revoked without restarting", async (context) => {
+test("legacy public path settings never bypass authentication", async (context) => {
 	const app = await launch(context);
 	await expect.poll(async () => (await app.state()).state).toBe("live");
 	const set = async (key: string, value: string) =>
@@ -17,13 +17,13 @@ test("configured public paths preserve auth floors and are revoked without resta
 		]);
 	expect((await fetch(`${app.url}/echo`)).status).toBe(401);
 	await set("public_paths", '["/echo"]');
-	expect((await fetch(`${app.url}/echo`)).status).toBe(200);
-	expect((await fetch(`${app.url}/echo`, { method: "HEAD" })).status).toBe(200);
+	expect((await fetch(`${app.url}/echo`)).status).toBe(401);
+	expect((await fetch(`${app.url}/echo`, { method: "HEAD" })).status).toBe(401);
 	expect((await fetch(`${app.url}/echo`, { method: "POST" })).status).toBe(401);
 	expect((await fetch(`${app.url}/echo`, { headers: { authorization: "Bearer invalid" } })).status).toBe(401);
 	expect((await fetch(`${app.url}/echo`, { headers: { cookie: "__Host-comms_session=invalid" } })).status).toBe(401);
 	await set("event_retention", "broken");
-	expect((await fetch(`${app.url}/echo`)).status).toBe(200);
+	expect((await fetch(`${app.url}/echo`)).status).toBe(401);
 	expect((await fetch(`${app.url}/init`)).status).toBe(200);
 	await set("public_paths", "broken");
 	expect((await fetch(`${app.url}/echo`)).status).toBe(401);

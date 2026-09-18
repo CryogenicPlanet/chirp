@@ -296,7 +296,8 @@ it("hides deleted page ancestry at the published fence while retaining raw files
 	const listing = await (await get("/p/")).text();
 	expect(listing).not.toContain('href="/p/gone/"');
 	expect(listing).toContain("gone-other");
-	expect((await fetch(app.url + "/p/gone-other/readme.md")).status).toBe(200);
+	expect((await fetch(app.url + "/p/gone-other/readme.md")).status).toBe(401);
+	expect(await (await get("/p/gone-other/readme.md?raw=1")).text()).toBe("# gone-other");
 	for (const method of ["PUT", "DELETE"])
 		expect((await write("/api/fs/pages/gone/page-only/readme.md", method)).status).toBe(200);
 	expect(await (await get("/api/fs/pages/gone/readme.md")).text()).toBe("# gone");

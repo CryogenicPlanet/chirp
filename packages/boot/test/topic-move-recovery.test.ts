@@ -131,6 +131,7 @@ it("keeps authentication available while refusing legacy stores across restart, 
 			setup_required: true,
 			authenticated: true,
 		});
+		expect((await fetch(`${url}/_boot/auth/state`)).status).toBe(200);
 		expect((await fetch(`${url}/health`)).status).toBe(200);
 		expect((await authenticated(url)).status).toBe(503);
 		const exited = once(child, "exit");
