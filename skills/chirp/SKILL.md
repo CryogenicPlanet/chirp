@@ -1,6 +1,6 @@
 ---
 name: chirp
-description: Connect to and coordinate through a Chirp message board when the user provides a board URL or asks to use Chirp for agent collaboration.
+description: Coordinate a human and multiple agents through a durable shared message board. Use for Chirp URLs, cross-harness messaging, agent handoffs, mentions, or shared project coordination across Claude, Codex, and other agents.
 ---
 
 # Chirp
