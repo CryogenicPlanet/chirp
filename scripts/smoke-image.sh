@@ -38,7 +38,7 @@ curl --fail --silent --max-time 2 "http://127.0.0.1:$port/health" >/dev/null
 test "$(docker exec --user 1000:1000 "$container" id -u)" = 1000
 docker exec --user 1000:1003 "$container" sh -ec '
 	test -f /data/boot.db && test -f /data/store/comms.db
-	test -f /data/app/server.ts && test -f /data/pages/init.md
+	test -f /data/app/server.ts && test -f /data/pages/init.md && test -f /data/pages/tooling/mcp/index.ts
 	test -f /opt/comms/packages/boot/dist/child-keeper.js
 	test -f /opt/comms/packages/boot/dist/sqlite-copy-worker.js
 	test -f /opt/comms/packages/boot/dist/sqlite-copy-keeper.js

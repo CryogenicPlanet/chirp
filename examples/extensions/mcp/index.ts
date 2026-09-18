@@ -1,5 +1,5 @@
 import { Effect, Option, Schema, Stream } from "effect";
-import type { Api } from "../../../src/kernel/extension-api.ts";
+import type { Api } from "../../../packages/server/src/kernel/extension-api.ts";
 import { installOAuth } from "./oauth.ts";
 import { callTool, ToolCall, toolError, tools } from "./tools.ts";
 

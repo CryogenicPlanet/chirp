@@ -17,6 +17,7 @@ COPY packages/protocol packages/protocol
 COPY packages/storage packages/storage
 COPY packages/server packages/server
 COPY packages/ui packages/ui
+COPY examples/extensions/mcp examples/extensions/mcp
 RUN bun run build
 
 FROM oven/bun:1.4.0@sha256:5ff609364c049b54eb0ff560ec96319729a972078ef2c755d758f0c6ef89c2d6 AS dependencies
@@ -44,7 +45,6 @@ WORKDIR /opt/comms
 COPY --from=dependencies /opt/comms /opt/comms
 COPY --from=build /opt/comms/packages/boot/dist packages/boot/dist
 COPY --from=build /opt/comms/packages/server/dist packages/server/dist
-COPY --from=build /opt/comms/packages/server/pages packages/server/pages
 RUN apt-get update && apt-get install -y --no-install-recommends sudo util-linux tini \
     && rm -rf /var/lib/apt/lists/* \
     && usermod --login boot bun \

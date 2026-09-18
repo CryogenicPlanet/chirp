@@ -40,7 +40,9 @@ export const startServer = (browserOrigin?: string) =>
 		return yield* boot({
 			dataDirectory: path.resolve(dataDirectory),
 			seedDirectory,
-			seedPagesDirectory: yield* path.fromFileUrl(new URL("../pages", import.meta.url)),
+			seedPagesDirectory: yield* path.fromFileUrl(
+				new URL(import.meta.url.endsWith(".ts") ? "../dist/pages-seed" : "./pages-seed", import.meta.url),
+			),
 			entryFile: "server.ts",
 			auth: {
 				rpId: ambiguous || !primary ? "" : primary.rpId,

@@ -1,7 +1,7 @@
 import { on } from "@comms/storage/dialect";
 import { Clock, Crypto, Effect, Schema, Stream } from "effect";
 import { SqlClient } from "effect/unstable/sql";
-import type { Api, ManagedRequestContext } from "../../../src/kernel/extension-api.ts";
+import type { Api, ManagedRequestContext } from "../../../packages/server/src/kernel/extension-api.ts";
 
 const ClientInput = Schema.Struct({
 	client_name: Schema.String,
