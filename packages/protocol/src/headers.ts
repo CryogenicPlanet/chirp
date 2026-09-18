@@ -77,6 +77,11 @@ export const headerLabel = (name: string): string =>
 
 /** Generic boot-to-live ingress; callers cannot supply the target header. */
 export const ingressProtocolHeader = "x-chirp-ingress-protocol";
+/** Version 2 includes namespaced application bearer transport. */
+export const ingressProtocolVersion = "2";
 export const ingressTargetHeader = "x-chirp-ingress-target";
 export const applicationIngressPath = "/_kernel/ingress";
 export const applicationCookiePrefix = "chirp_app_";
+
+/** Exact opaque application bearer syntax; never a board access token. */
+export const applicationBearerPattern = Object.freeze(/^Bearer chirp_app_[A-Za-z0-9_-]{43}(?![\s\S])/);

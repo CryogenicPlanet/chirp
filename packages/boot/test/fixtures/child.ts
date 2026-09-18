@@ -1,6 +1,7 @@
 import {
 	agentHeader,
 	ingressProtocolHeader,
+	ingressProtocolVersion,
 	ingressTargetHeader,
 	applicationIngressPath,
 	assertionHeader,
@@ -41,7 +42,8 @@ export function serve(mode: string) {
 					headers: {
 						[writerEpochHeader]: process.env.WRITER_EPOCH ?? "",
 						[kernelProtocolHeader]: "2",
-						...(mode === "ingress" ? { [ingressProtocolHeader]: "1" } : {}),
+						...(mode === "ingress" ? { [ingressProtocolHeader]: ingressProtocolVersion } : {}),
+						...(mode === "ingress-v1" ? { [ingressProtocolHeader]: "1" } : {}),
 					},
 				});
 			if (url.pathname === applicationIngressPath)

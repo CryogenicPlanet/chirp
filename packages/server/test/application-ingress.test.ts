@@ -16,7 +16,7 @@ export default api => {
  api.route("GET", "/managed/:id", {description:"Managed read",access:"application-managed",handler:(req,ctx)=>Effect.gen(function*(){
   const guard = yield* ctx.kv().set("accidental",true).pipe(Effect.result);
   const marks = yield* ctx.topics.markRead("managed",0).pipe(Effect.result);
-  return Response.json({identity:ctx.identity,authority:ctx.authority,params:ctx.params,query:ctx.query,url:req.url,headers:req.headers,cookie:req.headers.cookie,guard:guard._tag,marks:marks._tag}, {headers:{"set-cookie":"chirp_app_gate=approved; Path=/; HttpOnly; SameSite=Lax"}});
+  return Response.json({identity:ctx.identity,authority:ctx.authority,params:ctx.params,query:ctx.query,url:req.url,authorization:req.headers.authorization,headers:req.headers,cookie:req.headers.cookie,guard:guard._tag,marks:marks._tag}, {headers:{"set-cookie":"chirp_app_gate=approved; Path=/; HttpOnly; SameSite=Lax"}});
  })});
  api.route("POST", "/managed/:id", {description:"Intentional anonymous writer",access:"application-managed",handler:(req,ctx)=>Effect.gen(function*(){
   const body = yield* req.text;
@@ -31,7 +31,9 @@ export default api => {
 	await app.setup();
 	let cookie = await app.login();
 	await app.ready(cookie);
+	const authorization = `Bearer chirp_app_${"a".repeat(43)}`;
 	expect((await fetch(`${app.url}/managed/hello`)).status).toBe(401);
+	expect((await fetch(`${app.url}/managed/hello`, { headers: { authorization } })).status).toBe(401);
 	expect((await fetch(`${app.url}/onboarding`)).status).toBeGreaterThanOrEqual(400);
 	await app.stop();
 	await writeFile(join(fixture.root, "boot.config.json"), JSON.stringify({ applicationManagedIngress: true }));
@@ -58,6 +60,35 @@ export default api => {
 		guard: "Failure",
 		marks: "Failure",
 	});
+	const bearer = await (
+		await fetch(`${app.url}/managed/hello`, {
+			headers: {
+				authorization,
+				"x-chirp-agent": "spoof",
+				"x-chirp-auth-kind": "human",
+				"x-boot-secret": "spoof",
+				cookie: "chirp_app_gate=approved; unrelated=hidden",
+			},
+		})
+	).json();
+	expect(bearer.identity).toBeNull();
+	expect(bearer.authorization).toBe(authorization);
+	expect(bearer.cookie).toBe("chirp_app_gate=approved");
+	expect(bearer.headers["x-boot-secret"]).toBeUndefined();
+	expect(bearer.headers["x-chirp-agent"]).toBeUndefined();
+	for (const mixedCookie of [cookie, "__Host-comms_session=invalid"])
+		expect((await fetch(`${app.url}/managed/hello`, { headers: { authorization, cookie: mixedCookie } })).status).toBe(
+			401,
+		);
+	for (const path of [
+		"/managed/private",
+		"/api/messages",
+		"/p/private.md",
+		"/not-registered",
+		"/init",
+		"/_boot/status",
+	])
+		expect((await fetch(`${app.url}${path}`, { headers: { authorization } })).status).toBeGreaterThanOrEqual(400);
 	const signed = await (
 		await fetch(`${app.url}/managed/hello`, { headers: { cookie: `${cookie}; chirp_app_gate=approved` } })
 	).json();
@@ -96,6 +127,12 @@ export default api => {
 		).status,
 	).toBe(403);
 
+	const boardRead = await (
+		await fetch(`${app.url}/managed/hello`, { headers: { authorization: `Bearer ${token.access}` } })
+	).json();
+	expect(boardRead.identity).toMatchObject({ agent: "managed-reader", kind: "agent" });
+	expect(boardRead.authorization).toBeUndefined();
+
 	const write = () =>
 		fetch(`${app.url}/managed/write`, {
 			method: "POST",
@@ -107,6 +144,13 @@ export default api => {
 	const message = await created.json();
 	expect(message).toMatchObject({ agent: "system", body: "durable anonymous" });
 	expect(await (await write()).json()).toEqual(message);
+	const bearerWrite = await fetch(`${app.url}/managed/write`, {
+		method: "POST",
+		headers: { authorization, "idempotency-key": "bearer-one" },
+		body: "bearer service",
+	});
+	expect(bearerWrite.status).toBe(200);
+	expect(await bearerWrite.json()).toMatchObject({ agent: "system", body: "bearer service" });
 	const signedWrite = await fetch(`${app.url}/managed/write`, {
 		method: "POST",
 		headers: { cookie, origin: "https://comms.test", "idempotency-key": "signed-one" },
@@ -118,12 +162,14 @@ export default api => {
 	expect(api.paths["/managed/private"].get.security.length).toBeGreaterThan(0);
 	expect((await fetch(`${app.url}/managed/broken`)).status).toBe(500);
 	expect((await fetch(`${app.url}/managed/hello`)).status).toBe(500);
+	expect((await fetch(`${app.url}/managed/hello`, { headers: { authorization } })).status).toBe(500);
 	await app.stop();
 	app = await fixture.launch(join(seed, "server.ts"));
 	cookie = await app.login();
 	await app.ready(cookie);
 	expect(await fixture.sql("SELECT body,agent FROM messages WHERE topic='managed' ORDER BY seq")).toEqual([
 		{ body: "durable anonymous", agent: "system" },
+		{ body: "bearer service", agent: "system" },
 		{ body: "signed service", agent: "system" },
 	]);
 }, 60000);
@@ -146,6 +192,10 @@ it("closes anonymous ingress when a failed factory could have owned a narrower r
 	const cookie = await app.login();
 	await app.ready(cookie);
 	expect((await fetch(`${app.url}/shared/private`)).status).toBe(500);
+	expect(
+		(await fetch(`${app.url}/shared/private`, { headers: { authorization: `Bearer chirp_app_${"a".repeat(43)}` } }))
+			.status,
+	).toBe(500);
 	expect((await fetch(`${app.url}/shared/otherwise-public`)).status).toBe(500);
 	expect((await fetch(`${app.url}/_boot/status`, { headers: { cookie } })).status).toBe(200);
 	expect(await (await fetch(`${app.url}/api/ext`, { headers: { cookie } })).json()).toEqual(

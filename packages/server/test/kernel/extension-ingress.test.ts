@@ -66,3 +66,26 @@ it("exposes only app cookies and preserves the original request body and URL", a
 	);
 	expect(normal.headers.cookie).toBeUndefined();
 });
+
+it("exposes an application bearer only to the managed envelope, including request.source", async () => {
+	const authorization = `Bearer chirp_app_${"a".repeat(43)}`;
+	for (const [url, managed, expected] of [
+		[applicationIngressPath, true, authorization],
+		[applicationIngressPath, false, null],
+		["/custom", true, null],
+	] as const) {
+		const exposed = await Effect.runPromise(
+			exposeRequest(
+				HttpServerRequest.fromWeb(
+					new Request(`http://child${url}`, { headers: { authorization, "x-boot-secret": "secret" } }),
+				),
+				"/custom",
+				managed,
+			),
+		);
+		expect(exposed.headers.authorization ?? null).toBe(expected);
+		const web = await Effect.runPromise(HttpServerRequest.toWeb(exposed));
+		expect(web.headers.get("authorization")).toBe(expected);
+		expect(web.headers.get("x-boot-secret")).toBeNull();
+	}
+});

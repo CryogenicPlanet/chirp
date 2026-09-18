@@ -1,9 +1,14 @@
-import { agentHeader, ingressTargetHeader } from "@comms/protocol/headers";
+import { agentHeader, applicationBearerPattern, ingressTargetHeader } from "@comms/protocol/headers";
+import { request } from "node:http";
 import { expect, it } from "vitest";
 import { applicationCookies, isReservedIngressPath } from "../src/application-ingress.ts";
 import { launch } from "./fixtures/proxy-launch.ts";
 
 it("keeps board credentials and reserved aliases outside application ingress", () => {
+	const bearer = `Bearer chirp_app_${"a".repeat(43)}`;
+	expect(applicationBearerPattern.test(bearer)).toBe(true);
+	for (const suffix of ["\n", "\r", "\r\n", " ", "a"])
+		expect(applicationBearerPattern.test(bearer + suffix)).toBe(false);
 	expect(
 		applicationCookies("__Host-comms_session=secret; chirp_app_login=app; other=private; chirp_app_bad name=x"),
 	).toBe("chirp_app_login=app");
@@ -31,6 +36,9 @@ it.for([
 	const app = await launch(test, "ingress", false, {}, config);
 	await expect.poll(async () => (await app.state()).state).toBe("live");
 	expect((await fetch(`${app.url}/shared`)).status).toBe(401);
+	expect(
+		(await fetch(`${app.url}/shared`, { headers: { authorization: `Bearer chirp_app_${"a".repeat(43)}` } })).status,
+	).toBe(401);
 	expect((await fetch(`${app.url}/_boot/auth/state`)).status).toBe(200);
 	const status = await (await app.fetch(`${app.url}/_boot/status`)).json();
 	expect(status.ingress.applicationManagedIngress).toBe(false);
@@ -38,10 +46,13 @@ it.for([
 		expect(status.ingress.error).toBe("boot_config_invalid");
 });
 
-it("never sends anonymous requests to a historical child without the health capability", async (test) => {
-	const app = await launch(test, "normal", false, {}, '{"applicationManagedIngress":true}');
+it.for(["normal", "ingress-v1"])("refuses incompatible managed ingress generation %s", async (mode, test) => {
+	const app = await launch(test, mode, false, {}, '{"applicationManagedIngress":true}');
 	await expect.poll(async () => (await app.state()).state).toBe("live");
 	expect((await fetch(`${app.url}/shared`)).status).toBe(401);
+	expect(
+		(await fetch(`${app.url}/shared`, { headers: { authorization: `Bearer chirp_app_${"a".repeat(43)}` } })).status,
+	).toBe(401);
 	expect((await fetch(`${app.url}/shared`, { method: "POST", body: "write" })).status).toBe(401);
 	expect((await app.fetch(`${app.url}/echo`)).status).toBe(200);
 });
@@ -86,4 +97,57 @@ it("delegates anonymous reads and intentional writes only through the dedicated 
 		agent: "rahul",
 		authorization: null,
 	});
+});
+
+it("forwards only exact application bearers through managed ingress without board identity", async (test) => {
+	const app = await launch(test, "ingress", false, {}, '{"applicationManagedIngress":true}');
+	await expect.poll(async () => (await app.state()).state).toBe("live");
+	const authorization = `Bearer chirp_app_${"a".repeat(43)}`;
+	const response = await fetch(`${app.url}/shared`, {
+		headers: {
+			authorization,
+			[agentHeader]: "forged",
+			[ingressTargetHeader]: "/api/fs",
+			cookie: "chirp_app_login=app; other=private",
+		},
+	});
+	expect(response.status).toBe(200);
+	expect(await response.json()).toMatchObject({
+		authorization,
+		agent: null,
+		cookie: "chirp_app_login=app",
+		target: "/shared",
+	});
+	for (const value of [
+		"Bearer chirp_app_short",
+		authorization + "a",
+		authorization.slice(0, -1),
+		authorization.slice(0, -1) + "+",
+		authorization + ", Bearer other",
+		authorization.replace("Bearer", "bearer"),
+		"Basic chirp_app_" + "a".repeat(43),
+	])
+		expect((await fetch(`${app.url}/shared`, { headers: { authorization: value } })).status).toBe(401);
+	for (const cookie of [app.cookie, "__Host-comms_session=invalid"])
+		expect((await fetch(`${app.url}/shared`, { headers: { authorization, cookie } })).status).toBe(401);
+	for (const path of ["/_boot", "/_boot/status", "/auth/login", "/api/fs/app", "/init", "/%61uth/login"])
+		expect((await fetch(`${app.url}${path}`, { headers: { authorization }, redirect: "manual" })).status).toBe(401);
+	const hop = await new Promise<string>((resolve, reject) => {
+		const outgoing = request(
+			`${app.url}/shared`,
+			{ headers: { authorization, connection: "Authorization" } },
+			(response) => {
+				let body = "";
+				response.setEncoding("utf8");
+				response.on("data", (chunk) => {
+					body += chunk;
+				});
+				response.on("end", () => resolve(body));
+				response.on("error", reject);
+			},
+		);
+		outgoing.on("error", reject);
+		outgoing.end();
+	});
+	expect(JSON.parse(hop)).toMatchObject({ authorization: null, agent: null });
 });

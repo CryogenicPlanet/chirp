@@ -1,4 +1,9 @@
-import { applicationCookiePrefix, applicationIngressPath, ingressTargetHeader } from "@comms/protocol/headers";
+import {
+	applicationBearerPattern,
+	applicationCookiePrefix,
+	applicationIngressPath,
+	ingressTargetHeader,
+} from "@comms/protocol/headers";
 import { Effect } from "effect";
 import { type FindMyWay, HttpServerRequest } from "effect/unstable/http";
 import { KernelError } from "./boot-channel.ts";
@@ -29,7 +34,14 @@ export const exposeRequest = (request: HttpServerRequest.HttpServerRequest, targ
 	Effect.gen(function* () {
 		const web = yield* HttpServerRequest.toWeb(request);
 		const headers = new Headers(web.headers);
+		const applicationBearer =
+			managed &&
+			request.url === applicationIngressPath &&
+			applicationBearerPattern.test(headers.get("authorization") ?? "")
+				? headers.get("authorization")
+				: null;
 		for (const name of ["x-boot-secret", "authorization", ingressTargetHeader]) headers.delete(name);
+		if (applicationBearer) headers.set("authorization", applicationBearer);
 		const cookies = managed
 			? (headers.get("cookie") ?? "")
 					.split(";")

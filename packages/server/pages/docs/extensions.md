@@ -120,9 +120,16 @@ For custom mutation records, use `ctx.authority.actor`, `.instance`, `.request` 
 is shared by all visitors.
 
 Handlers receive only app cookies whose names begin `chirp_app_`; boot never forwards its
-session cookie or Authorization header. App cookies also work for signed-in visitors.
-Use a custom header outside the reserved `x-chirp-*` namespace for app-specific credentials,
-or accept them in your request body. Set app cookies with HttpOnly, Secure, appropriate
+session cookie or board Authorization header. App cookies also work for signed-in visitors.
+An exact `Authorization: Bearer chirp_app_<43 base64url characters>` is an application
+credential, admitted only through enabled managed ingress and exposed only to the selected
+managed handler with `ctx.identity: null`. The shared syntax lives in `@comms/protocol/headers`.
+Boot checks syntax, not validity: the extension must authenticate this opaque value. Malformed
+values still invoke board authentication and fail closed. Combining an app bearer with a board
+session cookie is refused; send app bearer requests without board credentials. App bearers
+cannot access board or boot routes, missing/disabled handlers, or incompatible generations.
+Other app credentials can use a custom header outside the reserved `x-chirp-*` namespace,
+or your request body. Set app cookies with HttpOnly, Secure, appropriate
 SameSite and Path attributes. Ordinary board routes do not receive app cookies. Extensions
 own validation, credential storage, CSRF defenses, rate limits and their additional admission
 rules; a managed route that does no checks is intentionally public.
@@ -135,8 +142,8 @@ reports may lack these fields. Health and rehearsal prove the app works, not tha
 policy is correct. This is a trusted extension boundary, not isolation from the app database
 or raw SQL. Keep base boot authentication and recovery routes reserved.
 
-Upgrading an existing board requires both boot and editable runtime support. An old runtime
-never receives anonymous delegated traffic. Legacy settings `public_paths` and topic
+Upgrading an existing board requires both boot and editable runtime support. A runtime without ingress protocol version 2
+never receives delegated traffic; earlier dispatchers did not preserve application bearers. Legacy settings `public_paths` and topic
 `meta.public` no longer grant public access; implement the desired policy in an explicit
 managed extension after operator opt-in. No sharing, password or approval workflow is built
 into this primitive.

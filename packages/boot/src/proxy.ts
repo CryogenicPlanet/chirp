@@ -1,5 +1,6 @@
 import {
 	agentHeader,
+	applicationBearerPattern,
 	applicationCookiePrefix,
 	applicationIngressPath,
 	ingressTargetHeader,
@@ -135,7 +136,17 @@ export const proxy = Effect.gen(function* () {
 				generation: 0,
 				requestId,
 			});
+	const applicationBearer = applicationBearerPattern.test(request.headers.authorization ?? "");
+	const boardSession = (request.headers.cookie ?? "")
+		.split(";")
+		.some((part) => part.trim().startsWith(`${sessionCookie}=`));
 	const routed = Effect.gen(function* () {
+		// App bearer credentials cannot invoke boot surfaces or silently replace a supplied board session.
+		if (
+			applicationBearer &&
+			(ingress?.applicationManagedIngress !== true || boardSession || isReservedIngressPath(path))
+		)
+			return authErrorResponse("token_invalid");
 		// Recovery help carries a public yes/no on whether stored passkeys match an allowed origin; detail needs auth.
 		if (path === "/_boot" && request.method === "GET") {
 			const ok = yield* auth.passkeyOriginState.pipe(
@@ -197,9 +208,7 @@ export const proxy = Effect.gen(function* () {
 		if (mintResponse) return mintResponse;
 		const tokenResponse = yield* tokenRoute(auth);
 		if (tokenResponse) return tokenResponse;
-		const explicitCredential =
-			request.headers.authorization !== undefined ||
-			(request.headers.cookie ?? "").split(";").some((part) => part.trim().startsWith(`${sessionCookie}=`));
+		const explicitCredential = (request.headers.authorization !== undefined && !applicationBearer) || boardSession;
 		const isPublic =
 			(request.method === "GET" || request.method === "HEAD") &&
 			[
@@ -215,7 +224,10 @@ export const proxy = Effect.gen(function* () {
 				"/page-assets/tailwind.js",
 			].includes(path);
 		const managedIngress =
-			!explicitCredential && !isPublic && ingress?.applicationManagedIngress === true && !isReservedIngressPath(path);
+			!explicitCredential &&
+			(!isPublic || applicationBearer) &&
+			ingress?.applicationManagedIngress === true &&
+			!isReservedIngressPath(path);
 		return yield* authFailure(
 			Effect.gen(function* () {
 				let identity = (!isPublic && !managedIngress) || explicitCredential ? yield* authenticate(auth, request) : null;
@@ -376,6 +388,9 @@ export const proxy = Effect.gen(function* () {
 								? { [initHeader]: request.headers[initHeader] }
 								: {}),
 							...(managedIngress ? { [ingressTargetHeader]: path + url.search } : {}),
+							...(managedIngress && applicationBearer && !connectionHeaders.has("authorization")
+								? { authorization: request.headers.authorization }
+								: {}),
 							...(ingress?.applicationManagedIngress &&
 							!connectionHeaders.has("cookie") &&
 							applicationCookies(request.headers.cookie)

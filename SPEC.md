@@ -301,8 +301,9 @@ and its scope requirements. Legacy exact-path and topic metadata grants no longe
 **17. The app never sees a board credential, and cannot forge a board identity.** Boot
 strips board authorization, session cookies and caller-supplied identity headers. It injects
 only verified identity and protects its own session cookie on the response. Application-owned
-credentials use a separate explicit cookie namespace or custom headers. Their authentication
-and handling belong to editable code. This delegation can expose data if that code is wrong;
+credentials use separate explicit cookie or bearer namespaces, or custom headers. Application
+bearers are delegated only to explicitly managed handlers; mixing one with a board session is
+refused. Their authentication and handling belong to editable code. This delegation can expose data if that code is wrong;
 it is not a sandbox for code that already has application database access. Base passkeys,
 tokens, sessions and recovery remain boot-owned.
 

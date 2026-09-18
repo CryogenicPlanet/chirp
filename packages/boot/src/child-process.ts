@@ -1,5 +1,6 @@
 import {
 	ingressProtocolHeader,
+	ingressProtocolVersion,
 	healthReadyHeader,
 	kernelProtocolHeader,
 	writerEpochHeader,
@@ -183,7 +184,7 @@ export const launchChild = Effect.fn("launchChild")(function* (options: Launch, 
 								: Effect.fail(new ChildError({ code: "health_failed" })),
 						),
 					);
-					yield* Ref.set(applicationManagedIngress, response.headers[ingressProtocolHeader] === "1");
+					yield* Ref.set(applicationManagedIngress, response.headers[ingressProtocolHeader] === ingressProtocolVersion);
 					return report;
 				}
 				if (response.headers[healthReadyHeader] === "1") return yield* new ChildError({ code: "health_failed" });
