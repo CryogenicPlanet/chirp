@@ -191,10 +191,11 @@ export default api => Effect.gen(function*(){
 	await writeFile(
 		join(directory, "scoped/index.ts"),
 		`import {Effect,FileSystem} from "effect";
+import {TestClock} from "effect/testing";
 export default api => Effect.gen(function*(){
  const fs=yield* FileSystem.FileSystem;
  const write=text=>fs.writeFileString(${JSON.stringify(record)},text,{flag:"a"});
- api.on("start",()=>Effect.gen(function*(){yield* write("start,");yield* Effect.addFinalizer(()=>write("closing,").pipe(Effect.andThen(Effect.sleep("100 millis")),Effect.andThen(write("close,")),Effect.orDie));}));
+ api.on("start",()=>Effect.gen(function*(){yield* write("start,");yield* Effect.addFinalizer(()=>write("closing,").pipe(Effect.andThen(TestClock.withLive(Effect.sleep("100 millis"))),Effect.andThen(write("close,")),Effect.orDie));}));
  api.on("shutdown",()=>write("shutdown,"));
  api.route("GET","/api/failure",{description:"Fail while closing",scope:"read",handler:()=>Effect.die("route failure")});
 });`,
@@ -215,6 +216,9 @@ export default api => Effect.gen(function*(){
 		"start,closing,close,shutdown,start,closing,close,shutdown,start,closing,close,shutdown,",
 	]);
 	expect(await readFile(cleanupRecord, "utf8")).toBe("start,");
+	expect(result.statusBeforeThreshold).toEqual(
+		expect.arrayContaining([expect.objectContaining({ name: "scoped", status: "loaded", error: null })]),
+	);
 	expect(result.status).toEqual(
 		expect.arrayContaining([
 			expect.objectContaining({
@@ -229,6 +233,7 @@ export default api => Effect.gen(function*(){
 		expect.objectContaining({
 			payload: { extension: "a-cleanup.ts", error: expect.stringContaining("cleanup exploded") },
 		}),
+		expect.objectContaining({ payload: { extension: "scoped", error: expect.stringContaining("route failure") } }),
 		expect.objectContaining({ payload: { extension: "scoped", error: expect.stringContaining("route failure") } }),
 		expect.objectContaining({ payload: { extension: "scoped", error: expect.stringContaining("route failure") } }),
 		expect.objectContaining({ payload: { extension: "scoped", error: expect.stringContaining("route failure") } }),

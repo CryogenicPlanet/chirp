@@ -4,6 +4,7 @@ import { layer as publicationLayer } from "../../src/kernel/publication.ts";
 import { BunRuntime, BunServices, BunHttpPlatform } from "@effect/platform-bun";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import { Config, Console, Effect, Ref, FileSystem, Layer, Path, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { Etag } from "effect/unstable/http";
 import { layer as topicsLayer } from "../../src/ext/core/topics.ts";
@@ -21,6 +22,7 @@ const run = Effect.gen(function* () {
 	return yield* Effect.gen(function* () {
 		const extensions = yield* Extensions;
 		const lifecycle = yield* Lifecycle;
+		yield* TestClock.setTime(0);
 		const changeState = (state: State) =>
 			Ref.set(lifecycle.state, state).pipe(Effect.andThen(extensions.changeState(state)));
 		const read = () =>
@@ -56,14 +58,18 @@ const run = Effect.gen(function* () {
 				),
 			),
 		);
+		yield* failRoute.pipe(Effect.exit);
+		yield* TestClock.adjust("61 seconds");
 		for (let attempt = 0; attempt < 2; attempt++) yield* failRoute.pipe(Effect.exit);
+		const statusBeforeThreshold = yield* extensions.status;
 		yield* failRoute.pipe(Effect.forkScoped);
-		while (!(yield* read()).endsWith("closing,")) yield* Effect.sleep("5 millis");
+		while (!(yield* read()).endsWith("closing,")) yield* TestClock.withLive(Effect.sleep("5 millis"));
 		yield* changeState("frozen");
 		trace.push(yield* read());
 		yield* Console.log(
 			yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
 				trace,
+				statusBeforeThreshold,
 				status: yield* extensions.status,
 				diagnostics: yield* extensions.diagnostics,
 			}),
@@ -97,6 +103,8 @@ const run = Effect.gen(function* () {
 		abort: () => Effect.void,
 		append: () => Effect.succeed({ published_through: 0 }),
 	}),
-	Effect.provide(Layer.mergeAll(lifecycleLayer, SqliteClient.layer({ filename: ":memory:" }), BunServices.layer)),
+	Effect.provide(
+		Layer.mergeAll(lifecycleLayer, TestClock.layer(), SqliteClient.layer({ filename: ":memory:" }), BunServices.layer),
+	),
 );
 run.pipe(BunRuntime.runMain);
