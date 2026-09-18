@@ -57,7 +57,7 @@ export async function conversation(test: TestContext) {
 			)
 			.not.toBe("");
 		// The listener starts before boot finishes opening authentication storage.
-		await expect.poll(async () => (await fetch(`${url}/auth/login`)).status, { timeout: 10000 }).toBe(200);
+		await expect.poll(async () => (await fetch(`${url}/_boot/auth/state`)).status, { timeout: 10000 }).toBe(200);
 		const post = (path: string, body: unknown, cookie?: string, key?: string) =>
 			fetch(`${url}${path}`, {
 				method: "POST",
