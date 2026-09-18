@@ -44,7 +44,8 @@ it("upserts topic metadata and archives subtrees through authenticated, replayab
 		seq: expect.any(Number),
 	});
 	expect(await get(path)).toMatchObject({ meta: first.meta, messages: [], archived_at: null, archived_root: null });
-	expect((await fetch(app.url + "/p/project/notes/")).status).toBe(200);
+	expect((await fetch(app.url + "/p/project/notes/")).status).toBe(401);
+	expect((await call("GET", "/p/project/notes/")).status).toBe(200);
 	expect((await get("/api/topics")).subtopics.filter((row: { path: string }) => row.path !== "system")).toEqual([
 		expect.objectContaining({ path: "project" }),
 	]);

@@ -1,31 +1,5 @@
-export const reserved = (path: string) => {
-	const route = path.replace(/\/+/g, "/").replace(/\/$/, "").toLowerCase();
-	return (
-		[
-			"/_boot",
-			"/_kernel",
-			"/api/fs",
-			"/api/lock",
-			"/api/reload",
-			"/api/revert",
-			"/api/generations",
-			"/api/tokens",
-			"/auth",
-			"/approve",
-			"/setup",
-		].some((prefix) => route === prefix || route.startsWith(prefix + "/")) ||
-		[
-			"/health",
-			"/api",
-			"/api/ext",
-			"/init",
-			"/init.md",
-			"/quickstart",
-			"/quickstart.md",
-			"/.well-known/agent.json",
-		].includes(route)
-	);
-};
+import { reservedIngressRoute as reserved } from "@comms/protocol/headers";
+export { reservedIngressRoute as reserved } from "@comms/protocol/headers";
 export const requestPath = (url: string) => {
 	try {
 		const path = url.startsWith("/") ? url : new URL(url).pathname;
@@ -37,8 +11,15 @@ export const requestPath = (url: string) => {
 export const pattern = (route: string) => route.replace(/:[A-Za-z_]\w*/g, ":parameter");
 // OpenAPI treats a terminal wildcard and a named segment as the same templated path shape.
 export const templatePattern = (route: string) => pattern(route).replace(/\/\*$/, "/:parameter");
-export const validateRoute = (method: string, route: string, description: string, scope: string) => {
-	if (!route.startsWith("/") || !description.trim()) throw new Error("Extensions require described absolute paths.");
+export const validateRoute = (
+	method: string,
+	route: string,
+	description: string,
+	scope: string | undefined,
+	access: string = "board",
+) => {
+	if (!route.startsWith("/") || route.length > 1024 || !description.trim())
+		throw new Error("Extensions require described absolute paths.");
 	const segments = route.slice(1).split("/");
 	const names = segments.filter((segment) => segment.startsWith(":"));
 	if (
@@ -52,7 +33,9 @@ export const validateRoute = (method: string, route: string, description: string
 		)
 	)
 		throw new Error("Use static paths, named :parameters, and an optional terminal /* wildcard.");
-	if (!["read", "write", "fs"].includes(scope)) throw new Error("Invalid extension scope.");
+	if (access !== "board" && access !== "application-managed") throw new Error("Invalid extension access policy.");
+	if (access === "application-managed" ? scope !== undefined : !["read", "write", "fs"].includes(scope ?? ""))
+		throw new Error("Board routes require scope; application-managed routes must omit scope.");
 	if (!["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].includes(method))
 		throw new Error("Invalid extension method.");
 	if (reserved(route)) throw new Error("Reserved boot or kernel route.");

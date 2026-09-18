@@ -1,4 +1,4 @@
-import { isDescendant, on, readTransaction } from "@comms/storage/dialect";
+import { isDescendant, readTransaction } from "@comms/storage/dialect";
 import { makePageContinuation, pendingPageMove } from "./topic-page-continuation.ts";
 import { Context, Effect, FileSystem, Layer, Option, Path, Ref, Schema, type PlatformError } from "effect";
 import { SqlClient } from "effect/unstable/sql";
@@ -83,33 +83,10 @@ const make = (directory: string) =>
 					),
 				),
 		);
-		const entries = Effect.fn("Pages.entries")(function* (name: string, publicOnly = false) {
+		const entries = Effect.fn("Pages.entries")(function* (name: string) {
 			const target = yield* resolve(name);
 			if (target.type !== "Directory") return yield* new PageRejected({ code: "page_not_found" });
 			const names = yield* fs.readDirectory(target.absolute);
-			const publicChildren = publicOnly
-				? yield* readTransaction(
-						sql,
-						Effect.gen(function* () {
-							yield* sql`SELECT epoch FROM kernel_writer`;
-							const ceiling = (yield* boot.fence).published_through;
-							yield* assertSqlPublished(sql, boot.epoch, ceiling);
-							return yield* sql`WITH visible_topics AS (${publishedTopics(sql, ceiling)})
-				 SELECT path,meta FROM visible_topics topic WHERE (parent=${name} OR (${name}='' AND parent IS NULL)) AND deleted_at IS NULL
-				 AND NOT EXISTS (SELECT 1 FROM visible_topics ancestor WHERE ancestor.deleted_at IS NOT NULL
-				 AND (ancestor.path=topic.path OR ${isDescendant(sql, sql("topic.path"), sql("ancestor.path"))}))`.pipe(
-								Effect.flatMap(
-									Schema.decodeUnknownEffect(
-										Schema.Array(
-											Schema.Struct({ path: Schema.String, meta: Schema.fromJsonString(Schema.JsonObject) }),
-										),
-									),
-								),
-								Effect.map((rows) => rows.filter((row) => row.meta.public === true).map((row) => row.path)),
-							);
-						}),
-					).pipe(Effect.mapError(() => new PageRejected({ code: "pages_unavailable" })))
-				: null;
 			const result: Array<{ readonly name: string; readonly directory: boolean }> = [];
 			for (const child of names.sort()) {
 				const childName = name ? `${name}/${child}` : child;
@@ -118,8 +95,7 @@ const make = (directory: string) =>
 						error.code === "pages_unavailable" ? Effect.fail(error) : Effect.succeed(null),
 					),
 				);
-				if (entry && (entry.type !== "Directory" || publicChildren === null || publicChildren.includes(childName)))
-					result.push({ name: child, directory: entry.type === "Directory" });
+				if (entry) result.push({ name: child, directory: entry.type === "Directory" });
 			}
 			return result;
 		});
@@ -160,11 +136,7 @@ const make = (directory: string) =>
 				directories,
 			};
 		});
-		const publicTopic = (name: string, ceiling: number) =>
-			sql`WITH visible_topics AS (${publishedTopics(sql, ceiling)}) SELECT path FROM visible_topics WHERE path=${name} AND deleted_at IS NULL AND ${on(sql, { sqlite: () => sql`json_type(meta,'$.public')='true'`, pg: () => sql`meta::jsonb -> 'public' = 'true'::jsonb`, mysql: () => sql`JSON_TYPE(JSON_EXTRACT(meta,'$.public'))='BOOLEAN' AND JSON_UNQUOTE(JSON_EXTRACT(meta,'$.public'))='true'` })}`.pipe(
-				Effect.map((rows) => rows.length === 1),
-			);
-		return { resolve, entries, read, topic, render, move, publicTopic };
+		return { resolve, entries, read, topic, render, move };
 	});
 /** Reads only the page tree supplied by boot. Paths never follow symlinks. */
 export class Pages extends Context.Service<Pages, Effect.Success<ReturnType<typeof make>>>()("comms/server/Pages") {}

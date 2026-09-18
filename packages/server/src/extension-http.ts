@@ -9,7 +9,8 @@ interface RouteDescription {
 	readonly method: HttpMethod;
 	readonly path: `/${string}`;
 	readonly description: string;
-	readonly scope: RouteScope;
+	readonly scope?: RouteScope;
+	readonly access?: "board" | "application-managed";
 	readonly operation?: OpenApi.OpenAPISpecOperation;
 }
 
@@ -32,7 +33,7 @@ export const description = (extensions: { readonly registrations: ReadonlyArray<
 			error: errorSchema("extension_disabled", policy.extension_disabled.status),
 		}).annotate(
 			OpenApi.Description,
-			`${route.description}${path !== route.path ? ` Runtime pattern: ${route.path}.` : ""}${route.path.endsWith("/*") ? ' The {*} path parameter captures the remaining path (ctx.params["*"]).' : ""} Requires ${route.scope}. Extension: ${route.extension}.`,
+			`${route.description}${path !== route.path ? ` Runtime pattern: ${route.path}.` : ""}${route.path.endsWith("/*") ? ' The {*} path parameter captures the remaining path (ctx.params["*"]).' : ""} ${route.access === "application-managed" ? "Application-managed admission (requires operator opt-in)." : `Requires ${route.scope}.`} Extension: ${route.extension}.`,
 		);
 	});
 	const group = HttpApiGroup.make("extensions");
@@ -103,10 +104,19 @@ export const document = (
 				registrations.find((other) => templatePattern(other.path) === templatePattern(route.path))?.path ?? route.path;
 			return [
 				`${route.method.toLowerCase()} ${canonical.replace(/:([A-Za-z_]\w*)/g, "{$1}").replace(/\*$/, "{*}")}`,
-				route.scope,
+				route.access === "application-managed" ? "public" : route.scope,
 			] as const;
 		}),
 	);
 	applySecurity(result.paths, (path, method) => scopes.get(`${method} ${path}`));
+	for (const route of registrations) {
+		const canonical =
+			registrations.find((other) => templatePattern(other.path) === templatePattern(route.path))?.path ?? route.path;
+		const item = result.paths[canonical.replace(/:([A-Za-z_]\w*)/g, "{$1}").replace(/\*$/, "{*}")];
+		if (item) {
+			const operation = Object.entries(item).find(([method]) => method === route.method.toLowerCase())?.[1];
+			if (operation) Object.assign(operation, { "x-chirp-access": route.access ?? "board" });
+		}
+	}
 	return result;
 };

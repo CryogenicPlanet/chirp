@@ -127,7 +127,8 @@ it.for([false, true, "configured"] as const)(
 		await mkdir(join(directory, "pages/private"), { recursive: true });
 		await writeFile(join(directory, "pages/private/readme.md"), "# Private page");
 
-		expect((await fetch(`${first.url}/p/saved/readme.md`)).status).toBe(200);
+		expect((await fetch(`${first.url}/p/saved/readme.md`)).status).toBe(401);
+		expect((await first.request(`${first.url}/p/saved/readme.md`)).status).toBe(200);
 
 		await stop(first.child);
 		if (clearGrants === true) {
@@ -148,7 +149,8 @@ it.for([false, true, "configured"] as const)(
 		}
 		const restarted = await start(clearGrants === "configured" ? "normal" : "low");
 		expect(restarted.generation).toBe(first.generation);
-		const publicRead = await fetch(`${restarted.url}/p/saved/readme.md`);
+		expect((await fetch(`${restarted.url}/p/saved/readme.md`)).status).toBe(401);
+		const publicRead = await restarted.request(`${restarted.url}/p/saved/readme.md`);
 		expect(publicRead.status).toBe(200);
 		expect(await publicRead.text()).toContain("Saved public page");
 		expect((await fetch(`${restarted.url}/p/private/readme.md`)).status).toBe(401);

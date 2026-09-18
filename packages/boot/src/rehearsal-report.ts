@@ -5,6 +5,18 @@ import type { HttpClientResponse } from "effect/unstable/http";
 const bounded = (length: number) => Schema.String.pipe(Schema.check(Schema.isMaxLength(length)));
 const count = Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0)));
 export const RehearsalReport = Schema.Struct({
+	ingress_ready: Schema.optionalKey(Schema.Boolean),
+	ingress: Schema.optionalKey(
+		Schema.Array(
+			Schema.Struct({
+				extension: bounded(256),
+				method: bounded(16),
+				path: bounded(1024),
+				access: Schema.Literal("application-managed"),
+			}),
+		).pipe(Schema.check(Schema.isMaxLength(16))),
+	),
+	ingress_overflow: Schema.optionalKey(count),
 	suppressed: Schema.Array(
 		Schema.Struct({
 			extension: bounded(128),
@@ -52,7 +64,7 @@ export const readRehearsalReport = (response: HttpClientResponse.HttpClientRespo
 			Stream.tap((chunk) =>
 				Effect.sync(() => {
 					bytes += chunk.byteLength;
-					if (bytes > 65536) throw new Error("Rehearsal report exceeds 64 KiB");
+					if (bytes > 131072) throw new Error("Rehearsal report exceeds 128 KiB");
 				}),
 			),
 			Stream.runCollect,

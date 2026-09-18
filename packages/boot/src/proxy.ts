@@ -1,5 +1,10 @@
 import {
 	agentHeader,
+	applicationBearerPattern,
+	applicationCookiePrefix,
+	applicationIngressPath,
+	ingressTargetHeader,
+	ingressChallengeHeader,
 	authKindHeader,
 	baseVersionHeader,
 	headerLabel,
@@ -9,13 +14,12 @@ import {
 	initVersionHeader,
 	instanceHeader,
 	labelHeader,
-	publicPageHeader,
 	requestIdHeader,
 	scopesHeader,
 	tokenExpiresHeader,
 	traceparentHeader,
 } from "@comms/protocol/headers";
-import { redactHex } from "./auth-primitives.ts";
+import { applicationCookies, isReservedIngressPath } from "./application-ingress.ts";
 import { recoveryRoute } from "./recovery-http.ts";
 import { settingsRoute } from "./settings-http.ts";
 import { recoveryManifest } from "./route-discovery.ts";
@@ -41,13 +45,12 @@ import { tokenMintRoute } from "./token-mint-http.ts";
 import { tokenRoute } from "./token-http.ts";
 import { enrollmentRoute } from "./enrollment-http.ts";
 import { eventRoute } from "./event-http.ts";
-import { PublicPages } from "./public-pages.ts";
 import { BootHttp } from "./boot-http.ts";
 import { Events } from "./events.ts";
 
 const help = `chirp local development bootloader
 
-GET /_boot/settings  Human-only revisioned storage percentages and public paths.
+GET /_boot/settings  Human-only revisioned storage percentages.
 POST /_boot/settings  Change {revision,patch} with a fresh settings.change assertion; retain proof for exact retries.
 GET /health        Bootloader liveness (independent of the child).
 GET /_boot/recovery  Human source-recovery page, independent of the child.
@@ -106,11 +109,10 @@ const hopHeaders: readonly string[] = Object.freeze([
 ]);
 
 export const proxy = Effect.gen(function* () {
-	const { child, authConfig, editing, requests, backups, restores, captures, phase, restart, storeIdentity } =
+	const { child, authConfig, editing, requests, backups, restores, captures, phase, restart, storeIdentity, ingress } =
 		yield* BootHttp;
 	const auth = yield* Auth;
 	const events = yield* Events;
-	const publicPages = yield* PublicPages;
 	const request = yield* HttpServerRequest.HttpServerRequest;
 	const started = yield* Clock.monotonicTimeNanos;
 	const url = new URL(request.url, "http://localhost");
@@ -135,7 +137,17 @@ export const proxy = Effect.gen(function* () {
 				generation: 0,
 				requestId,
 			});
+	const applicationBearer = applicationBearerPattern.test(request.headers.authorization ?? "");
+	const boardSession = (request.headers.cookie ?? "")
+		.split(";")
+		.some((part) => part.trim().startsWith(`${sessionCookie}=`));
 	const routed = Effect.gen(function* () {
+		// App bearer credentials cannot invoke boot surfaces or silently replace a supplied board session.
+		if (
+			applicationBearer &&
+			(ingress?.applicationManagedIngress !== true || boardSession || isReservedIngressPath(path))
+		)
+			return authErrorResponse("token_invalid");
 		// Recovery help carries a public yes/no on whether stored passkeys match an allowed origin; detail needs auth.
 		if (path === "/_boot" && request.method === "GET") {
 			const ok = yield* auth.passkeyOriginState.pipe(
@@ -197,28 +209,10 @@ export const proxy = Effect.gen(function* () {
 		if (mintResponse) return mintResponse;
 		const tokenResponse = yield* tokenRoute(auth);
 		if (tokenResponse) return tokenResponse;
-		const explicitCredential =
-			request.headers.authorization !== undefined ||
-			(request.headers.cookie ?? "").split(";").some((part) => part.trim().startsWith(`${sessionCookie}=`));
-		const anonymousPage =
-			(request.method === "GET" || request.method === "HEAD") && path.startsWith("/p/") && !explicitCredential;
-		// Restore clears and rebuilds grants. Wait before deciding whether an anonymous page is public.
-		const pageAdmission = anonymousPage ? yield* child.traffic.requests.awaitDestination.pipe(Effect.result) : null;
-		if (pageAdmission?._tag === "Failure") return authErrorResponse("boot_unavailable", 503);
-		let publicPage: string | null = null;
-		if (anonymousPage) {
-			if ((yield* Ref.get(phase))._tag !== "Ready") return authErrorResponse("boot_unavailable", 503);
-			const result = yield* publicPages.check(path).pipe(Effect.result);
-			if (result._tag === "Failure") return authErrorResponse("boot_unavailable", 503);
-			publicPage = result.success;
-		}
-		const configuredPublic =
-			!explicitCredential &&
-			(request.method === "GET" || request.method === "HEAD") &&
-			(yield* auth.publicPaths).includes(path);
+		const explicitCredential = (request.headers.authorization !== undefined && !applicationBearer) || boardSession;
 		const isPublic =
 			(request.method === "GET" || request.method === "HEAD") &&
-			([
+			[
 				"/onboarding",
 				"/assets/board.js",
 				"/assets/style.css",
@@ -229,12 +223,15 @@ export const proxy = Effect.gen(function* () {
 				"/page-assets/mermaid.js",
 				"/page-assets/mermaid-init.js",
 				"/page-assets/tailwind.js",
-			].includes(path) ||
-				publicPage !== null ||
-				configuredPublic);
+			].includes(path);
+		const managedIngress =
+			!explicitCredential &&
+			(!isPublic || applicationBearer) &&
+			ingress?.applicationManagedIngress === true &&
+			!isReservedIngressPath(path);
 		return yield* authFailure(
 			Effect.gen(function* () {
-				let identity = !isPublic || explicitCredential ? yield* authenticate(auth, request) : null;
+				let identity = (!isPublic && !managedIngress) || explicitCredential ? yield* authenticate(auth, request) : null;
 				if (observed) yield* observed.attribute(identity, 0);
 				if (identity?.kind === "human" && !["GET", "HEAD", "OPTIONS"].includes(request.method))
 					yield* auth.relyingParty(request.headers.origin);
@@ -281,6 +278,7 @@ export const proxy = Effect.gen(function* () {
 					return expires(
 						HttpServerResponse.jsonUnsafe({
 							mode: "local-development",
+							ingress: ingress ?? { applicationManagedIngress: false, error: null },
 							authenticated: true,
 							child: safeState,
 							source_recovery_error: yield* Ref.get(child.sourceError).pipe(
@@ -343,26 +341,20 @@ export const proxy = Effect.gen(function* () {
 						},
 						{ status: 503 },
 					);
-				const requestAdmission = pageAdmission ?? (yield* child.traffic.requests.awaitDestination.pipe(Effect.result));
+				const requestAdmission = yield* child.traffic.requests.awaitDestination.pipe(Effect.result);
 				if (requestAdmission._tag === "Failure") return expires(unavailable());
 				if (requestAdmission.success.waited && identity) identity = yield* authenticate(auth, request);
-				if (publicPage !== null && !identity) {
-					// Admission can wait across a database replacement. Recheck its current grants under the request lease.
-					if ((yield* Ref.get(phase))._tag !== "Ready") return authErrorResponse("boot_unavailable", 503);
-					const checked = yield* publicPages.check(path).pipe(Effect.result);
-					if (checked._tag === "Failure") return authErrorResponse("boot_unavailable", 503);
-					publicPage = checked.success;
-					if (publicPage === null) return authErrorResponse("credential_required", 401);
-				}
-				if (configuredPublic && !identity && !(yield* auth.publicPaths).includes(path))
-					return authErrorResponse("credential_required", 401);
 				destination = requestAdmission.success.destination;
 				if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
 					const admitted = yield* child.traffic.awaitDestination;
 					destination = admitted.destination;
-					if (admitted.waited) identity = yield* authenticate(auth, request);
+					if (admitted.waited && identity) identity = yield* authenticate(auth, request);
 				}
 				if (!destination) return expires(unavailable());
+				if (managedIngress && !destination.applicationManagedIngress)
+					return applicationBearer
+						? authErrorResponse("credential_required", 401)
+						: yield* new AuthError({ code: "session_invalid" });
 				const connectionHeaders = new Set(
 					(request.headers.connection ?? "")
 						.toLowerCase()
@@ -391,14 +383,22 @@ export const proxy = Effect.gen(function* () {
 				);
 				if (observed) yield* observed.attribute(identity, destination.generation);
 				let outgoing = HttpClientRequest.make(request.method)(
-					`http://127.0.0.1:${destination?.port}${path}${url.search}`,
+					`http://127.0.0.1:${destination.port}${managedIngress ? applicationIngressPath : path + url.search}`,
 					{
 						headers: {
 							...headers,
 							...(request.headers[initHeader] && /^[a-f0-9]{64}$/.test(request.headers[initHeader])
 								? { [initHeader]: request.headers[initHeader] }
 								: {}),
-							...(publicPage !== null && !identity ? { [publicPageHeader]: publicPage } : {}),
+							...(managedIngress ? { [ingressTargetHeader]: path + url.search } : {}),
+							...(managedIngress && applicationBearer && !connectionHeaders.has("authorization")
+								? { authorization: request.headers.authorization }
+								: {}),
+							...(ingress?.applicationManagedIngress &&
+							!connectionHeaders.has("cookie") &&
+							applicationCookies(request.headers.cookie)
+								? { cookie: applicationCookies(request.headers.cookie) }
+								: {}),
 							"x-boot-secret": destination.secret,
 							[requestIdHeader]: requestId,
 							...(observed ? { [traceparentHeader]: observed.trace } : {}),
@@ -429,6 +429,13 @@ export const proxy = Effect.gen(function* () {
 				return yield* client.execute(outgoing).pipe(
 					Effect.flatMap((response) =>
 						Effect.gen(function* () {
+							if (
+								managedIngress &&
+								!applicationBearer &&
+								response.status === 401 &&
+								response.headers[ingressChallengeHeader] === "credential_required"
+							)
+								return yield* authFailure(Effect.fail(new AuthError({ code: "session_invalid" })));
 							const connection = new Set(
 								(response.headers.connection ?? "")
 									.toLowerCase()
@@ -473,7 +480,16 @@ export const proxy = Effect.gen(function* () {
 							}
 							const forwarded = HttpServerResponse.empty({
 								status: response.status,
-								cookies: connection.has("set-cookie") ? Cookies.empty : Cookies.remove(response.cookies, sessionCookie),
+								cookies: connection.has("set-cookie")
+									? Cookies.empty
+									: Cookies.fromIterable(
+											Object.values(response.cookies.cookies).filter(
+												(cookie) =>
+													cookie.name !== sessionCookie &&
+													(ingress?.applicationManagedIngress !== true ||
+														cookie.name.startsWith(applicationCookiePrefix)),
+											),
+										),
 							}).pipe(
 								HttpServerResponse.setBody(HttpBody.stream(body, responseHeaders["content-type"] ?? "")),
 								HttpServerResponse.setHeaders(responseHeaders),

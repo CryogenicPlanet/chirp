@@ -45,7 +45,7 @@ it("moves a published subtree and its pages while keeping identities, event payl
 	const detail = await (await get(app.url, "/api/topics/area/renamed/child")).json();
 	expect(detail.meta).toEqual({ public: true, status: "doing" });
 	expect(detail.unread).toBe(0);
-	expect(await (await fetch(app.url + "/p/area/renamed/child/index.md?raw=1")).text()).toBe("# Moved page");
+	expect(await (await get(app.url, "/p/area/renamed/child/index.md?raw=1")).text()).toBe("# Moved page");
 	expect((await get(app.url, "/p/project/child/index.md?raw=1")).status).toBe(404);
 	expect((await stat(join(fixture.root, "pages/area/renamed/child/empty"))).isDirectory()).toBe(true);
 	const events = await (await get(app.url, "/api/events?since=0&topic=area/renamed&types=message.created")).json();
@@ -205,7 +205,7 @@ it("isolates pending page moves and hides ownership markers after completion", a
 		expect((await get(path)).status, path).toBe(400);
 }, 30000);
 
-it("rechecks stale anonymous grants after a public move and private source recreation", async (test) => {
+it("ignores legacy anonymous grants after a topic move and private source recreation", async (test) => {
 	const fixture = await conversation(test);
 	await mkdir(join(fixture.root, "pages/original"), { recursive: true });
 	await writeFile(join(fixture.root, "pages/original/file.txt"), "original public bytes");
@@ -219,29 +219,33 @@ it("rechecks stale anonymous grants after a public move and private source recre
 		body: JSON.stringify({ meta: { public: true } }),
 	});
 	expect(grant.status).toBe(200);
-	expect(await (await fetch(app.url + "/p/original/file.txt")).text()).toBe("original public bytes");
+	expect((await fetch(app.url + "/p/original/file.txt")).status).toBe(401);
+	expect(await (await fetch(app.url + "/p/original/file.txt", { headers: { cookie } })).text()).toBe(
+		"original public bytes",
+	);
 	expect((await app.post("/api/topics/original/move", { to: "destination" }, cookie, "public-move")).status).toBe(200);
 	await mkdir(join(fixture.root, "pages/original"));
 	await writeFile(join(fixture.root, "pages/original/file.txt"), "replacement private bytes");
 	expect((await app.post("/api/messages", { topic: "original", body: "private replacement" }, cookie)).status).toBe(
 		200,
 	);
-	// Simulate the stale boot grant of a request admitted immediately before the move.
-	// Boot still supplies the genuine guarded header; app must recheck current SQL ownership.
+	// Legacy grants left by an older generation never authorize /p reads.
 	await fixture.sql("INSERT INTO public_paths(path) VALUES('original')", "boot.db");
 	for (const method of ["GET", "HEAD"]) {
 		const response = await fetch(app.url + "/p/original/file.txt", { method });
-		expect(response.status, method).toBe(404);
+		expect(response.status, method).toBe(401);
 		expect(await response.text()).not.toContain("replacement private bytes");
 	}
-	// An unpublished regrant must not supersede the pinned published private image.
+	// Even an unpublished legacy regrant cannot expose the replacement.
 	await fixture.sql(
 		`UPDATE topics SET meta='{"public":true}', updated_seq=999999, previous=json_object('meta',json('{}'),'archived_at',NULL,'deleted_at',NULL) WHERE path='original'`,
 	);
 	const unpublished = await fetch(app.url + "/p/original/file.txt");
-	expect(unpublished.status).toBe(404);
+	expect(unpublished.status).toBe(401);
 	expect(await unpublished.text()).not.toContain("replacement private bytes");
-	expect(await (await fetch(app.url + "/p/destination/file.txt")).text()).toBe("original public bytes");
+	expect(await (await fetch(app.url + "/p/destination/file.txt", { headers: { cookie } })).text()).toBe(
+		"original public bytes",
+	);
 	expect(await (await fetch(app.url + "/p/original/file.txt", { headers: { cookie } })).text()).toBe(
 		"replacement private bytes",
 	);

@@ -5,7 +5,7 @@ import { Schema } from "effect";
 import { expect, it } from "vitest";
 import { storageFixture } from "./fixtures/storage-maintenance.ts";
 
-it("queues reads across real database restore and rechecks logged-out sessions and restored public grants before dispatch", async (test) => {
+it("queues reads across real database restore and rechecks logged-out sessions while ignoring legacy public grants", async (test) => {
 	const fixture = await storageFixture(test);
 	const coordinator = join(fixture.root, "packages/boot/src/database-restore.ts");
 	const source = await readFile(coordinator, "utf8");
@@ -65,7 +65,7 @@ it("queues reads across real database restore and rechecks logged-out sessions a
 			})
 		).status,
 	).toBe(200);
-	expect((await fetch(`${app.url}/p/public-new/index.md`)).status).toBe(200);
+	expect((await fetch(`${app.url}/p/public-new/index.md`)).status).toBe(401);
 	const proof = await app.signedAssertion("db.restore", { backup: saved.id }, cookie);
 	const controller = new AbortController();
 	test.onTestFinished(() => controller.abort());
@@ -100,8 +100,8 @@ it("queues reads across real database restore and rechecks logged-out sessions a
 	const allowed = read(cookie);
 	const loggedOut = read(revoked);
 	const privatePage = fetch(`${app.url}/p/public-new/index.md`, { signal: controller.signal });
-	const publicPage = fetch(`${app.url}/p/public-kept/index.md?raw=1`, { signal: controller.signal });
-	await expect.poll(state).toEqual({ frozen: true, admitted: 0, queued: 4 });
+	const pageRead = fetch(`${app.url}/p/public-kept/index.md?raw=1`, { signal: controller.signal, headers: { cookie } });
+	await expect.poll(state).toEqual({ frozen: true, admitted: 0, queued: 3 });
 	expect((await app.post("/_boot/auth/logout", {}, revoked)).status).toBe(204);
 	expect((await fetch(`${app.url}/auth/login`)).status).toBe(200);
 	await writeFile(release, "continue");
@@ -113,7 +113,7 @@ it("queues reads across real database restore and rechecks logged-out sessions a
 	expect(await response.json()).toMatchObject({ items: [{ body: "retained" }] });
 	expect((await loggedOut).status).toBe(401);
 	expect((await privatePage).status).toBe(401);
-	const retainedPage = await publicPage;
+	const retainedPage = await pageRead;
 	expect(retainedPage.status).toBe(200);
 	expect(await retainedPage.text()).toBe("# still public");
 	await expect.poll(state).toEqual({ frozen: false, admitted: 0, queued: 0 });

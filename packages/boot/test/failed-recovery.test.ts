@@ -222,13 +222,14 @@ it("closes a restore-activated child before retrying a later startup failure wit
 	expect(await env.sql("SELECT COUNT(*) AS count FROM generations")).toEqual([{ count: 1 }]);
 }, 30000);
 
-it("returns retriable anonymous page refusal during recovery without relaxing explicit credentials or grants", async (test) => {
+it("returns retriable authenticated page refusal during recovery while ignoring legacy grants", async (test) => {
 	const env = await fixture(test);
 	const first = await env.start();
 	await mkdir(join(env.root, "data/pages/public"));
 	await writeFile(join(env.root, "data/pages/public/index.md"), "public content");
 	await env.sql("INSERT INTO public_paths(path) VALUES('public')");
-	expect((await fetch(`${first.url}/p/public/index.md`)).status).toBe(200);
+	expect((await fetch(`${first.url}/p/public/index.md`)).status).toBe(401);
+	expect((await first.call(`${first.url}/p/public/index.md`)).status).toBe(200);
 	expect((await fetch(`${first.url}/p/index.md`)).status).toBe(401);
 	await first.stop();
 	const receipt = join(env.root, "data/attempts/late-owner.closed");
@@ -243,14 +244,15 @@ it("returns retriable anonymous page refusal during recovery without relaxing ex
 	expect(await restarted.status()).toMatchObject({ child: { state: "starting" } });
 	const unavailable = async () => {
 		for (const path of ["/p/public/index.md", "/p/index.md", "/p/missing.md"]) {
-			const response = await fetch(`${restarted.url}${path}`);
+			expect((await fetch(`${restarted.url}${path}`)).status).toBe(401);
+			const response = await restarted.call(`${restarted.url}${path}`);
 			expect(response.status).toBe(503);
 			const body: unknown = await response.json();
-			expect(body).toEqual({
-				error: { code: "boot_unavailable", message: expect.any(String), hint: expect.any(String), retriable: true },
+			expect(body).toMatchObject({
+				error: { code: "app_unavailable", message: expect.any(String), hint: expect.any(String), retriable: true },
 			});
 		}
-		expect((await fetch(`${restarted.url}/p/public/index.md`, { method: "HEAD" })).status).toBe(503);
+		expect((await restarted.call(`${restarted.url}/p/public/index.md`, { method: "HEAD" })).status).toBe(503);
 		for (const headers of [{ authorization: "Bearer invalid" }, { cookie: "__Host-comms_session=invalid" }])
 			expect((await fetch(`${restarted.url}/p/public/index.md`, { headers })).status).toBe(401);
 		expect((await fetch(`${restarted.url}/p/public/index.md`, { method: "POST" })).status).toBe(401);
@@ -270,7 +272,7 @@ it("returns retriable anonymous page refusal during recovery without relaxing ex
 		).status,
 	).toBe(200);
 	await expect
-		.poll(async () => (await fetch(`${restarted.url}/p/public/index.md`)).status, { timeout: 10000 })
+		.poll(async () => (await restarted.call(`${restarted.url}/p/public/index.md`)).status, { timeout: 10000 })
 		.toBe(200);
 	expect((await fetch(`${restarted.url}/p/index.md`)).status).toBe(401);
 	expect(

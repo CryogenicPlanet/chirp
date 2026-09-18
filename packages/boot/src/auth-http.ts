@@ -37,6 +37,10 @@ export const authentication = Schema.Struct({
 
 const policy = {
 	...childErrorPolicy,
+	public_paths_retired: {
+		status: 400,
+		hint: "Exact public path settings are retired. Enable application-managed ingress in boot configuration and install an extension with explicit application-managed routes.",
+	},
 	settings_conflict: {
 		status: 409,
 		hint: "Read GET /_boot/settings, then obtain a fresh settings.change assertion for the current revision and intended patch.",

@@ -1,4 +1,3 @@
-import { publicPageHeader } from "@comms/protocol/headers";
 import { Messages } from "./ext/core/messages.ts";
 import { Cause, Effect, FileSystem, Layer, Option, Scope, Stream } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse, Mime } from "effect/unstable/http";
@@ -45,29 +44,14 @@ const page = Effect.gen(function* () {
 		try: () => decodeURIComponent(url.pathname.slice("/p".length).replace(/^\//, "").replace(/\/$/, "")),
 		catch: () => new PageRejected({ code: "page_path_invalid" }),
 	});
-	const publicPage = yield* Effect.try(() => decodeURIComponent(request.headers[publicPageHeader] ?? "")).pipe(
-		Effect.orElseSucceed(() => null),
-	);
-	const anonymous =
-		request.headers[publicPageHeader] !== undefined &&
-		publicPage === name &&
-		(request.method === "GET" || request.method === "HEAD");
-	if (!anonymous) yield* identity("read");
-	return yield* (yield* Messages).read((ceiling) =>
+	yield* identity("read");
+	return yield* (yield* Messages).read(() =>
 		Effect.gen(function* () {
 			let selected = name;
 			let target = yield* pages.resolve(name);
-			if (
-				anonymous &&
-				!(yield* pages.publicTopic(
-					target.type === "Directory" ? name : name.split("/").slice(0, -1).join("/"),
-					ceiling,
-				))
-			)
-				return yield* new PageRejected({ code: "page_not_found" });
 			if (target.type === "Directory") {
 				if (!url.pathname.endsWith("/")) return HttpServerResponse.redirect(`${url.pathname}/${url.search}`);
-				const entries = yield* pages.entries(name, anonymous);
+				const entries = yield* pages.entries(name);
 				const index = ["index.md", "index.html"].find((entry) =>
 					entries.some((file) => file.name === entry && !file.directory),
 				);
@@ -88,7 +72,7 @@ const page = Effect.gen(function* () {
 					headers: pageHeaders,
 				});
 			const fs = yield* FileSystem.FileSystem;
-			// Open while the path and its public grant are protected. The request scope owns this descriptor, not the SQL snapshot.
+			// Open while the path is resolved. The request scope owns this descriptor, not the SQL snapshot.
 			const file = yield* fs.open(target.absolute).pipe(Effect.provideService(Scope.Scope, requestScope));
 			const info = yield* file.stat;
 			const sample = yield* file.readAlloc(8192);

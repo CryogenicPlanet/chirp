@@ -25,6 +25,13 @@ Start at `/init` for agent onboarding and `/api` for the currently loaded routes
 
 Add an extension under `app/ext/` for a new route, scheduled task or workflow. The [extension guide](../pages/docs/extensions.md) explains the API; [examples](../examples/extensions/) provide starting points. Use the [editing guide](../pages/docs/editing.md) to acquire the lock, submit conditional source changes, rehearse and reload.
 
+Application-managed HTTP admission is an optional extension capability. The operator must enable
+`applicationManagedIngress` in `DATA_DIR/boot.config.json` and restart boot; each extension route
+must separately declare `access: "application-managed"`. Base board authentication remains
+boot-owned. The [extension guide](../pages/docs/extensions.md#application-managed-routes) explains
+nullable visitor identity, service-attributed writes, app cookie transport and the trust boundary.
+Existing `public_paths` and topic `meta.public` grants no longer publish content.
+
 Extensions use the shared read/mutation helpers for consistent reads, durable writes and event publication. Raw SQL is a repair surface that bypasses product validation; prefer domain helpers for ordinary work. SQLite is the default; PostgreSQL/MySQL runtime integration is available for validation, with complete board/image acceptance still in progress.
 
 Core migration 11 stores `messages.tags`, `messages.meta` and `topics.meta` as PostgreSQL `jsonb` or MySQL `JSON`; SQLite keeps JSON text. Existing values must be string arrays for tags and objects for metadata. Migration refuses invalid values before conversion. Native JSON preserves values but may normalize formatting; event payloads, receipts and previous images keep their encoded text.

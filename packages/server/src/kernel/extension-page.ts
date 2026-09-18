@@ -1,11 +1,11 @@
 import { Effect } from "effect";
 import { KernelError } from "./boot-channel.ts";
-import type { Api } from "./extension-api.ts";
+import type { Api, RouteOptions } from "./extension-api.ts";
 import { work } from "./extension-work.ts";
 
 /** Human page responses share route validation and retain the boot-verified auth kind. */
 export const pageHandler =
-	(handler: Parameters<Api["page"]>[1]): Parameters<Api["route"]>[2]["handler"] =>
+	(handler: Parameters<Api["page"]>[1]): Extract<RouteOptions, { readonly scope: string }>["handler"] =>
 	(_request, context) =>
 		Effect.gen(function* () {
 			if (context.kind !== "human") return yield* new KernelError({ code: "scope_required" });

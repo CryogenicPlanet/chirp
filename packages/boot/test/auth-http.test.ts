@@ -174,6 +174,7 @@ it("creates a passkey and a protected session, forwards verified identity, and l
 	expect(again.requestId).not.toBe(echoed.requestId);
 	const cookies = (await fetch(`${app.url}/cookies`, { headers })).headers.getSetCookie();
 	expect(cookies.join(";")).not.toContain("__Host-comms_session");
+	expect(cookies.join(";")).toContain("chirp_app_preference=dark");
 	expect(cookies.join(";")).toContain("app-preference=dark");
 	expect(
 		(

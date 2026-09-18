@@ -119,18 +119,9 @@ const program = Effect.gen(function* () {
 		}
 		yield* Effect.gen(function* () {
 			const pages = yield* Pages;
-			assert.equal(yield* pages.publicTopic("guide/public-001", ceiling), true);
-			for (const path of ["guide/private", "guide/string", "guide/number", "guide/false", "guide/null"])
-				assert.equal(yield* pages.publicTopic(path, ceiling), false, "only JSON boolean true grants public access");
 			assert.deepEqual(
-				(yield* pages.entries("guide", true)).map((entry) => entry.name),
-				["public-001"],
-			);
-			// A committed, unpublished metadata change uses the prior published image for listings.
-			yield* sql`UPDATE topics SET meta='{"public":true}',previous='{"meta":{},"archived_at":null,"deleted_at":null}',updated_seq=999999 WHERE path='guide/private'`;
-			assert.deepEqual(
-				(yield* pages.entries("guide", true)).map((entry) => entry.name),
-				["public-001"],
+				(yield* pages.entries("guide")).map((entry) => entry.name),
+				["private", "public-001", "string"],
 			);
 			assert.equal((yield* pages.resolve("gone/child").pipe(Effect.result))._tag, "Failure");
 		}).pipe(Effect.provide(pagesLayer(`${root}/pages`)), Effect.provideService(BootChannel, channel("second")));

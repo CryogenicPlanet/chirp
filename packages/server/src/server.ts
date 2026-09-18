@@ -1,5 +1,7 @@
 import {
 	headerPrefix,
+	ingressProtocolHeader,
+	ingressProtocolVersion,
 	healthReadyHeader,
 	kernelProtocolHeader,
 	readinessHeader,
@@ -180,6 +182,7 @@ const server = Effect.gen(function* () {
 										headers: {
 											[writerEpochHeader]: boot.epoch,
 											[kernelProtocolHeader]: "2",
+											...(extensions.ingressReady ? { [ingressProtocolHeader]: ingressProtocolVersion } : {}),
 											[rehearsalReportHeader]: "1",
 										},
 									},

@@ -30,7 +30,11 @@ it("rejects malformed, oversized and excessive advertised reports", async () => 
 	await expect(
 		decode({ suppressed: [{ ...entry, destination: "x".repeat(257) }], suppressed_overflow: 0 }),
 	).rejects.toThrow();
-	await expect(decode({ suppressed: [], suppressed_overflow: 0, padding: "x".repeat(65536) })).rejects.toThrow();
+	const report = { suppressed: [], suppressed_overflow: 0 };
+	const overhead = Buffer.byteLength(JSON.stringify({ ...report, padding: "" }));
+	const padding = "x".repeat(131072 - overhead);
+	expect(await decode({ ...report, padding })).toEqual(report);
+	await expect(decode({ ...report, padding: padding + "x" })).rejects.toThrow("exceeds 128 KiB");
 });
 
 it("preserves bounded migration warnings without allowing SQL or arbitrary diagnostic fields", async () => {

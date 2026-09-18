@@ -49,7 +49,7 @@ export const makeSettings = <E, R>(
 						),
 					);
 				for (const row of rows) {
-					const receipt = Schema.decodeUnknownOption(
+					const receipt = Schema.decodeOption(
 						Schema.fromJsonString(
 							Schema.Struct({ expires_at: Schema.Finite, session: Schema.optionalKey(Schema.String) }),
 						),
@@ -70,7 +70,7 @@ export const makeSettings = <E, R>(
 					sql.withTransaction(
 						Effect.gen(function* () {
 							yield* lockBootWrite(sql);
-							yield* Schema.decodeUnknownEffect(SettingsChange)(params, { onExcessProperty: "error" }).pipe(
+							yield* Schema.decodeEffect(SettingsChange)(params, { onExcessProperty: "error" }).pipe(
 								Effect.mapError(() => new AuthError({ code: "invalid_request" })),
 							);
 							const liveSession = Effect.gen(function* () {
@@ -123,6 +123,7 @@ export const makeSettings = <E, R>(
 							}
 							// Retired settings may replay an accepted receipt, but can never create a new mutation.
 							if (params.patch.event_retention !== undefined) return yield* refuse("invalid_request");
+							if (params.patch.public_paths !== undefined) return yield* refuse("public_paths_retired");
 							yield* verify(params, proof, session);
 							yield* liveSession;
 							const before = yield* current;

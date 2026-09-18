@@ -1,8 +1,9 @@
-import { scopesHeader } from "@comms/protocol/headers";
+import { scopesHeader, authKindHeader, ingressChallengeHeader } from "@comms/protocol/headers";
+import { selectRequest, exposeRequest } from "./extension-ingress.ts";
 import { assertNoPendingMigration } from "./migration-intent.ts";
 import { encodeError, policy } from "@comms/protocol/errors";
 import { makeExtensionEffects, type ExtensionEffects } from "./extension-effects.ts";
-import { reserved, requestPath, pattern, templatePattern, validateRoute } from "./extension-routes.ts";
+import { pattern, templatePattern, validateRoute } from "./extension-routes.ts";
 import { Cause, Context, Crypto, DateTime, Effect, Exit, Layer, Path, Ref, Schema, Scope, Semaphore } from "effect";
 import { FetchHttpClient, FindMyWay, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import type { HttpMethod } from "effect/unstable/http/HttpMethod";
@@ -22,15 +23,7 @@ import { pageHandler } from "./extension-page.ts";
 import { extensionData } from "./extension-data.ts";
 import { runEvents } from "./extension-events.ts";
 import { discoverExtensions } from "./extension-discovery.ts";
-import type {
-	Api,
-	CronContext,
-	EventHandler,
-	Hook,
-	RequestContext,
-	RequestServices,
-	ExtensionServices,
-} from "./extension-api.ts";
+import type { Api, CronContext, EventHandler, Hook, RouteOptions, ExtensionServices } from "./extension-api.ts";
 
 interface CronJob {
 	readonly expression: string;
@@ -43,18 +36,13 @@ export interface Diagnostic {
 	readonly level: "info" | "error";
 	readonly payload: Schema.JsonObject;
 }
-interface Registration {
+type Registration = RouteOptions & {
 	readonly extension: string;
 	readonly method: HttpMethod;
 	readonly path: `/${string}`;
-	readonly description: string;
-	readonly scope: "read" | "write" | "fs";
 	readonly operation?: OpenApi.OpenAPISpecOperation;
-	readonly handler: (
-		request: HttpServerRequest.HttpServerRequest,
-		context: RequestContext,
-	) => Work<Response, RequestServices>;
-}
+};
+
 interface Status {
 	readonly name: string;
 	readonly status: "loaded" | "disabled";
@@ -197,7 +185,7 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 				},
 				route: (method, route, options) => {
 					if (!registering) throw new Error("Register routes only in the extension factory.");
-					validateRoute(method, route, options.description, options.scope);
+					validateRoute(method, route, options.description, options.scope, options.access);
 					pending.push({ extension: name, method, path: route, ...options });
 				},
 				on: (...args) => {
@@ -296,6 +284,9 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 				scope: activeScope,
 			});
 		}
+		// A failed factory may have owned a narrower private route. Its absence must not expose a broader route.
+		const ingressReady = (yield* Ref.get(statuses)).every((item) => item.status === "loaded");
+
 		const stop = (extension: (typeof extensions)[number]) =>
 			Effect.gen(function* () {
 				const scope = yield* Ref.getAndSet(extension.scope, null);
@@ -438,6 +429,12 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 			const reports = yield* Effect.forEach(extensions, (extension) => extension.effects.report);
 			const records = reports.flatMap((report) => report.records);
 			return {
+				ingress_ready: ingressReady,
+				ingress: selected
+					.filter((route) => route.access === "application-managed")
+					.slice(0, 16)
+					.map(({ extension, method, path }) => ({ extension, method, path, access: "application-managed" })),
+				ingress_overflow: Math.max(0, selected.filter((route) => route.access === "application-managed").length - 16),
 				suppressed: records.slice(0, 64),
 				suppressed_overflow: reports.reduce(
 					(total, report) => total + report.overflow,
@@ -458,6 +455,7 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 		});
 		for (const route of selected) matcher.on(route.method, route.path, route);
 		return {
+			ingressReady,
 			registrations: selected,
 			openapi: document(selected, documents),
 			diagnostics: Ref.get(diagnostics),
@@ -471,7 +469,13 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 						cron: extensions.find((extension) => extension.name === item.name)?.jobs.map((job) => job.expression) ?? [],
 						registrations: registrations
 							.filter((route) => route.extension === item.name)
-							.map(({ method, path, description, scope }) => ({ method, path, description, scope })),
+							.map(({ method, path, description, scope, access }) => ({
+								method,
+								path,
+								description,
+								...(scope ? { scope } : {}),
+								access: access ?? "board",
+							})),
 					})),
 				),
 			),
@@ -480,15 +484,38 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 			rehearsalReport,
 			dispatch: <A, E, R>(fallback: Effect.Effect<A, E, R>) =>
 				Effect.gen(function* () {
-					const request = yield* HttpServerRequest.HttpServerRequest;
-					const pathname = requestPath(request.url);
-					if (pathname === null || reserved(pathname)) return yield* fallback;
-					const matched =
-						matcher.find(request.method, request.url) ??
-						(request.method === "HEAD" ? matcher.find("GET", request.url) : undefined);
-					if (!matched) return yield* fallback;
+					const incoming = yield* HttpServerRequest.HttpServerRequest;
+					const selection = yield* selectRequest(matcher, incoming).pipe(Effect.result);
+					if (selection._tag === "Failure")
+						return HttpServerResponse.jsonUnsafe(
+							{
+								error: {
+									code: "credential_required",
+									message: "Board authentication is required.",
+									hint: "Sign in at /auth/login or provide a board access token.",
+									retriable: false,
+								},
+							},
+							{
+								status: 401,
+								headers: { [ingressChallengeHeader]: "credential_required", "cache-control": "no-store" },
+							},
+						);
+					const selectedRequest = selection.success;
+					if (!selectedRequest) return yield* fallback;
+					const { matched, target, envelope } = selectedRequest;
+					if (envelope && !ingressReady) return yield* new KernelError({ code: "extension_disabled" });
 					const route = matched.handler;
-					const who = yield* identity(route.scope);
+					const request = incoming;
+					const denied = () => Effect.fail(new KernelError({ code: "scope_required" }));
+					const who =
+						route.access === "application-managed"
+							? incoming.headers[authKindHeader]
+								? yield* identity(["GET", "HEAD", "OPTIONS"].includes(incoming.method) ? "read" : "write")
+								: null
+							: yield* identity(route.scope);
+					if (route.access === "application-managed" && !envelope && !who) return yield* denied();
+
 					const unavailable = () =>
 						HttpServerResponse.text(
 							encodeError({
@@ -507,31 +534,38 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 						);
 					if ((yield* Ref.get(statuses)).find((item) => item.name === route.extension)?.status !== "loaded")
 						return unavailable();
-					const web = yield* HttpServerRequest.toWeb(request);
-					const headers = new Headers(web.headers);
-					for (const name of ["x-boot-secret", "authorization", "cookie"]) headers.delete(name);
-					const exposed = HttpServerRequest.fromWeb(new Request(web, { headers }));
+					const exposed = yield* exposeRequest(request, target, route.access === "application-managed");
+					const writable =
+						!["GET", "HEAD", "OPTIONS"].includes(request.method) &&
+						(route.access === "application-managed" ||
+							(request.headers[scopesHeader] ?? "").split(",").includes("write"));
+					const authority = route.access === "application-managed" ? undefined : (who ?? undefined);
+					const verbs = capabilities(route.extension, authority, writable);
+					const context = {
+						...data(route.extension, authority, writable),
+						...verbs,
+						topics: {
+							...verbs.topics,
+							markRead: route.access === "application-managed" && !writable ? () => denied() : verbs.topics.markRead,
+						},
+						db: sql,
+						publicationFence: publication.fence.pipe(Effect.provideService(Lifecycle, lifecycle)),
+						params: matched.params,
+						query: matched.searchParams,
+					};
+
 					return yield* work(
 						() =>
-							route.handler(exposed, {
-								...who,
-								...data(
-									route.extension,
-									who,
-									!["GET", "HEAD", "OPTIONS"].includes(request.method) &&
-										(request.headers[scopesHeader] ?? "").split(",").includes("write"),
-								),
-								...capabilities(
-									route.extension,
-									who,
-									!["GET", "HEAD", "OPTIONS"].includes(request.method) &&
-										(request.headers[scopesHeader] ?? "").split(",").includes("write"),
-								),
-								db: sql,
-								publicationFence: publication.fence.pipe(Effect.provideService(Lifecycle, lifecycle)),
-								params: matched.params,
-								query: matched.searchParams,
-							}),
+							route.access === "application-managed"
+								? route.handler(exposed, {
+										...context,
+										identity: who,
+										extension: route.extension,
+										authority: { actor: "system", instance: `extension:${route.extension}`, request: "" },
+									})
+								: who
+									? route.handler(exposed, { ...context, ...who })
+									: denied(),
 						true,
 					).pipe(
 						Effect.provideService(HttpServerRequest.HttpServerRequest, exposed),
@@ -541,6 +575,7 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 							route: HttpRouter.route(route.method, route.path, HttpServerResponse.empty()),
 						}),
 						Effect.map(HttpServerResponse.fromWeb),
+						Effect.map(HttpServerResponse.removeHeader(ingressChallengeHeader)),
 						Effect.catchCause((cause) =>
 							Effect.gen(function* () {
 								if (Cause.hasInterruptsOnly(cause)) return yield* Effect.interrupt;

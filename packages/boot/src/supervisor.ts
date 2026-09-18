@@ -290,6 +290,7 @@ export const supervise = Effect.fn("supervise")(function* (
 				...value.attempt,
 				state,
 				port: value.process.port,
+				applicationManagedIngress: yield* value.process.applicationManagedIngress,
 				pid: value.process.pid,
 				snapshot: value.generation.snapshot_dir ?? "",
 			});

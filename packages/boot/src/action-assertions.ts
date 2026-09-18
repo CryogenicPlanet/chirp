@@ -92,10 +92,12 @@ export const makeActionAssertions = <E, R, RandomError>(
 					}),
 				);
 			return {
-				startSettingsAssertion: (params: SettingsChange, session: string) =>
-					Schema.is(SettingsChange)(params) && params.patch.event_retention === undefined
-						? start("settings.change", canonicalSettings(params, session))
-						: refuse("invalid_request"),
+				startSettingsAssertion: (params: SettingsChange, session: string) => {
+					if (!Schema.is(SettingsChange)(params) || params.patch.event_retention !== undefined)
+						return refuse("invalid_request");
+					if (params.patch.public_paths !== undefined) return refuse("public_paths_retired");
+					return start("settings.change", canonicalSettings(params, session));
+				},
 				startRestartAssertion: (sessionId: string) => start("boot.restart", restartBinding(sessionId)),
 				startEnrollmentAssertion: (params: EnrollmentDecision) =>
 					validDecision(params) ? start("enrollment.decide", canonicalDecision(params)) : refuse("invalid_request"),

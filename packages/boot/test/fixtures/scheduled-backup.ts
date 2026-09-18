@@ -64,6 +64,7 @@ const main = Effect.gen(function* () {
 			generation,
 			attempt,
 			process: {
+				applicationManagedIngress: Effect.succeed(false),
 				pid: 1,
 				port: 1,
 				stderr: yield* Ref.make(""),

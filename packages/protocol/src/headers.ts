@@ -47,7 +47,6 @@ export const rehearsalReportHeader = "x-chirp-rehearsal-report";
 
 /** Editing and page serving. */
 export const baseVersionHeader = "x-chirp-base-version";
-export const publicPageHeader = "x-chirp-public-page";
 export const pageRevisionHeader = "x-chirp-page-revision";
 
 /** Tracing, and the delivery identity a webhook recipient uses to deduplicate retries. */
@@ -74,3 +73,47 @@ export const headerLabel = (name: string): string =>
 		.split("-")
 		.map((part) => (part === "" ? part : part[0]!.toUpperCase() + part.slice(1)))
 		.join("-");
+
+/** Generic boot-to-live ingress; callers cannot supply the target header. */
+export const ingressProtocolHeader = "x-chirp-ingress-protocol";
+/** Version 2 includes namespaced application bearer transport. */
+export const ingressProtocolVersion = "2";
+export const ingressTargetHeader = "x-chirp-ingress-target";
+export const applicationIngressPath = "/_kernel/ingress";
+export const applicationCookiePrefix = "chirp_app_";
+
+/** Exact opaque application bearer syntax; never a board access token. */
+export const applicationBearerPattern = Object.freeze(/^Bearer chirp_app_[A-Za-z0-9_-]{43}(?![\s\S])/);
+
+/** Kernel-only refusal: boot challenges board authentication; extension responses cannot set it. */
+export const ingressChallengeHeader = "x-chirp-ingress-challenge";
+
+/** Shared reserved route policy for boot admission and editable route registration. */
+export const reservedIngressRoute = (path: string) => {
+	const route = path.replace(/\/+/g, "/").replace(/\/$/, "").toLowerCase();
+	return (
+		[
+			"/_boot",
+			"/_kernel",
+			"/api/fs",
+			"/api/lock",
+			"/api/reload",
+			"/api/revert",
+			"/api/generations",
+			"/api/tokens",
+			"/auth",
+			"/approve",
+			"/setup",
+		].some((prefix) => route === prefix || route.startsWith(prefix + "/")) ||
+		[
+			"/health",
+			"/api",
+			"/api/ext",
+			"/init",
+			"/init.md",
+			"/quickstart",
+			"/quickstart.md",
+			"/.well-known/agent.json",
+		].includes(route)
+	);
+};

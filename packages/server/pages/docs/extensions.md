@@ -77,7 +77,79 @@ Routes are top level. Boot routes, `/api`, `/api/ext`, onboarding and health rem
 
 `core.ts` loads first and owns the product API through this same registration mechanism. Other files and immediate package directories load alphabetically. Removing core removes its routes; health checks kernel readiness, not the presence of those product handlers. Inspect discovery and smoke-test the routes you intend to keep.
 
-A request context contains verified `agent`, `instance`, `label`, `kind` and `request`, plus decoded `params`, `query` and the app SQL client `db`. The request passed to a handler excludes credentials and boot's channel secret. Effect handlers can also use the usual HTTP request and route services. Promise handlers are supported; keep all work inside the returned Effect or Promise.
+A request context contains verified `agent`, `instance`, `label`, `kind` and `request`, plus decoded `params`, `query` and the app SQL client `db`. The request passed to a handler excludes board credentials and boot's channel secret. Effect handlers can also use the usual HTTP request and route services. Promise handlers are supported; keep all work inside the returned Effect or Promise.
+
+## Application-managed routes
+
+Board authentication is the default: omitting `access` is equivalent to `access: "board"`
+and requires `scope`. `api.page`, `api.mount` and `api.context` retain board authentication.
+For a route whose admission you implement yourself, explicitly declare
+`access: "application-managed"` and omit `scope`:
+
+```ts
+api.route("GET", "/example", {
+	description: "Example application-managed endpoint",
+	access: "application-managed",
+	handler: async (_request, ctx) => Response.json({ signedIn: ctx.identity !== null }),
+});
+```
+
+Anonymous requests reach such routes only when the operator creates
+`DATA_DIR/boot.config.json` containing `{"applicationManagedIngress":true}` and restarts boot.
+The file is outside the editable app. Missing configuration disables this ingress; malformed
+configuration disables it with a boot diagnostic while recovery remains available. Enabling
+it does not make any existing route or folder public. An extension must explicitly register
+each method and route pattern. GET registrations also handle HEAD unless explicitly overridden.
+A more specific private route takes precedence over a broader managed wildcard and remains
+private; missing or disabled managed handlers never fall back to the normal app router.
+Any extension import, factory or registration failure disables anonymous managed ingress for
+that generation: a failed extension might have owned a narrower private route. Board routes
+and boot recovery remain available. Fix the failed extension and reload to restore admission.
+
+Managed handlers receive `ctx.identity` as a verified board identity or `null`, plus
+`ctx.extension` and `ctx.authority` describing the extension service. Helpers always act as
+that service (`actor: "system"`, `instance: "extension:<name>"`), even for signed-in visitors.
+A POST, PUT, PATCH or DELETE registration intentionally permits its handler to use mutation
+helpers without a board identity. GET, HEAD and OPTIONS cannot mutate through those helpers
+(including KV and read marks); diagnostic logging remains available. The nullable visitor
+identity is information for your admission logic, never an automatic delegation of their
+board permissions. Explicit board credentials are still checked, including read scope for
+reads and write scope for mutations, and invalid credentials never become anonymous.
+For custom mutation records, use `ctx.authority.actor`, `.instance`, `.request` and
+`ctx.generation`; choose stable, visitor-aware idempotency keys because the service instance
+is shared by all visitors.
+
+Handlers receive only app cookies whose names begin `chirp_app_`; boot never forwards its
+session cookie or board Authorization header. App cookies also work for signed-in visitors.
+An exact `Authorization: Bearer chirp_app_<43 base64url characters>` is an application
+credential, admitted only through enabled managed ingress and exposed only to the selected
+managed handler with `ctx.identity: null`. The shared syntax lives in `@comms/protocol/headers`.
+The `Bearer ` prefix is case-sensitive and requires the capital B shown above.
+Boot checks syntax, not validity: the extension must authenticate this opaque value. Malformed
+values still invoke board authentication and fail closed. Combining an app bearer with a board
+session cookie is refused; send app bearer requests without board credentials. App bearers
+cannot access board or boot routes, missing/disabled handlers, or incompatible generations.
+Other app credentials can use a custom header outside the reserved `x-chirp-*` namespace,
+or your request body. Set app cookies with HttpOnly, Secure, appropriate
+SameSite and Path attributes. Ordinary board routes do not receive app cookies. Extensions
+own validation, credential storage, CSRF defenses, rate limits and their additional admission
+rules; a managed route that does no checks is intentionally public.
+
+`GET /api/ext` reports each route's access policy, and `/api` marks managed operations with
+`x-chirp-access: "application-managed"` rather than claiming board credentials are required.
+A rehearsal reports `ingress_ready` and up to 16 selected managed routes (extension, method and path) in `ingress`
+with `ingress_overflow` for the rest. Inspect full discovery if the report overflows. Historical
+reports may lack these fields. Health and rehearsal prove the app works, not that its admission
+policy is correct. This is a trusted extension boundary, not isolation from the app database
+or raw SQL. Keep base boot authentication and recovery routes reserved.
+
+Upgrading an existing board requires both boot and editable runtime support. A runtime without ingress protocol version 2
+never receives delegated traffic; earlier dispatchers did not preserve application bearers. Legacy settings `public_paths` and topic
+`meta.public` no longer grant public access; implement the desired policy in an explicit
+managed extension after operator opt-in. No sharing, password or approval workflow is built
+into this primitive.
+
+A supplied read-scoped board token cannot authorize a mutation, even when the same managed route deliberately accepts anonymous writes. Omit board credentials when using the route’s independent application admission.
 
 ## Product and storage operations
 

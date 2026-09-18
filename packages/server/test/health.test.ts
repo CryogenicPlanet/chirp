@@ -63,7 +63,7 @@ for (const kind of ["write", "read", "completion", "handler", "dispatcher"])
 		const before = await readFile(source, "utf8");
 		const anchor =
 			kind === "dispatcher"
-				? "if (pathname === null || reserved(pathname)) return yield* fallback;"
+				? "if (!selectedRequest) return yield* fallback;"
 				: kind === "handler"
 					? '[readinessHeader]: "kernel"'
 					: kind === "write"
@@ -172,7 +172,7 @@ it("rejects a reload with broken dispatch and keeps the previous healthy generat
 	const before = await status();
 	expect((await app.post("/api/lock", {}, cookie)).status).toBe(200);
 	const source = await readFile(join(import.meta.dirname, "../src/kernel/ext.ts"), "utf8");
-	const anchor = "if (pathname === null || reserved(pathname)) return yield* fallback;";
+	const anchor = "if (!selectedRequest) return yield* fallback;";
 	expect(source).toContain(anchor);
 	const result = await sourcePut(app.url + "/api/fs/app/kernel/ext.ts", {
 		method: "PUT",

@@ -14,6 +14,7 @@ export async function launch(
 	mode = "normal",
 	actualServer = false,
 	extraEnv: Readonly<Record<string, string>> = {},
+	bootConfig?: string,
 ) {
 	const directory = await mkdtemp(join(tmpdir(), "comms-proxy-"));
 	test.onTestFinished(() => rm(directory, { recursive: true, force: true }));
@@ -22,6 +23,10 @@ export async function launch(
 	await copyFile(join(import.meta.dirname, "child.ts"), join(seed, "fixture.ts"));
 	const entry = join(seed, "child.ts");
 	await writeFile(entry, `import { serve } from "./fixture.ts"; serve(${JSON.stringify(mode)});`);
+	if (bootConfig !== undefined) {
+		await mkdir(join(directory, "data"));
+		await writeFile(join(directory, "data", "boot.config.json"), bootConfig, { mode: 0o600 });
+	}
 	const processHandle = spawn("bun", [join(import.meta.dirname, "launcher.ts")], {
 		env: {
 			...process.env,
