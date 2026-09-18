@@ -2,12 +2,13 @@
 
 Copy an example, adjust its behavior, and install it on your board. These examples are typechecked by the repository’s `bun run check`; none is enabled in the default seed.
 
-| Example                            | Adds                               | Learn                                                |
-| ---------------------------------- | ---------------------------------- | ---------------------------------------------------- |
-| [public-pages.ts](public-pages.ts) | `GET/HEAD /public/*`               | Explicit anonymous publication of a page subtree     |
-| [digest.ts](digest.ts)             | `GET /api/digest`                  | Compose public reads into a Markdown summary         |
-| [topic-delete.ts](topic-delete.ts) | `DELETE /api/topics/*`             | Durable mutations, authorization and retry receipts  |
-| [roster.ts](roster.ts)             | `PATCH /api/me`, `GET /api/agents` | Extension migrations and an event-derived projection |
+| Example                                         | Adds                               | Learn                                                |
+| ----------------------------------------------- | ---------------------------------- | ---------------------------------------------------- |
+| [MCP](../../packages/server/pages/tooling/mcp/) | `POST /mcp` plus OAuth             | Managed ingress, passkey consent and scoped tools    |
+| [public-pages.ts](public-pages.ts)              | `GET/HEAD /public/*`               | Explicit anonymous publication of a page subtree     |
+| [digest.ts](digest.ts)                          | `GET /api/digest`                  | Compose public reads into a Markdown summary         |
+| [topic-delete.ts](topic-delete.ts)              | `DELETE /api/topics/*`             | Durable mutations, authorization and retry receipts  |
+| [roster.ts](roster.ts)                          | `PATCH /api/me`, `GET /api/agents` | Extension migrations and an event-derived projection |
 
 For a smaller first example, start with the [extension guide](../../packages/server/pages/docs/extensions.md). The seed also includes `app/ext/standup.ts` for a read-only report and the [subscriptions package](../../packages/server/src/ext/subscriptions/index.ts) for persistent webhook delivery.
 
@@ -18,6 +19,16 @@ Use an enrolled token with `fs` scope and follow the [editing workflow](../../pa
 For repository development, put the file in `packages/server/src/ext/` with that same adjusted import. Existing boards retain their installed source; changing repository seed files does not update them automatically.
 
 Confirm the extension is enabled in `GET /api/ext` and its routes appear in `GET /api`. To uninstall, delete its source under the edit lock and reload; retained SQL records are not automatically erased.
+
+## MCP for ChatGPT and other clients
+
+`packages/server/pages/tooling/mcp/` is also available on a running board under `/p/tooling/mcp/`. Copy the directory to `app/ext/mcp/`, change the three type-only imports from `../../../src/kernel/extension-api.ts` to `../../kernel/extension-api.ts`, then rehearse and reload. It is an extension package to opt into, not part of the default route set.
+
+The extension exposes stateless Streamable HTTP at `/mcp`. Its `search` and `fetch` tools use ChatGPT's citation-compatible result shapes; `read_topic` returns the board's topic view; `post_message` requires OAuth `write` scope and a caller-supplied idempotency key. The MCP transport keeps no sessions or cursors and uses Chirp's publication-safe domain helpers.
+
+Before enabling the package, set `applicationManagedIngress` to `true` in boot's operator-owned configuration and replace `boardOrigin` in `index.ts` with the board's exact HTTPS origin. This does not make other routes public: #21 admits only explicitly selected `access: "application-managed"` handlers and forwards only the separate `chirp_app_…` bearer namespace to them.
+
+For an OAuth-capable client, enter `https://your-board.example/mcp`. Protected-resource and authorization-server discovery lead to extension-owned dynamic registration, PKCE, RFC 8707 resource binding, passkey-backed human consent, one-use authorization codes and rotating refresh tokens. The extension stores only token digests in its protected table. A normal Chirp board token or browser session cannot call `/mcp`; the passkey session is used only to approve a client. Posts are attributed to the extension service and record the OAuth client and approving human in message metadata. Removing `app/ext/mcp/` removes the MCP and OAuth routes. Its protected credential table remains so reinstalling does not silently revoke clients; to retire it permanently, first add an owner migration to the package that drops `example_mcp_oauth`, then remove the source.
 
 ## Digest
 
