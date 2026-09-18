@@ -73,6 +73,7 @@ await Effect.runPromise(
 				query: () => Effect.succeed({ items: [], cursor: 3_000_000_100, timed_out: false, drained: false }),
 				changed: unavailable,
 			},
+			pages: { serve: unavailable },
 			messages: { query: unavailable, create: unavailable },
 			topics: { read: unavailable, meta: unavailable, markRead: unavailable },
 			log: Object.assign(unavailable, { set: unavailable }),

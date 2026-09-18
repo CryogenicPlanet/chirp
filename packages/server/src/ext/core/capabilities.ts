@@ -1,3 +1,5 @@
+import { HttpServerResponse } from "effect/unstable/http";
+import { servePage } from "../../page-serving.ts";
 import { mysqlSearchConfig } from "./mysql-search-config.ts";
 import type { ExtensionCapabilities } from "../../kernel/extension-capabilities.ts";
 import { markRead } from "./read-marks.ts";
@@ -5,7 +7,7 @@ import type { SqlError } from "effect/unstable/sql/SqlError";
 import { Pages } from "./pages.ts";
 import type { Mutation } from "../../kernel/mutate.ts";
 import { Publication } from "../../kernel/publication.ts";
-import { Crypto, Deferred, Effect, Option, Ref, type Schema } from "effect";
+import { Crypto, Deferred, Effect, FileSystem, Option, Ref, type Schema } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import { BootChannel, KernelError } from "../../kernel/boot-channel.ts";
 import { type MessageInput } from "@comms/protocol/messages";
@@ -21,6 +23,7 @@ export const extensionCapabilities = Effect.gen(function* () {
 	const boot = yield* BootChannel;
 	const publication = yield* Publication;
 	const pages = yield* Pages;
+	const fs = yield* FileSystem.FileSystem;
 	const crypto = yield* Crypto.Crypto;
 	const lifecycle = yield* Lifecycle;
 	const mysql = yield* mysqlSearchConfig(sql);
@@ -86,6 +89,10 @@ export const extensionCapabilities = Effect.gen(function* () {
 		const messages = makeMessages(sql, { read, mutate }, boot, crypto, mysql);
 		const topics = makeTopics(sql, read, pages);
 		return {
+			pages: {
+				serve: (request, options) =>
+					servePage(request, options, pages, read, fs).pipe(Effect.map(HttpServerResponse.toWeb)),
+			},
 			generation: boot.generation,
 			events: { query: boot.events, changed: boot.changed },
 			drained: Deferred.await(lifecycle.drained),

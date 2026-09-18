@@ -174,6 +174,7 @@ const program = Effect.gen(function* () {
 							}),
 							db: sql,
 							generation: channel.generation,
+							pages: { serve: () => Effect.die("not used") },
 							messages: {
 								query: messages.list,
 								create: () => Effect.die("read only"),

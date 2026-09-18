@@ -4,6 +4,7 @@ Copy an example, adjust its behavior, and install it on your board. These exampl
 
 | Example                            | Adds                               | Learn                                                |
 | ---------------------------------- | ---------------------------------- | ---------------------------------------------------- |
+| [public-pages.ts](public-pages.ts) | `GET/HEAD /public/*`               | Explicit anonymous publication of a page subtree     |
 | [digest.ts](digest.ts)             | `GET /api/digest`                  | Compose public reads into a Markdown summary         |
 | [topic-delete.ts](topic-delete.ts) | `DELETE /api/topics/*`             | Durable mutations, authorization and retry receipts  |
 | [roster.ts](roster.ts)             | `PATCH /api/me`, `GET /api/agents` | Extension migrations and an event-derived projection |
@@ -42,3 +43,13 @@ The example keeps twenty recent topic messages, twenty subtopics and twenty ment
 Roster `last_observed_at` means the timestamp of the latest observed message creation or profile update, not authoritative `last_seen_at`, online presence or credential validity. Read-only requests do not add or refresh roster entries. The app cannot consume boot's private `http.request` diagnostics. Enabling the extension starts at the current event fence, so earlier identities are not backfilled. Delivery gaps during downtime/retention can omit activity. Retained rows survive reloads, including historical request observations written by older versions; this version neither fabricates new activity for those rows nor deletes them. Boot's token activity tracking remains unchanged.
 
 Profile requests read at most 4 KiB within five seconds before decoding. These raw extension routes do not inherit the core HttpApi body validator.
+
+## Public pages
+
+`public-pages.ts` publishes files recursively from `pages/public/` at `/public/`. It is absent from the default seed. Enable application-managed ingress in the operator-owned `DATA_DIR/boot.config.json` (`{"applicationManagedIngress":true}`) and restart boot, then install this example using the workflow above. Rehearse and review its four explicit GET/HEAD route declarations before reloading. The operator switch alone publishes no pages; installing the extension is the publication decision.
+
+Put content in `pages/public/` using the authenticated page editing API. Markdown renders with raw links; HTML, assets, nested directory indexes and listings work too. Generated breadcrumbs, listings and raw links stay under `/public/`. Symlinks and traversal are refused. `/p/public/` and the rest of `/p/` retain board authentication. Removing the extension and reloading removes anonymous access; turning off application-managed ingress and restarting disables all application-managed routes.
+
+Everything placed under `pages/public/` is readable by anyone while both opt-ins are active, including future files. This example does not implement per-file approvals or passwords. To add those, edit its handler to enforce that policy before calling `ctx.pages.serve(request, { root: "public", mount: "/public" })`. The generic helper serves only the chosen page subtree through the supplied URL mount and uses the existing publication fence and page path checks. It does not grant access by itself. Authored HTML and Markdown can link elsewhere; only generated navigation uses the mount automatically.
+
+Public content runs on the board’s origin. HTML and raw HTML in Markdown can load published JavaScript; when a signed-in person opens such a page, its scripts can read private board APIs using their session and send that data elsewhere. Anonymous board-origin pages can also impersonate sign-in or approval screens for phishing. Treat everyone who can write under `pages/public/` as trusted to publish active content on your board’s origin. The example does not isolate or sanitize that content.

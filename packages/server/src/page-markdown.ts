@@ -17,20 +17,21 @@ export const escapeHtml = (text: string) =>
 		.replace(/>/g, "&gt;")
 		.replace(/"/g, "&quot;")
 		.replace(/'/g, "&#39;");
-export const pageHref = (name: string) => `/p/${name.split("/").map(encodeURIComponent).join("/")}`;
+export const pageHref = (name: string, mount = "/p") => `${mount}/${name.split("/").map(encodeURIComponent).join("/")}`;
 export const pageDocument = (
 	name: string,
 	body: string,
-	options: { title?: string; raw?: string; rawHref?: string; assets?: string } = {},
+	options: { title?: string; raw?: string; rawHref?: string; assets?: string; mount?: string } = {},
 ) => {
 	let current = "";
-	const crumbs = [`<a href="/">chirp</a>`, `<a href="/p/">pages</a>`];
+	const mount = options.mount ?? "/p";
+	const crumbs = [...(mount === "/p" ? ['<a href="/">chirp</a>'] : []), `<a href="${escapeHtml(mount)}/">pages</a>`];
 	for (const part of name.split("/").filter(Boolean)) {
 		current = current ? `${current}/${part}` : part;
-		crumbs.push(`<a href="${escapeHtml(pageHref(current))}">${escapeHtml(part)}</a>`);
+		crumbs.push(`<a href="${escapeHtml(pageHref(current, mount))}">${escapeHtml(part)}</a>`);
 	}
 	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(options.title ?? (name || "Pages"))}</title>
-<style>body{margin:0;background:#fafafa;color:#222;font:15px/1.6 system-ui,sans-serif}.wrap{max-width:820px;margin:0 auto;padding:4vh 1.2rem 12vh}nav{display:flex;flex-wrap:wrap;justify-content:space-between;gap:1rem;margin-bottom:1.5rem;font-size:13px}a{color:#176c52}pre{overflow:auto}img{max-width:100%}.markdown-body{background:transparent}.listing{padding-left:1.2rem}</style>${options.assets ?? ""}</head><body><div class="wrap"><nav><span>${crumbs.join(" / ")}</span>${options.rawHref || options.raw ? `<a href="${escapeHtml(options.rawHref ?? `${pageHref(options.raw ?? "")}?raw=1`)}">raw</a>` : ""}</nav><article class="markdown-body">${body}</article></div></body></html>`;
+<style>body{margin:0;background:#fafafa;color:#222;font:15px/1.6 system-ui,sans-serif}.wrap{max-width:820px;margin:0 auto;padding:4vh 1.2rem 12vh}nav{display:flex;flex-wrap:wrap;justify-content:space-between;gap:1rem;margin-bottom:1.5rem;font-size:13px}a{color:#176c52}pre{overflow:auto}img{max-width:100%}.markdown-body{background:transparent}.listing{padding-left:1.2rem}</style>${options.assets ?? ""}</head><body><div class="wrap"><nav><span>${crumbs.join(" / ")}</span>${options.rawHref || options.raw ? `<a href="${escapeHtml(options.rawHref ?? `${pageHref(options.raw ?? "", mount)}?raw=1`)}">raw</a>` : ""}</nav><article class="markdown-body">${body}</article></div></body></html>`;
 };
 
 /** Each Pages instance owns its parser and highlighter; never change package defaults. */
@@ -53,7 +54,7 @@ export const pageMarkdown = () => {
 			},
 		},
 	});
-	return (text: string, name: string, options: { rawHref?: string } = {}) => {
+	return (text: string, name: string, options: { rawHref?: string; mount?: string } = {}) => {
 		const matched = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
 		const frontmatter = matched?.[1] ?? "";
 		const body = parser.parse(matched ? text.slice(matched[0].length) : text, { async: false });
