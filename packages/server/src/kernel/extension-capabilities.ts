@@ -1,4 +1,5 @@
-import type { Cause, Effect, PlatformError, Schema } from "effect";
+import type { HttpServerRequest } from "effect/unstable/http";
+import type { Cause, Effect, PlatformError, Schema, Scope } from "effect";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 import type { Message, MessageInput, Envelope } from "@comms/protocol/messages";
 import type { TopicResult } from "@comms/protocol/topics";
@@ -27,6 +28,12 @@ interface PageError extends Cause.YieldableError {
 }
 /** Public extension verbs; core implements this contract without defining the loader's types. */
 export interface ExtensionCapabilities {
+	readonly pages: {
+		readonly serve: (
+			request: HttpServerRequest.HttpServerRequest,
+			options: { readonly root: string; readonly mount: `/${string}` },
+		) => Effect.Effect<Response, never, Scope.Scope>;
+	};
 	readonly generation: number;
 	readonly events: Pick<BootChannel["Service"], "changed"> & { readonly query: BootChannel["Service"]["events"] };
 	readonly drained: Effect.Effect<void>;
