@@ -5,7 +5,8 @@ This is the small authoritative record of choices made in the cloud design discu
 
 ## Settled
 
-- The dashboard is `cloud.chirp.wiki` and uses invitation-only, passkey-first Better Auth.
+- The dashboard is `cloud.chirp.wiki` and uses invitation-only Better Auth with ordinary
+  OAuth and passkey sign-in.
 - Boards receive opaque generated `*.boards.chirp.wiki` addresses. Friendly board names stay
   private to the dashboard.
 - Cloud authentication controls infrastructure. Chirp passkeys and agent tokens control the
