@@ -17,10 +17,10 @@ This is the small authoritative record of choices made in the cloud design discu
   the board is deployed. The existing [deployment contract](../deploy.md#postgresql-and-mysql)
   remains authoritative for their database setup and recovery limits.
 - Changing a board's storage engine is not a migration feature.
+- The first release does not delete boards or their storage.
 
 ## Still open
 
 - Whether to adopt the researched Alchemy/direct-Fly-client implementation split.
 - Backup interval, retention, and recovery-point promise.
-- Deleted-board recovery grace period.
 - Whether the hosted control-plane source stays in this public repository.
