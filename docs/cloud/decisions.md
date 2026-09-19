@@ -18,9 +18,11 @@ This is the small authoritative record of choices made in the cloud design discu
   remains authoritative for their database setup and recovery limits.
 - Changing a board's storage engine is not a migration feature.
 - The first release does not delete boards or their storage.
+- Alchemy manages shared stateless infrastructure only. The cloud control plane creates and
+  reconciles boards directly through Fly's API; boards are runtime product resources, not
+  infrastructure-as-code stacks.
 
 ## Still open
 
-- Whether to adopt the researched Alchemy/direct-Fly-client implementation split.
 - Backup interval, retention, and recovery-point promise.
 - Whether the hosted control-plane source stays in this public repository.

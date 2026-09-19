@@ -212,9 +212,10 @@ same state database, prefix, stack, and stage; it does not serialize direct runt
 operations.
 
 Programmatic deployment with a caller-selected stage is real, but it does not supply a
-workflow scheduler or solve the lifecycle issues above. The researched recommendation was
-therefore to use pinned Alchemy only for reviewed, shared, stateless infrastructure and the
-pinned `@distilled.cloud/fly-io` Effect client for tenant operations.
+workflow scheduler or solve the lifecycle issues above. The later decision was to use pinned
+Alchemy only for reviewed, shared, stateless infrastructure and the pinned
+`@distilled.cloud/fly-io` Effect client for tenant operations. Boards are runtime product
+resources reconciled by the control plane, not one IaC stack per customer.
 
 The Distilled client exposes Fly's update version guard but defaults to retrying transient
 errors up to eight times. Reads can use that policy. Non-idempotent mutations need retries
