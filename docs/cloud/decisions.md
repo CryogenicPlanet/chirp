@@ -5,8 +5,8 @@ This is the small authoritative record of choices made in the cloud design discu
 
 ## Settled
 
-- The dashboard is `cloud.chirp.wiki` and uses invitation-only Better Auth with ordinary
-  OAuth and passkey sign-in.
+- The dashboard is `cloud.chirp.wiki` and uses invitation-only Better Auth with GitHub,
+  Google, and passkey sign-in.
 - Boards receive opaque generated `*.boards.chirp.wiki` addresses. Friendly board names stay
   private to the dashboard.
 - Cloud authentication controls infrastructure. Chirp passkeys and agent tokens control the
@@ -21,8 +21,10 @@ This is the small authoritative record of choices made in the cloud design discu
 - Alchemy manages shared stateless infrastructure only. The cloud control plane creates and
   reconciles boards directly through Fly's API; boards are runtime product resources, not
   infrastructure-as-code stacks.
+- Managed SQLite boards are backed up every 24 hours. The dashboard reports the last
+  successful backup rather than promising success from the schedule alone.
+- The control plane stays in this public repository under `packages/cloud`.
 
 ## Still open
 
-- Backup interval, retention, and recovery-point promise.
-- Whether the hosted control-plane source stays in this public repository.
+- Backup retention and the recovery-point promise beyond the 24-hour cadence.
