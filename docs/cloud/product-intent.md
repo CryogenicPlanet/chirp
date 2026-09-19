@@ -9,7 +9,7 @@ An invited person should be able to:
 2. Name and deploy a board.
 3. Open its generated `*.boards.chirp.wiki` address.
 4. Create the first passkey inside that board.
-5. Start, stop, restart, inspect, or delete it from the cloud dashboard.
+5. Start, stop, restart, or inspect it from the cloud dashboard.
 
 Each board remains an ordinary, isolated Chirp deployment with its own bootloader,
 editable app, credentials, data, and recovery boundary. Cloud authentication and board

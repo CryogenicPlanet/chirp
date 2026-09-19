@@ -178,9 +178,9 @@ are observed before retry, because a timeout is not proof that nothing happened.
 updates use the observed version guard. Once a volume exists, an unrelated later timeout
 must not trigger automatic data deletion.
 
-Deletion was researched as two phases: immediately remove routing and stop the Machine,
-then retain managed recovery material for a stated grace period before destruction. The
-retention period is not decided.
+Two-phase deletion was researched, but the settled first release does not delete boards or
+their storage. If deletion is considered later, its routing withdrawal, recovery window,
+and final destruction policy need a separate decision.
 
 The current OSS setup flow prints a one-time code to logs. A managed product probably needs
 a provider-neutral one-time setup handoff, but its exact implementation is not settled and
