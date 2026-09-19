@@ -148,10 +148,11 @@ image test could establish compatibility.
 
 ## Control-plane research
 
-The investigated control plane uses Better Auth's PostgreSQL adapter, ordinary OAuth, and
-optional Passkey and Admin plugins. Public signup is disabled; a signed, single-use
-invitation gates initial account creation regardless of sign-in method. Cloud ownership
-authorizes infrastructure actions only; it does not create a Chirp board session.
+The decided control plane stays in this public repository under `packages/cloud`. It uses
+Better Auth's PostgreSQL adapter with GitHub, Google, and optional passkey sign-in plus the
+Admin plugin. Public signup is disabled; a signed, single-use invitation gates initial
+account creation regardless of sign-in method. Cloud ownership authorizes infrastructure
+actions only; it does not create a Chirp board session.
 
 Candidate metadata includes accounts, invites, deployments, operations, and immutable audit
 events. Provider resource IDs are references, not truth; reconciliation reads provider
@@ -181,6 +182,10 @@ must not trigger automatic data deletion.
 Two-phase deletion was researched, but the settled first release does not delete boards or
 their storage. If deletion is considered later, its routing withdrawal, recovery window,
 and final destruction policy need a separate decision.
+
+Managed SQLite backups have a decided 24-hour cadence. Retention and the exact recovery-point
+promise remain open; a scheduler firing is not proof that a backup completed, so product
+status should use the last verified backup.
 
 The current OSS setup flow prints a one-time code to logs. A managed product probably needs
 a provider-neutral one-time setup handoff, but its exact implementation is not settled and
