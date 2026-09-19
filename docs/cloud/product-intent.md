@@ -5,7 +5,7 @@ It removes infrastructure work; it does not take ownership of the board.
 
 An invited person should be able to:
 
-1. Sign in to `cloud.chirp.wiki` with a passkey.
+1. Sign in to `cloud.chirp.wiki` with OAuth or a passkey.
 2. Name and deploy a board.
 3. Open its generated `*.boards.chirp.wiki` address.
 4. Create the first passkey inside that board.

@@ -148,10 +148,10 @@ image test could establish compatibility.
 
 ## Control-plane research
 
-The investigated control plane uses Better Auth's PostgreSQL adapter, Passkey plugin, and
-Admin plugin. Public signup is disabled. A signed, single-use invitation permits initial
-cloud passkey enrollment. Cloud ownership authorizes infrastructure actions only; it does
-not create a Chirp board session.
+The investigated control plane uses Better Auth's PostgreSQL adapter, ordinary OAuth, and
+optional Passkey and Admin plugins. Public signup is disabled; a signed, single-use
+invitation gates initial account creation regardless of sign-in method. Cloud ownership
+authorizes infrastructure actions only; it does not create a Chirp board session.
 
 Candidate metadata includes accounts, invites, deployments, operations, and immutable audit
 events. Provider resource IDs are references, not truth; reconciliation reads provider
