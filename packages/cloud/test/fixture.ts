@@ -8,6 +8,7 @@ import type * as SqlClient from "effect/unstable/sql/SqlClient";
 import { type Boards, boardsLayer } from "../src/boards.ts";
 import { Database } from "../src/database.ts";
 import { type Deployments, deploymentsLayer } from "../src/deployments.ts";
+import { type Dashboard, dashboardLayer } from "../src/dashboard.ts";
 import { type Invitations, invitationsLayer } from "../src/invitations.ts";
 import { type Operations, operationsLayer } from "../src/operations.ts";
 
@@ -37,7 +38,8 @@ export const cryptoLayer = Layer.succeed(
 	}),
 );
 
-const testLayer = Layer.mergeAll(boardsLayer, deploymentsLayer, invitationsLayer, operationsLayer).pipe(
+const testLayer = dashboardLayer.pipe(
+	Layer.provideMerge(Layer.mergeAll(boardsLayer, deploymentsLayer, invitationsLayer, operationsLayer)),
 	Layer.provideMerge(databaseLayer),
 	Layer.provideMerge(cryptoLayer),
 );
@@ -48,7 +50,7 @@ export const runFresh = <A, E>(
 	effect: Effect.Effect<
 		A,
 		E,
-		Boards | Crypto.Crypto | Database | Deployments | Invitations | Operations | SqlClient.SqlClient
+		Boards | Crypto.Crypto | Dashboard | Database | Deployments | Invitations | Operations | SqlClient.SqlClient
 	>,
 ) =>
 	Effect.runPromise(

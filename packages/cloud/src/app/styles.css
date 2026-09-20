@@ -1,4 +1,15 @@
-@import "tailwindcss";
+@import "./styles-auth.css";
+@import "./styles-shell.css";
+@import "./styles-components.css";
+@import "./styles-responsive.css";
+
+@font-face {
+	font-family: "ABC Diatype";
+	src: url("/fonts/ABCDiatype-Light.woff2") format("woff2");
+	font-weight: 300;
+	font-style: normal;
+	font-display: swap;
+}
 
 @font-face {
 	font-family: "ABC Diatype";
@@ -24,33 +35,83 @@
 	font-display: swap;
 }
 
-@theme {
-	--font-sans: "ABC Diatype", ui-sans-serif, system-ui, sans-serif;
-	--font-mono: "JetBrains Mono", ui-monospace, monospace;
-	--color-background: #161b1d;
-	--color-foreground: #ece9e1;
-	--color-card: #1c2224;
-	--color-muted: #252d30;
-	--color-muted-foreground: #a6b2b0;
-	--color-subtle: #95a3a0;
-	--color-primary: #b8d7c3;
-	--color-primary-hover: #d0e9da;
-	--color-primary-foreground: #172520;
-	--color-accent-surface: #302e3c;
-	--color-accent-foreground: #d1cbea;
-	--color-border: #343c3e;
-	--color-input: #53615e;
-	--color-ring: #b8d7c3;
-	--color-placeholder: #8e9b98;
-	--color-warning: #e6c082;
-	--color-warning-surface: #342e24;
-	--color-warning-border: #67583e;
-	--color-destructive: #f1a28f;
-	--color-destructive-surface: #382825;
-	--color-destructive-border: #6f443b;
-	--color-tag: #b8d7c3;
-	--color-tag-surface: #26352e;
-	--color-tag-border: #455e4e;
+:root {
+	color-scheme: dark;
+	font-family: "ABC Diatype", ui-sans-serif, system-ui, sans-serif;
+	font-synthesis: none;
+	--background: #161b1d;
+	--foreground: #ece9e1;
+	--card: #1c2224;
+	--card-foreground: #ece9e1;
+	--muted: #252d30;
+	--muted-foreground: #a6b2b0;
+	--subtle: #95a3a0;
+	--primary: #b8d7c3;
+	--primary-hover: #d0e9da;
+	--primary-foreground: #172520;
+	--accent: #b9b0df;
+	--accent-hover: #cec7ea;
+	--accent-surface: #302e3c;
+	--accent-foreground: #d1cbea;
+	--border: #343c3e;
+	--input: #53615e;
+	--ring: #b8d7c3;
+	--placeholder: #8e9b98;
+	--warning: #e6c082;
+	--warning-surface: #342e24;
+	--warning-border: #67583e;
+	--destructive: #f1a28f;
+	--destructive-surface: #382825;
+	--tag-mint: #b8d7c3;
+	--tag-surface: #26352e;
+	--tag-border: #455e4e;
 	--shadow-card: 0 0 0 1px rgb(15 15 15 / 7%), 0 1px 2px rgb(15 15 15 / 4%);
 	--shadow-elevated: 0 24px 60px -22px rgb(0 0 0 / 12%), 0 6px 18px -10px rgb(0 0 0 / 6%);
+	background: var(--background);
+	color: var(--foreground);
+}
+
+* {
+	box-sizing: border-box;
+	scrollbar-color: var(--input) var(--background);
+}
+
+html {
+	background: var(--background);
+}
+
+body {
+	min-width: 320px;
+	min-height: 100svh;
+	margin: 0;
+	background: var(--background);
+	color: var(--foreground);
+	font-size: 14px;
+	font-weight: 400;
+	letter-spacing: -0.011em;
+	text-rendering: optimizeLegibility;
+	-webkit-font-smoothing: antialiased;
+}
+
+button,
+input {
+	font: inherit;
+}
+
+button,
+a {
+	-webkit-tap-highlight-color: transparent;
+}
+
+a {
+	color: inherit;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+summary:focus-visible,
+label:focus-visible {
+	outline: 2px solid var(--ring);
+	outline-offset: 2px;
 }

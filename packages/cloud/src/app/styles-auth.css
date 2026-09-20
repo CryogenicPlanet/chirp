@@ -1,0 +1,161 @@
+.auth-main {
+	display: grid;
+	min-height: 100svh;
+	place-items: center;
+	padding: 24px;
+}
+
+.auth-card {
+	width: min(100%, 430px);
+	padding: 32px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--card);
+	box-shadow: var(--shadow-card);
+}
+
+.eyebrow,
+.section-heading,
+.breadcrumb,
+.strapline,
+.mono,
+.badge {
+	font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+.eyebrow,
+.section-heading {
+	margin: 0;
+	color: var(--subtle);
+	font-size: 11px;
+	font-weight: 500;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+}
+
+.auth-card h1 {
+	margin: 12px 0 0;
+	font-size: clamp(28px, 7vw, 36px);
+	font-weight: 400;
+	line-height: 1.05;
+	letter-spacing: -0.035em;
+}
+
+.lede {
+	margin: 16px 0 24px;
+	color: var(--muted-foreground);
+	font-size: 15px;
+	line-height: 1.55;
+}
+
+.auth-actions {
+	display: grid;
+	min-width: 0;
+	gap: 8px;
+}
+
+.account-summary {
+	display: grid;
+	min-width: 0;
+	gap: 2px;
+	margin-bottom: 6px;
+}
+
+.account-summary strong {
+	font-size: 13px;
+	font-weight: 500;
+}
+
+.account-summary span,
+.status {
+	color: var(--muted-foreground);
+	font-size: 12px;
+	overflow-wrap: anywhere;
+}
+
+button,
+.button,
+.button-outline,
+.button-link,
+.button-ghost {
+	display: inline-flex;
+	min-height: 36px;
+	align-items: center;
+	justify-content: center;
+	padding: 8px 14px;
+	border: 1px solid transparent;
+	border-radius: 6px;
+	font-size: 13px;
+	font-weight: 500;
+	line-height: 1;
+	text-decoration: none;
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+button,
+.button {
+	background: var(--primary);
+	color: var(--primary-foreground);
+}
+
+button:hover:not(:disabled),
+.button:hover {
+	background: var(--primary-hover);
+}
+
+button.secondary,
+.button-outline {
+	border-color: var(--input);
+	background: var(--card);
+	color: var(--foreground);
+}
+
+button.secondary:hover:not(:disabled),
+.button-outline:hover {
+	border-color: var(--primary);
+	background: var(--muted);
+}
+
+.button-link,
+.button-ghost {
+	background: transparent;
+	color: var(--muted-foreground);
+}
+
+.button-link:hover,
+.button-ghost:hover:not(:disabled) {
+	background: var(--muted);
+	color: var(--foreground);
+}
+
+button.compact,
+.compact {
+	min-height: 30px;
+	padding: 6px 10px;
+	font-size: 12px;
+}
+
+button:disabled {
+	cursor: wait;
+	opacity: 0.55;
+}
+
+.error,
+.notice {
+	margin: 4px 0 0;
+	font-size: 12px;
+	line-height: 1.45;
+}
+
+.error {
+	color: var(--destructive);
+}
+
+.notice {
+	color: var(--primary);
+}
+
+.auth-alert {
+	margin: -8px 0 12px;
+}

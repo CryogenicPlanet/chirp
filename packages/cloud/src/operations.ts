@@ -84,6 +84,10 @@ const make = Effect.gen(function* () {
 			? Effect.succeed(milliseconds)
 			: Effect.fail(new InvalidLeaseDuration({ milliseconds }));
 	return {
+		latest: (boardId: string, kind: OperationKind) =>
+			decodeOne(sql`SELECT ${columns} FROM board_operations
+				WHERE board_id = ${boardId} AND kind = ${kind}
+				ORDER BY created_at DESC, id DESC LIMIT 1`),
 		enqueue: (input: EnqueueOperation) =>
 			Effect.gen(function* () {
 				if (!(yield* ownedBoard(input.board_id, input.owner_id)))

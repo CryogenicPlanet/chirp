@@ -16,7 +16,7 @@ Set `CLOUD_CLIENT_IP_HEADER` to one authoritative, single-value client address h
 
 To issue a single-use invitation after migrations are applied, run `INVITATION_EMAIL=person@example.com bun run --filter @comms/cloud invite`. The command prints the invitation fragment once; only its SHA-256 digest is stored. Invitations expire after 24 hours.
 
-The Next.js process owns one bounded authentication pool and a separate scoped provisioning worker. The worker reconciles one deterministic Fly App, encrypted Volume, and Machine per board through direct API observation; it never deletes provider resources. The production server stops accepting requests, drains them, closes Next.js, and then awaits disposal of both runtimes.
+The Next.js process owns one bounded authentication pool and a separate scoped provisioning worker. Dashboard requests build and release their Effect database layer within the request boundary, so route modules do not add process-global runtime state. The worker reconciles one deterministic Fly App, encrypted Volume, and Machine per board through direct API observation; it never deletes provider resources. The production server stops accepting requests, drains them, closes Next.js, and then awaits disposal of both runtimes.
 
 Managed SQLite needs no provider runtime secret. Once its Volume is ready, provisioning creates the Machine directly. External PostgreSQL and MySQL provisioning remains blocked until the deployment contract can be verified and its two database URLs can be passed directly from a secret manager to Fly without control-plane persistence.
 
