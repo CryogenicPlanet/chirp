@@ -10,6 +10,8 @@ import { Database } from "../src/database.ts";
 import { type Operations, operationsLayer } from "../src/operations.ts";
 
 const databaseUrl = process.env.CLOUD_TEST_DATABASE_URL;
+if (process.env.CI && !databaseUrl)
+	throw new Error("CLOUD_TEST_DATABASE_URL is required in CI; refusing to skip PostgreSQL-only Cloud tests");
 const sqlLayer = databaseUrl
 	? PgClient.layer({
 			url: Redacted.make(databaseUrl),
