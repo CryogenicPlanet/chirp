@@ -4,6 +4,7 @@ export interface CloudAuthSettings {
 	readonly databaseUrl: Redacted.Redacted;
 	readonly publicOrigin: string;
 	readonly authSecret: Redacted.Redacted;
+	readonly clientIpHeader: string;
 	readonly githubClientId: string;
 	readonly githubClientSecret: Redacted.Redacted;
 	readonly googleClientId: string;
@@ -19,6 +20,7 @@ export const cloudAuthSettings = Effect.gen(function* () {
 		databaseUrl: Config.Redacted("CLOUD_DATABASE_URL"),
 		publicUrl: Config.URL("BETTER_AUTH_URL"),
 		authSecret: Config.Redacted("BETTER_AUTH_SECRET"),
+		clientIpHeader: Config.String("CLOUD_CLIENT_IP_HEADER"),
 		githubClientId: Config.String("GITHUB_CLIENT_ID"),
 		githubClientSecret: Config.Redacted("GITHUB_CLIENT_SECRET"),
 		googleClientId: Config.String("GOOGLE_CLIENT_ID"),
@@ -34,8 +36,14 @@ export const cloudAuthSettings = Effect.gen(function* () {
 		return yield* new AuthConfigurationError({ message: "BETTER_AUTH_URL must use HTTPS outside local development" });
 	if (!/^postgres(?:ql)?:\/\//.test(Redacted.value(values.databaseUrl)))
 		return yield* new AuthConfigurationError({ message: "CLOUD_DATABASE_URL must use PostgreSQL" });
-	if (Redacted.value(values.authSecret).length < 32)
-		return yield* new AuthConfigurationError({ message: "BETTER_AUTH_SECRET must contain at least 32 characters" });
+	const authSecret = Redacted.value(values.authSecret);
+	if (authSecret.length < 32 || new Set(authSecret).size < 12)
+		return yield* new AuthConfigurationError({
+			message: "BETTER_AUTH_SECRET must be a high-entropy secret with at least 32 characters",
+		});
+	const clientIpHeader = values.clientIpHeader.trim().toLowerCase();
+	if (!/^[a-z0-9-]+$/.test(clientIpHeader))
+		return yield* new AuthConfigurationError({ message: "CLOUD_CLIENT_IP_HEADER must be one HTTP header name" });
 	if (
 		!values.githubClientId.trim() ||
 		!Redacted.value(values.githubClientSecret).trim() ||
@@ -47,6 +55,7 @@ export const cloudAuthSettings = Effect.gen(function* () {
 		databaseUrl: values.databaseUrl,
 		publicOrigin: values.publicUrl.origin,
 		authSecret: values.authSecret,
+		clientIpHeader,
 		githubClientId: values.githubClientId,
 		githubClientSecret: values.githubClientSecret,
 		googleClientId: values.googleClientId,

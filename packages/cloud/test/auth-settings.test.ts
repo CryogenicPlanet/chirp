@@ -6,6 +6,7 @@ const environment = {
 	CLOUD_DATABASE_URL: "postgres://cloud:secret@db.example/cloud",
 	BETTER_AUTH_URL: "https://cloud.chirp.wiki",
 	BETTER_AUTH_SECRET: "a-secure-auth-secret-with-32-characters",
+	CLOUD_CLIENT_IP_HEADER: "fly-client-ip",
 	GITHUB_CLIENT_ID: "github-client",
 	GITHUB_CLIENT_SECRET: "github-secret",
 	GOOGLE_CLIENT_ID: "google-client",
@@ -28,9 +29,10 @@ describe("cloud auth settings", () => {
 		}
 	});
 
-	test("rejects a URL path and a short signing secret", async () => {
+	test("rejects a URL path and weak signing secrets", async () => {
 		expect(Exit.isFailure(await load({ ...environment, BETTER_AUTH_URL: "https://cloud.chirp.wiki/auth" }))).toBe(true);
 		expect(Exit.isFailure(await load({ ...environment, BETTER_AUTH_SECRET: "short" }))).toBe(true);
+		expect(Exit.isFailure(await load({ ...environment, BETTER_AUTH_SECRET: "a".repeat(64) }))).toBe(true);
 	});
 
 	test("rejects insecure public origins and non-PostgreSQL control-plane stores", async () => {
@@ -38,5 +40,11 @@ describe("cloud auth settings", () => {
 		expect(
 			Exit.isFailure(await load({ ...environment, CLOUD_DATABASE_URL: "mysql://cloud:secret@db.example/cloud" })),
 		).toBe(true);
+	});
+
+	test("rejects an invalid authoritative client IP header", async () => {
+		expect(Exit.isFailure(await load({ ...environment, CLOUD_CLIENT_IP_HEADER: "fly-client-ip, x-forwarded-for" }))).toBe(
+			true,
+		);
 	});
 });

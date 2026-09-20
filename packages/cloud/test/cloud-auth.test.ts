@@ -13,6 +13,7 @@ const settings: CloudAuthSettings = {
 	databaseUrl: Redacted.make(databaseUrl),
 	publicOrigin: "https://cloud.test",
 	authSecret: Redacted.make("test-auth-secret-with-at-least-32-characters"),
+	clientIpHeader: "fly-client-ip",
 	githubClientId: "github-client",
 	githubClientSecret: Redacted.make("github-secret"),
 	googleClientId: "google-client",
@@ -137,6 +138,14 @@ describe.skipIf(!realPostgres)("CloudAuth", () => {
 		expect(callback.status).toBe(302);
 		expect(callback.headers.get("location")).toBe("/");
 		const sessionCookies = cookies(callback);
+		const sessionCookie = callback.headers
+			.getSetCookie()
+			.find((cookie) => cookie.startsWith("__Host-chirp-cloud.session_token="));
+		expect(sessionCookie).toBeDefined();
+		expect(sessionCookie).toContain("Path=/");
+		expect(sessionCookie).toContain("Secure");
+		expect(sessionCookie).toContain("HttpOnly");
+		expect(sessionCookie).not.toContain("Domain=");
 		const session = await handle(
 			new Request("https://cloud.test/api/auth/get-session", { headers: { cookie: sessionCookies } }),
 		);
@@ -232,7 +241,7 @@ describe.skipIf(!realPostgres)("CloudAuth", () => {
 		}
 	});
 
-	test("returns a bounded retry interval from PostgreSQL rate-limit state", async () => {
+	test("rate limits authoritative client IPs independently with a bounded retry interval", async () => {
 		await runFresh(migrateCloudDatabase);
 		const responses: Response[] = [];
 		for (let attempt = 0; attempt < 4; attempt += 1)
@@ -240,12 +249,31 @@ describe.skipIf(!realPostgres)("CloudAuth", () => {
 				await handle(
 					new Request("https://cloud.test/api/auth/sign-in/social", {
 						method: "POST",
-						headers: { "content-type": "application/json", origin: "https://cloud.test" },
+					headers: {
+						"content-type": "application/json",
+						origin: "https://cloud.test",
+						"fly-client-ip": "192.0.2.1",
+					},
 						body: json({ provider: "github", callbackURL: "/" }),
 					}),
 				),
 			);
 		expect(responses.map((response) => response.status)).toEqual([200, 200, 200, 429]);
+		expect(
+			(
+				await handle(
+					new Request("https://cloud.test/api/auth/sign-in/social", {
+						method: "POST",
+						headers: {
+							"content-type": "application/json",
+							origin: "https://cloud.test",
+							"fly-client-ip": "198.51.100.2",
+						},
+						body: json({ provider: "github", callbackURL: "/" }),
+					}),
+				)
+			).status,
+		).toBe(200);
 		const retryAfter = Number(responses[3]?.headers.get("x-retry-after"));
 		expect(retryAfter).toBeGreaterThan(0);
 		expect(retryAfter).toBeLessThanOrEqual(10);

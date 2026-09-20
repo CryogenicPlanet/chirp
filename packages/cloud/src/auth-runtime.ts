@@ -29,4 +29,7 @@ declare global {
 const live = (globalThis.chirpCloudAuthRuntime ??= makeAuthRequestRuntime(cloudAuthSettings));
 
 export const handleAuthRequest = live.handle;
-export const disposeAuthRequestRuntime = live.dispose;
+export const disposeAuthRequestRuntime = async () => {
+	if (globalThis.chirpCloudAuthRuntime === live) globalThis.chirpCloudAuthRuntime = undefined;
+	await live.dispose();
+};

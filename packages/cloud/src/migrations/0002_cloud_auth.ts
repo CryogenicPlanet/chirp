@@ -63,7 +63,7 @@ export const effect = (database: DatabaseClient) =>
 			"publicKey" TEXT NOT NULL,
 			"userId" TEXT NOT NULL REFERENCES "user" ("id") ON DELETE CASCADE,
 			"credentialID" TEXT NOT NULL,
-			counter INTEGER NOT NULL,
+			counter BIGINT NOT NULL,
 			"deviceType" TEXT NOT NULL,
 			"backedUp" BOOLEAN NOT NULL,
 			transports TEXT,

@@ -11,6 +11,7 @@ const settings: CloudAuthSettings = {
 	databaseUrl: Redacted.make(databaseUrl),
 	publicOrigin: "https://cloud.test",
 	authSecret: Redacted.make("test-auth-secret-with-at-least-32-characters"),
+	clientIpHeader: "fly-client-ip",
 	githubClientId: "github-client",
 	githubClientSecret: Redacted.make("github-secret"),
 	googleClientId: "google-client",

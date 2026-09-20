@@ -61,7 +61,19 @@ const make = (settings: CloudAuthSettings) =>
 				transaction: true,
 			}),
 			trustedOrigins: [settings.publicOrigin],
-			advanced: { disableOriginCheck: false, disableCSRFCheck: false },
+			advanced: {
+				disableOriginCheck: false,
+				disableCSRFCheck: false,
+				useSecureCookies: false,
+				defaultCookieAttributes: { secure: true },
+				ipAddress: { ipAddressHeaders: [settings.clientIpHeader] },
+				cookies: {
+					session_token: {
+						name: "__Host-chirp-cloud.session_token",
+						attributes: { secure: true, httpOnly: true, sameSite: "lax", path: "/" },
+					},
+				},
+			},
 			rateLimit: { enabled: true, storage: "database" },
 			socialProviders: {
 				github: {
