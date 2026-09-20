@@ -2,10 +2,10 @@
 
 > This file is not authoritative and does not need line-by-line product review. It records
 > evidence, rejected options, risks, and implementation ideas. It adds no product or
-> implementation requirements, including through its headings or checklists. Product intent
-> lives in [`product-intent.md`](product-intent.md); settled choices live in
-> [`decisions.md`](decisions.md). When either is silent or conflicts with this file, this file
-> has no authority.
+> implementation requirements, including through its headings or checklists. Product direction
+> lives in the repository [`README.md`](../../README.md), implemented behavior lives in the code
+> beside this file, and quoted owner decisions live in [`SPEC.md`](../../SPEC.md). When any of
+> those are silent or conflict with this file, this file has no authority.
 
 Research checked 2026-09-19 against Chirp commit `fde8ea4`, Alchemy commit `fdec4ccf`,
 and Distilled commit `5410084`.
