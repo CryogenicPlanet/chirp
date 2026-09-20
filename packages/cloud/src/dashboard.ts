@@ -1,7 +1,7 @@
 import { desc, eq, getTableColumns } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import type { Board } from "./board.ts";
-import { Boards, maxBoardsPerOwner } from "./boards.ts";
+import { Boards, maxListedBoardsPerOwner } from "./boards.ts";
 import { Database } from "./database.ts";
 import type { CreateDashboardBoard, DashboardBoard, DashboardPhase } from "./dashboard-contract.ts";
 import type { Deployment } from "./deployment.ts";
@@ -98,13 +98,14 @@ const make = Effect.gen(function* () {
 				.leftJoin(latestProvision, eq(latestProvision.board_id, boardTable.id))
 				.where(eq(boardTable.owner_id, ownerId))
 				.orderBy(desc(boardTable.created_at), desc(boardTable.id))
-				.limit(maxBoardsPerOwner)
+				.limit(maxListedBoardsPerOwner + 1)
 				.pipe(
-					Effect.map((rows) =>
-						rows.map(({ board, deployment, operation }) =>
-							view(board, deployment ?? undefined, operation ?? undefined),
-						),
-					),
+					Effect.map((rows) => ({
+						boards: rows
+							.slice(0, maxListedBoardsPerOwner)
+							.map(({ board, deployment, operation }) => view(board, deployment ?? undefined, operation ?? undefined)),
+						truncated: rows.length > maxListedBoardsPerOwner,
+					})),
 				),
 		get: (ownerId: string, boardId: string) =>
 			boards.get(ownerId, boardId).pipe(

@@ -21,7 +21,7 @@ const session = { user: { id: "user-1", name: "Owner", email: "owner@example.com
 const dependencies = () => ({
 	getSession: vi.fn(async (): Promise<typeof session | null> => session),
 	getPublicOrigin: vi.fn(async () => "https://cloud.chirp.wiki"),
-	list: vi.fn(async () => [board]),
+	list: vi.fn(async () => ({ boards: [board], truncated: false })),
 	get: vi.fn(async () => Option.some(board)),
 	create: vi.fn(
 		async (): Promise<
@@ -49,7 +49,7 @@ describe("dashboard HTTP", () => {
 		expect(response.status).toBe(200);
 		expect(response.headers.get("cache-control")).toBe("no-store");
 		expect(deps.list).toHaveBeenCalledWith("user-1");
-		expect(await response.json()).toEqual({ boards: [board] });
+		expect(await response.json()).toEqual({ boards: [board], truncated: false });
 	});
 
 	test("returns the same 404 for missing and foreign board identifiers", async () => {

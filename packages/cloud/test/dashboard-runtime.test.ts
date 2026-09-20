@@ -33,7 +33,7 @@ describe("dashboard request runtime", () => {
 					Effect.sync(() => {
 						builds += 1;
 						return Dashboard.of({
-							list: () => Effect.succeed([board]),
+							list: () => Effect.succeed({ boards: [board], truncated: false }),
 							get: () => Effect.succeedSome(board),
 							create: () => Effect.succeed(board),
 						});

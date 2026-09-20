@@ -25,7 +25,11 @@ export const DashboardBoard = Schema.Struct({
 });
 export type DashboardBoard = typeof DashboardBoard.Type;
 
-export const DashboardBoardsResponse = Schema.Struct({ boards: Schema.Array(DashboardBoard) });
+export const DashboardBoardsResponse = Schema.Struct({
+	boards: Schema.Array(DashboardBoard),
+	truncated: Schema.Boolean,
+});
+export type DashboardBoardList = typeof DashboardBoardsResponse.Type;
 
 export const DashboardCreateRequest = Schema.Struct({
 	name: Schema.String,

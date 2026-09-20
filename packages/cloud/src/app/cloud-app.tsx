@@ -3,7 +3,12 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { DashboardBoardResponse, DashboardBoardsResponse, type DashboardBoard } from "../dashboard-contract.ts";
+import {
+	DashboardBoardResponse,
+	DashboardBoardsResponse,
+	type DashboardBoard,
+	type DashboardBoardList,
+} from "../dashboard-contract.ts";
 import { AuthButtons } from "./auth-buttons.tsx";
 import { dashboardErrorMessage, readDashboardResponse } from "./dashboard-response.ts";
 import { type CloudClientUser, DashboardShell } from "./dashboard-shell.tsx";
@@ -19,7 +24,7 @@ export function CloudApp({
 	readonly sessionUser: CloudClientUser | null;
 }) {
 	const router = useRouter();
-	const [boards, setBoards] = useState<ReadonlyArray<DashboardBoard>>();
+	const [listing, setListing] = useState<DashboardBoardList>();
 	const [loadError, setLoadError] = useState<string>();
 	const [createError, setCreateError] = useState<string>();
 	const [creating, setCreating] = useState(false);
@@ -29,8 +34,7 @@ export function CloudApp({
 		setLoadError(undefined);
 		fetch("/api/boards", { cache: "no-store", signal: signal ?? null })
 			.then((response) => readDashboardResponse(response, DashboardBoardsResponse))
-			.then(({ boards }) => boards)
-			.then(setBoards)
+			.then(setListing)
 			.catch((error: unknown) => {
 				if (error instanceof DOMException && error.name === "AbortError") return;
 				setLoadError(dashboardErrorMessage(error));
@@ -65,6 +69,7 @@ export function CloudApp({
 			.catch((error: unknown) => setCreateError(dashboardErrorMessage(error)))
 			.finally(() => setCreating(false));
 	};
+	const boards: ReadonlyArray<DashboardBoard> | undefined = listing?.boards;
 
 	if (!sessionUser)
 		return (
@@ -164,6 +169,14 @@ export function CloudApp({
 							Try again
 						</button>
 					</div>
+				) : null}
+				{listing?.truncated ? (
+					<p
+						aria-live="polite"
+						className="mb-3 rounded-md border border-warning-border bg-warning-surface px-4 py-3.5 text-xs leading-[1.55] text-warning"
+					>
+						Only the newest boards are shown. Older boards are still running; contact support to access them.
+					</p>
 				) : null}
 				{!boards && loadError ? null : !boards ? (
 					<div aria-label="Loading boards" className="grid gap-3 min-[761px]:grid-cols-2">

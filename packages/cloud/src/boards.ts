@@ -6,6 +6,7 @@ import { IdempotencyConflict } from "./operation.ts";
 import { boardOperations, boards } from "./schema.ts";
 
 export const maxBoardsPerOwner = 5;
+export const maxListedBoardsPerOwner = 100;
 export class BoardQuotaExceeded extends Data.TaggedError("BoardQuotaExceeded")<{}> {}
 
 const encodeRequestHash = Schema.encodeSync(
@@ -134,7 +135,7 @@ const make = Effect.gen(function* () {
 				.from(boards)
 				.where(eq(boards.owner_id, ownerId))
 				.orderBy(desc(boards.created_at), desc(boards.id))
-				.limit(maxBoardsPerOwner),
+				.limit(maxListedBoardsPerOwner),
 	};
 });
 

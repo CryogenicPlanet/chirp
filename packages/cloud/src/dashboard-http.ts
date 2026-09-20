@@ -63,7 +63,7 @@ export const makeDashboardHttp = (dependencies: DashboardHttpDependencies) => ({
 		if (ownerId === null) return error(401, "unauthorized");
 		if (ownerId === undefined) return error(503, "authentication_unavailable");
 		try {
-			return Response.json({ boards: await dependencies.list(ownerId) }, { headers: noStore });
+			return Response.json(await dependencies.list(ownerId), { headers: noStore });
 		} catch (cause) {
 			await Effect.runPromise(Effect.logError("Chirp Cloud dashboard list failed", cause));
 			return error(503, "dashboard_unavailable");

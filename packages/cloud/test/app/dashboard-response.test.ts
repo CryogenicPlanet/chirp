@@ -16,7 +16,9 @@ describe("dashboard response boundary", () => {
 	});
 
 	test("preserves validated responses", async () => {
-		expect(await readDashboardResponse(Response.json({ boards: [] }), DashboardBoardsResponse)).toEqual({ boards: [] });
+		expect(
+			await readDashboardResponse(Response.json({ boards: [], truncated: false }), DashboardBoardsResponse),
+		).toEqual({ boards: [], truncated: false });
 	});
 
 	test("shows actionable status and quota errors without rendering the server body", async () => {
