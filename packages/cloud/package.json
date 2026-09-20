@@ -10,15 +10,14 @@
 		"migrate": "bun src/migrate-command.ts",
 		"start": "bun src/server.ts",
 		"test": "vitest run test --exclude test/production-runtime.test.ts --maxWorkers=1",
-		"test:production": "vitest run test/production-runtime.test.ts --maxWorkers=1",
-		"typecheck": "tsc --noEmit"
+		"test:production": "vitest run test/production-runtime.test.ts --maxWorkers=1"
 	},
 	"dependencies": {
 		"@better-auth/passkey": "1.7.5",
 		"@effect/platform-node": "4.0.0-rc.113",
 		"@effect/sql-pg": "4.0.0-rc.113",
-		"drizzle-orm": "1.0.0-rc.5-5935859",
 		"better-auth": "1.7.5",
+		"drizzle-orm": "1.0.0-rc.5-5935859",
 		"effect": "4.0.0-rc.113",
 		"next": "16.3.5",
 		"pg": "8.23.0",

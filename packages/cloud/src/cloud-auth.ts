@@ -1,8 +1,11 @@
 import { passkey } from "@better-auth/passkey";
 import { betterAuth, getCurrentAdapter } from "better-auth";
 import { getOAuthState } from "better-auth/api";
+import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { drizzle } from "drizzle-orm/node-postgres";
 import { Context, Crypto, Data, DateTime, Effect, Layer, Redacted } from "effect";
 import { Pool, types as pgTypes } from "pg";
+import { authSchema } from "./auth-schema.ts";
 import type { CloudAuthSettings } from "./auth-settings.ts";
 import { checkInvitation, InvitationPolicyError } from "./invitation-policy.ts";
 import { invitationPlugin } from "./invitation-plugin.ts";
@@ -47,11 +50,16 @@ const make = (settings: CloudAuthSettings) =>
 					Effect.orDie,
 				),
 		);
+		const database = drizzle({ client: pool });
 		const auth = betterAuth({
 			appName: "Chirp Cloud",
 			baseURL: settings.publicOrigin,
 			secret: Redacted.value(settings.authSecret),
-			database: pool,
+			database: drizzleAdapter(database, {
+				provider: "pg",
+				schema: authSchema,
+				transaction: true,
+			}),
 			trustedOrigins: [settings.publicOrigin],
 			advanced: { disableOriginCheck: false, disableCSRFCheck: false },
 			rateLimit: { enabled: true, storage: "database" },

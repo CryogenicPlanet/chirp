@@ -1,7 +1,10 @@
 import { betterAuth } from "better-auth";
+import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { drizzle } from "drizzle-orm/node-postgres";
 import { Data, DateTime } from "effect";
 import { Pool } from "pg";
 import { describe, expect, test } from "vitest";
+import { authSchema } from "../src/auth-schema.ts";
 import { invitationPlugin } from "../src/invitation-plugin.ts";
 import { migrateCloudDatabase } from "../src/migrations.ts";
 import { realPostgres, runFresh } from "./fixture.ts";
@@ -12,7 +15,11 @@ const auth = (pool: Pool) =>
 	betterAuth({
 		baseURL: "https://cloud.test",
 		secret: "test-auth-secret-with-at-least-32-characters",
-		database: pool,
+		database: drizzleAdapter(drizzle({ client: pool }), {
+			provider: "pg",
+			schema: authSchema,
+			transaction: true,
+		}),
 		plugins: [invitationPlugin],
 	});
 type Adapter = Awaited<ReturnType<typeof auth>["$context"]>["adapter"];

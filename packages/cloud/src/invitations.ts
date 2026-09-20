@@ -1,15 +1,15 @@
 import { Buffer } from "node:buffer";
-import { Context, Crypto, Data, DateTime, Effect, Layer, Schema } from "effect";
-import { SqlClient } from "effect/unstable/sql";
+import { Context, Crypto, Data, DateTime, Effect, Layer } from "effect";
+import { cloudInvitation } from "./auth-schema.ts";
+import { Database } from "./database.ts";
 import type { InvitationToken } from "./invitation-token.ts";
 
-export const CloudInvitation = Schema.Struct({
-	id: Schema.String,
-	email: Schema.String,
-	expires_at: Schema.DateFromString,
-	created_at: Schema.DateFromString,
-});
-export type CloudInvitation = typeof CloudInvitation.Type;
+export interface CloudInvitation {
+	readonly id: string;
+	readonly email: string;
+	readonly expires_at: Date;
+	readonly created_at: Date;
+}
 
 export interface IssuedInvitation {
 	readonly invitation: CloudInvitation;
@@ -20,10 +20,8 @@ export class InvalidInvitation extends Data.TaggedError("InvalidInvitation")<{
 	readonly message: string;
 }> {}
 
-const invitations = Schema.decodeUnknownEffect(Schema.Array(CloudInvitation));
-
 const make = Effect.gen(function* () {
-	const sql = yield* SqlClient.SqlClient;
+	const database = yield* Database;
 	const crypto = yield* Crypto.Crypto;
 	return {
 		issue: (email: string, validForMilliseconds: number) =>
@@ -40,13 +38,21 @@ const make = Effect.gen(function* () {
 				for (const byte of digest) tokenDigest += byte.toString(16).padStart(2, "0");
 				const createdAt = DateTime.toDateUtc(now);
 				const expiresAt = DateTime.toDateUtc(DateTime.addDuration(now, validForMilliseconds));
-				const created = yield* sql`INSERT INTO cloud_invitations (
-					id, token_digest, email, expires_at, created_at
-				) VALUES (
-					${id}, ${tokenDigest}, ${normalizedEmail}, ${expiresAt}, ${createdAt}
-				) RETURNING id, email, expires_at::text AS expires_at, created_at::text AS created_at`.pipe(
-					Effect.flatMap(invitations),
-				);
+				const created = yield* database
+					.insert(cloudInvitation)
+					.values({
+						id,
+						token_digest: tokenDigest,
+						email: normalizedEmail,
+						expires_at: expiresAt,
+						created_at: createdAt,
+					})
+					.returning({
+						id: cloudInvitation.id,
+						email: cloudInvitation.email,
+						expires_at: cloudInvitation.expires_at,
+						created_at: cloudInvitation.created_at,
+					});
 				const invitation = created[0];
 				if (!invitation) return yield* Effect.die("Invitation insert returned no row");
 				return { invitation, token } satisfies IssuedInvitation;
