@@ -14,7 +14,6 @@ const make = Effect.gen(function* () {
 				.execute(HttpClientRequest.get(`https://${hostname}${path}`))
 				.pipe(
 					Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
-					Effect.timeout("15 seconds"),
 					Effect.mapError(() => new EdgeProbeError({ path, reason: "network" })),
 					Effect.flatMap((response) =>
 						response.arrayBuffer.pipe(
@@ -28,6 +27,8 @@ const make = Effect.gen(function* () {
 							),
 						),
 					),
+					Effect.timeout("15 seconds"),
+					Effect.catchTag("TimeoutError", () => Effect.fail(new EdgeProbeError({ path, reason: "network" }))),
 				),
 		);
 	return {

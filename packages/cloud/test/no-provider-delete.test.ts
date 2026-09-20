@@ -2,8 +2,8 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 
-describe("provider safety boundary", () => {
-	test("contains no Fly resource deletion path", async () => {
+describe("provider deletion source tripwire", () => {
+	test("flags known deletion names and literal DELETE requests in src", async () => {
 		const root = join(import.meta.dirname, "../src");
 		const files = (await readdir(root, { recursive: true, withFileTypes: true }))
 			.filter((entry) => entry.isFile() && /\.tsx?$/.test(entry.name))

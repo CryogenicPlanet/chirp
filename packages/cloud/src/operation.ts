@@ -1,10 +1,9 @@
 import { Data, Schema } from "effect";
 
-export const OperationKind = Schema.Literals(["provision", "start", "stop", "restart", "backup"]);
+export const OperationKind = Schema.Literals(["provision", "backup"]);
 export type OperationKind = typeof OperationKind.Type;
 
 export const OperationState = Schema.Literals(["queued", "running", "succeeded", "failed"]);
-export type OperationState = typeof OperationState.Type;
 
 export const Operation = Schema.Struct({
 	id: Schema.String,
@@ -15,7 +14,6 @@ export const Operation = Schema.Struct({
 	requested_by: Schema.String,
 	idempotency_key: Schema.String,
 	request_hash: Schema.String,
-	desired_revision: Schema.Int,
 	available_at: Schema.DateFromString,
 	attempt: Schema.Int,
 	lease_token: Schema.NullOr(Schema.String),
@@ -44,6 +42,10 @@ export class IdempotencyConflict extends Data.TaggedError("IdempotencyConflict")
 }> {}
 
 export class OperationAlreadyActive extends Data.TaggedError("OperationAlreadyActive")<{
+	readonly boardId: string;
+}> {}
+
+export class DeploymentRetryRequired extends Data.TaggedError("DeploymentRetryRequired")<{
 	readonly boardId: string;
 }> {}
 

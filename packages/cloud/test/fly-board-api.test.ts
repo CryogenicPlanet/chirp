@@ -1,4 +1,5 @@
-import { Effect, Exit, Layer, Option, Redacted, Schema } from "effect";
+import { Effect, Exit, Fiber, Layer, Option, Redacted, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { describe, expect, test } from "vitest";
 import { FlyBoardApi, flyBoardApiLayer } from "../src/fly-board-api.ts";
@@ -72,6 +73,115 @@ const run = <A, E>(effect: Effect.Effect<A, E, FlyBoardApi>, handle: Parameters<
 	);
 
 describe("FlyBoardApi", () => {
+	test("times out stalled mutation bodies without leaking partial provider data", async () => {
+		await run(
+			Effect.gen(function* () {
+				const api = yield* FlyBoardApi;
+				const pending = yield* api.allocateSharedIp("chirp-board").pipe(Effect.result, Effect.forkChild);
+				yield* TestClock.adjust("76 seconds");
+				expect(pending.pollUnsafe()).toBeDefined();
+				const result = yield* Fiber.join(pending);
+				expect(result).toMatchObject({
+					failure: { operation: "allocate_shared_ip", reason: "transport", status: null },
+				});
+				expect(JSON.stringify(result)).not.toContain("private-provider-data");
+			}).pipe(Effect.provide(TestClock.layer())),
+			(request, _url, signal) => {
+				const stream = new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(new TextEncoder().encode('{"private":"private-provider-data"'));
+						signal.addEventListener("abort", () => controller.error(new Error("private-provider-data")), {
+							once: true,
+						});
+					},
+				});
+				return Effect.succeed(
+					HttpClientResponse.fromWeb(
+						request,
+						new Response(stream, { headers: { "content-type": "application/json" } }),
+					),
+				);
+			},
+		);
+	});
+
+	test("uses current Machines REST IP and certificate contracts", async () => {
+		const seen: Array<{ method: string; url: string; body?: Schema.Json }> = [];
+		const ip = { ip: "66.241.124.100", shared: true };
+		const certificate = {
+			hostname: "board.boards.chirp.wiki",
+			acme_requested: true,
+			configured: true,
+			status: "active",
+			certificates: [{ source: "fly", status: "active" }],
+			validation: { ownership_txt_configured: true },
+			dns_requirements: {
+				a: [ip.ip],
+				ownership: { name: "_fly-ownership.board.boards.chirp.wiki", app_value: "app-123" },
+			},
+		};
+		await run(
+			Effect.gen(function* () {
+				const api = yield* FlyBoardApi;
+				expect(yield* api.listIpAssignments("chirp-board")).toEqual([ip]);
+				expect(yield* api.allocateSharedIp("chirp-board")).toEqual(ip);
+				expect(Option.getOrThrow(yield* api.getCertificate("chirp-board", certificate.hostname))).toEqual(certificate);
+				expect(yield* api.createCertificate("chirp-board", certificate.hostname)).toEqual(certificate);
+				expect(yield* api.checkCertificate("chirp-board", certificate.hostname)).toEqual({
+					...certificate,
+					dns_records: { a: [ip.ip], aaaa: null },
+				});
+			}),
+			(request) => {
+				expect(request.headers.authorization).toBe("Bearer private-fly-token");
+				seen.push({
+					method: request.method,
+					url: request.url,
+					...(request.body._tag === "Uint8Array" ? { body: jsonBody(request) } : {}),
+				});
+				const value = request.url.endsWith("ip_assignments")
+					? request.method === "GET"
+						? { ips: [ip] }
+						: ip
+					: request.url.endsWith("/check")
+						? { ...certificate, dns_records: { a: [ip.ip], aaaa: null } }
+						: certificate;
+				return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(value)));
+			},
+		);
+		expect(seen).toEqual([
+			{ method: "GET", url: "https://fly.test/v1/apps/chirp-board/ip_assignments" },
+			{ method: "POST", url: "https://fly.test/v1/apps/chirp-board/ip_assignments", body: { type: "shared_v4" } },
+			{ method: "GET", url: `https://fly.test/v1/apps/chirp-board/certificates/${certificate.hostname}` },
+			{
+				method: "POST",
+				url: "https://fly.test/v1/apps/chirp-board/certificates/acme",
+				body: { hostname: certificate.hostname },
+			},
+			{ method: "POST", url: `https://fly.test/v1/apps/chirp-board/certificates/${certificate.hostname}/check` },
+		]);
+	});
+
+	test("treats missing certificates as absent but preserves certificate conflicts and rate limits", async () => {
+		expect(
+			Option.isNone(
+				await run(
+					FlyBoardApi.use((api) => api.getCertificate("app", "board.test")),
+					(request) => Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status: 404 }))),
+				),
+			),
+		).toBe(true);
+		for (const status of [409, 429, 503]) {
+			const result = await run(
+				Effect.result(FlyBoardApi.use((api) => api.createCertificate("app", "board.test"))),
+				(request) =>
+					Effect.succeed(HttpClientResponse.fromWeb(request, new Response("secret-provider-body", { status }))),
+			);
+			expect(result).toMatchObject({ failure: { reason: "status", status } });
+			expect(JSON.stringify(result)).not.toContain("secret-provider-body");
+		}
+	});
+
 	test("sends authenticated create requests with the exact safe shape", async () => {
 		const seen: Array<{ readonly method: string; readonly url: string; readonly body: Schema.Json }> = [];
 		await run(
@@ -146,23 +256,17 @@ describe("FlyBoardApi", () => {
 		expect(attempts).toBe(1);
 	});
 
-	test("passes current and wait versions and exposes no delete operations", async () => {
+	test("passes wait versions and exposes no delete operations", async () => {
 		const requests: Array<{ readonly url: string; readonly body?: Schema.Json }> = [];
 		await run(
 			Effect.gen(function* () {
 				const api = yield* FlyBoardApi;
-				yield* api.updateMachine({
-					appName: "chirp-board",
-					machineId: "machine-id",
-					name: "board-machine",
-					region: "sjc",
-					config,
-					currentVersion: "version-1",
-				});
 				yield* api.waitMachine("chirp-board", "machine-id", "started", "version-2");
 				expect("deleteApp" in api).toBe(false);
 				expect("deleteMachine" in api).toBe(false);
 				expect("deleteVolume" in api).toBe(false);
+				expect("listSecrets" in api).toBe(false);
+				expect("updateSecrets" in api).toBe(false);
 			}),
 			(request) => {
 				requests.push({
@@ -179,8 +283,7 @@ describe("FlyBoardApi", () => {
 				);
 			},
 		);
-		expect(requests[0]?.body).toMatchObject({ current_version: "version-1" });
-		expect(requests[1]?.url).toBe(
+		expect(requests[0]?.url).toBe(
 			"https://fly.test/v1/apps/chirp-board/machines/machine-id/wait?state=started&version=version-2&timeout=60",
 		);
 	});
@@ -248,21 +351,12 @@ describe("FlyBoardApi", () => {
 			Effect.gen(function* () {
 				const api = yield* FlyBoardApi;
 				expect(yield* api.listVolumeSnapshots("chirp-board", "volume-id")).toEqual(snapshots);
-				expect(yield* api.listSecrets("chirp-board")).toEqual([]);
 			}),
 			(request) => {
 				urls.push(request.url);
-				return Effect.succeed(
-					HttpClientResponse.fromWeb(
-						request,
-						Response.json(request.url.includes("/snapshots") ? snapshots : { secrets: [] }),
-					),
-				);
+				return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(snapshots)));
 			},
 		);
-		expect(urls).toEqual([
-			"https://fly.test/v1/apps/chirp-board/volumes/volume-id/snapshots",
-			"https://fly.test/v1/apps/chirp-board/secrets?show_secrets=false",
-		]);
+		expect(urls).toEqual(["https://fly.test/v1/apps/chirp-board/volumes/volume-id/snapshots"]);
 	});
 });

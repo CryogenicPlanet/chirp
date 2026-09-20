@@ -1,4 +1,5 @@
-import { Effect, Layer } from "effect";
+import { Effect, Fiber, Layer } from "effect";
+import { TestClock } from "effect/testing";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { describe, expect, test } from "vitest";
 import { EdgeProbe, edgeProbeLayer } from "../src/edge-probe.ts";
@@ -11,6 +12,29 @@ const run = <A, E>(effect: Effect.Effect<A, E, EdgeProbe>, handle: Parameters<ty
 	);
 
 describe("EdgeProbe", () => {
+	test("times out after successful headers when the response body stalls", async () => {
+		await run(
+			Effect.gen(function* () {
+				const pending = yield* EdgeProbe.use((probe) => probe.health("board.example.com")).pipe(
+					Effect.result,
+					Effect.forkChild,
+				);
+				yield* TestClock.adjust("16 seconds");
+				expect(pending.pollUnsafe()).toBeDefined();
+				expect(yield* Fiber.join(pending)).toMatchObject({ failure: { path: "/health", reason: "network" } });
+			}).pipe(Effect.provide(TestClock.layer())),
+			(request, _url, signal) => {
+				const stream = new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(new TextEncoder().encode("partial health response"));
+						signal.addEventListener("abort", () => controller.error(new Error("interrupted")), { once: true });
+					},
+				});
+				return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(stream)));
+			},
+		);
+	});
+
 	test("observes boot health and a public child route through the exact hostname", async () => {
 		const urls: string[] = [];
 		await run(

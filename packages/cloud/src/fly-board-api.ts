@@ -4,10 +4,12 @@ import {
 	FlyAppCreated,
 	FlyAppDetails,
 	FlyApps,
+	FlyCertificate,
+	FlyCertificateCheck,
+	FlyIpAssignment,
+	FlyIpAssignments,
 	FlyMachine,
 	type FlyMachineConfig,
-	FlySecrets,
-	FlySecretsUpdate,
 	FlyVolume,
 	FlyVolumeSnapshot,
 	FlyWaitResult,
@@ -42,12 +44,6 @@ export interface CreateFlyMachine {
 	readonly name: string;
 	readonly region: string;
 	readonly config: FlyMachineConfig;
-	readonly minSecretsVersion?: number;
-}
-
-export interface UpdateFlyMachine extends CreateFlyMachine {
-	readonly machineId: string;
-	readonly currentVersion: string;
 }
 
 const make = (settings: FlyApiSettings) =>
@@ -69,9 +65,12 @@ const make = (settings: FlyApiSettings) =>
 				HttpClient.withScope(client)
 					.execute(outgoing)
 					.pipe(
-						Effect.timeout("75 seconds"),
 						Effect.mapError(() => new FlyApiError({ operation, reason: "transport", status: null })),
 						Effect.flatMap(consume),
+						Effect.timeout("75 seconds"),
+						Effect.catchTag("TimeoutError", () =>
+							Effect.fail(new FlyApiError({ operation, reason: "transport", status: null })),
+						),
 					),
 			);
 		const successful = (
@@ -120,6 +119,32 @@ const make = (settings: FlyApiSettings) =>
 				Effect.mapError(() => new FlyApiError({ operation: "encode", reason: "decode", status: null })),
 			);
 		return {
+			listIpAssignments: (appName: string) =>
+				json(
+					"list_ip_assignments",
+					FlyIpAssignments,
+					request("GET", `/v1/apps/${segment(appName)}/ip_assignments`),
+				).pipe(Effect.map((result) => result.ips)),
+			allocateSharedIp: (appName: string) =>
+				body(request("POST", `/v1/apps/${segment(appName)}/ip_assignments`), { type: "shared_v4" }).pipe(
+					Effect.flatMap((outgoing) => json("allocate_shared_ip", FlyIpAssignment, outgoing)),
+				),
+			getCertificate: (appName: string, hostname: string) =>
+				optional(
+					"get_certificate",
+					FlyCertificate,
+					request("GET", `/v1/apps/${segment(appName)}/certificates/${segment(hostname)}`),
+				),
+			createCertificate: (appName: string, hostname: string) =>
+				body(request("POST", `/v1/apps/${segment(appName)}/certificates/acme`), { hostname }).pipe(
+					Effect.flatMap((outgoing) => json("create_certificate", FlyCertificate, outgoing)),
+				),
+			checkCertificate: (appName: string, hostname: string) =>
+				json(
+					"check_certificate",
+					FlyCertificateCheck,
+					request("POST", `/v1/apps/${segment(appName)}/certificates/${segment(hostname)}/check`),
+				),
 			getApp: (appName: string) =>
 				optional("get_app", FlyAppDetails, request("GET", `/v1/apps/${segment(appName)}`)).pipe(
 					Effect.flatMap(
@@ -162,22 +187,6 @@ const make = (settings: FlyApiSettings) =>
 					auto_backup_enabled: true,
 					fstype: "ext4",
 				}).pipe(Effect.flatMap((outgoing) => json("create_volume", FlyVolume, outgoing))),
-			listSecrets: (appName: string) =>
-				json(
-					"list_secrets",
-					FlySecrets,
-					request("GET", `/v1/apps/${segment(appName)}/secrets?show_secrets=false`),
-				).pipe(Effect.map((result) => result.secrets ?? [])),
-			updateSecrets: (appName: string, values: Readonly<Record<string, string>>) =>
-				body(request("POST", `/v1/apps/${segment(appName)}/secrets`), { values: { ...values } }).pipe(
-					Effect.flatMap((outgoing) => json("update_secrets", FlySecretsUpdate, outgoing)),
-					Effect.flatMap((result) => {
-						const version = result.version ?? result.Version;
-						return version === undefined
-							? Effect.fail(new FlyApiError({ operation: "update_secrets", reason: "decode", status: 200 }))
-							: Effect.succeed(version);
-					}),
-				),
 			listMachines: (appName: string) =>
 				json("list_machines", Schema.Array(FlyMachine), request("GET", `/v1/apps/${segment(appName)}/machines`)),
 			getMachine: (appName: string, machineId: string) =>
@@ -186,47 +195,20 @@ const make = (settings: FlyApiSettings) =>
 					FlyMachine,
 					request("GET", `/v1/apps/${segment(appName)}/machines/${segment(machineId)}`),
 				),
-			createMachine: (input: CreateFlyMachine) => {
-				const payload: Record<string, Schema.Json> = {
+			createMachine: (input: CreateFlyMachine) =>
+				body(request("POST", `/v1/apps/${segment(input.appName)}/machines`), {
 					name: input.name,
 					region: input.region,
 					config: input.config,
 					skip_launch: true,
-				};
-				if (input.minSecretsVersion !== undefined) payload.min_secrets_version = input.minSecretsVersion;
-				return body(request("POST", `/v1/apps/${segment(input.appName)}/machines`), payload).pipe(
-					Effect.flatMap((outgoing) => json("create_machine", FlyMachine, outgoing)),
-				);
-			},
-			updateMachine: (input: UpdateFlyMachine) => {
-				const payload: Record<string, Schema.Json> = {
-					name: input.name,
-					region: input.region,
-					config: input.config,
-					current_version: input.currentVersion,
-					skip_launch: true,
-				};
-				if (input.minSecretsVersion !== undefined) payload.min_secrets_version = input.minSecretsVersion;
-				return body(
-					request("POST", `/v1/apps/${segment(input.appName)}/machines/${segment(input.machineId)}`),
-					payload,
-				).pipe(Effect.flatMap((outgoing) => json("update_machine", FlyMachine, outgoing)));
-			},
+				}).pipe(Effect.flatMap((outgoing) => json("create_machine", FlyMachine, outgoing))),
 			startMachine: (appName: string, machineId: string) =>
 				send(
 					"start_machine",
 					request("POST", `/v1/apps/${segment(appName)}/machines/${segment(machineId)}/start`),
 					(response) => discard("start_machine", response),
 				),
-			stopMachine: (appName: string, machineId: string) =>
-				body(request("POST", `/v1/apps/${segment(appName)}/machines/${segment(machineId)}/stop`), {
-					signal: "SIGTERM",
-					timeout: "30s",
-				}).pipe(
-					Effect.flatMap((outgoing) => send("stop_machine", outgoing, (response) => discard("stop_machine", response))),
-					Effect.asVoid,
-				),
-			waitMachine: (appName: string, machineId: string, state: "started" | "stopped", version: string) => {
+			waitMachine: (appName: string, machineId: string, state: "started", version: string) => {
 				const query = new URLSearchParams({ state, version, timeout: "60" });
 				return json(
 					"wait_machine",

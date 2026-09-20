@@ -45,7 +45,11 @@ const testLayer = Layer.mergeAll(boardsLayer, deploymentsLayer, invitationsLayer
 export const realPostgres = databaseUrl !== undefined;
 
 export const runFresh = <A, E>(
-	effect: Effect.Effect<A, E, Boards | Database | Deployments | Invitations | Operations | SqlClient.SqlClient>,
+	effect: Effect.Effect<
+		A,
+		E,
+		Boards | Crypto.Crypto | Database | Deployments | Invitations | Operations | SqlClient.SqlClient
+	>,
 ) =>
 	Effect.runPromise(
 		Effect.gen(function* () {

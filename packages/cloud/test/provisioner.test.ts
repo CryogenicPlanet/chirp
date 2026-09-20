@@ -1,296 +1,126 @@
-import { Effect, Layer, Option } from "effect";
+import { Clock, Effect, Option } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import { describe, expect, test } from "vitest";
 import { Boards } from "../src/boards.ts";
-import type { DeploymentState } from "../src/deployment.ts";
-import { EdgeProbe, EdgeProbeError } from "../src/edge-probe.ts";
-import { FlyApiError, FlyBoardApi } from "../src/fly-board-api.ts";
-import type { FlyApp, FlyMachine, FlyVolume } from "../src/fly-model.ts";
+import { Deployments } from "../src/deployments.ts";
 import { machineConfig } from "../src/machine-spec.ts";
 import { migrateCloudDatabase } from "../src/migrations.ts";
 import { Operations } from "../src/operations.ts";
-import { Provisioner, provisionerLayer } from "../src/provisioner.ts";
-import { Deployments } from "../src/deployments.ts";
-import type { ProvisioningSettings } from "../src/provisioning-settings.ts";
+import { Provisioner } from "../src/provisioner.ts";
 import { runFresh } from "./fixture.ts";
-
-const settings: ProvisioningSettings = {
-	organization: "chirp",
-	region: "sjc",
-	imageRef: `registry.example/chirp@sha256:${"a".repeat(64)}`,
-	boardsDomain: "boards.chirp.wiki",
-	volumeSizeGb: 1,
-};
-
-const request = {
-	owner_id: "user-1",
-	name: "Managed board",
-	storage_engine: "sqlite",
-	requested_by: "user-1",
-	idempotency_key: "provision-fly-1",
-} as const;
-const checkpoints: ReadonlyArray<Exclude<DeploymentState, "blocked">> = [
-	"requested",
-	"storage_configuration_verified",
-	"app_created",
-	"volume_created",
-	"runtime_secrets_written",
-	"machine_created",
-	"machine_started",
-	"edge_reachable",
-	"child_route_observed",
-	"provisioned",
-];
-
-const appFor = (slug: string): FlyApp => ({
-	id: "app-id",
-	name: `chirp-${slug}`,
-	network: `chirp-${slug}`,
-	organization: { slug: settings.organization },
-});
-
-const volumeFor = (slug: string): FlyVolume => ({
-	id: "volume-id",
-	name: `chirp_data_${slug}`,
-	state: "created",
-	region: settings.region,
-	encrypted: true,
-	size_gb: settings.volumeSizeGb,
-	auto_backup_enabled: true,
-	fstype: "ext4",
-});
-
-const flyUnavailable = (operation: string) => new FlyApiError({ operation, reason: "transport", status: null });
-
-const makeFakeProvider = () => {
-	let app: FlyApp | undefined;
-	const volumes: FlyVolume[] = [];
-	const machines: FlyMachine[] = [];
-	let hideAppReads = 0;
-	let failListVolumes = false;
-	let failGetVolume = false;
-	let failListMachines = false;
-	let failGetMachine = false;
-	let failCreateApp = false;
-	let rejectCreateApp = false;
-	let failCreateVolume = false;
-	let failCreateMachine = false;
-	let failHealth = false;
-	let failChildRoute = false;
-	const calls = {
-		createApp: 0,
-		createVolume: 0,
-		createMachine: 0,
-		listSecrets: 0,
-		updateSecrets: 0,
-	};
-	const fake = {
-		getApp: (name: string) =>
-			Effect.sync(() => {
-				if (app?.name !== name) return Option.none<FlyApp>();
-				if (hideAppReads > 0) {
-					hideAppReads -= 1;
-					return Option.none<FlyApp>();
-				}
-				return Option.some(app);
-			}),
-		createApp: (input: { readonly name: string; readonly organization: string; readonly network: string }) =>
-			Effect.gen(function* () {
-				calls.createApp += 1;
-				if (rejectCreateApp) {
-					rejectCreateApp = false;
-					return yield* new FlyApiError({ operation: "create_app", reason: "status", status: 400 });
-				}
-				app = { id: "app-id", name: input.name, network: input.network, organization: { slug: input.organization } };
-				if (failCreateApp) {
-					failCreateApp = false;
-					return yield* Effect.fail(flyUnavailable("create_app"));
-				}
-			}).pipe(Effect.asVoid),
-		listVolumes: (_name: string) =>
-			Effect.gen(function* () {
-				if (failListVolumes) {
-					failListVolumes = false;
-					return yield* Effect.fail(flyUnavailable("list_volumes"));
-				}
-				return volumes;
-			}),
-		getVolume: (_name: string, id: string) =>
-			Effect.gen(function* () {
-				if (failGetVolume) {
-					failGetVolume = false;
-					return yield* Effect.fail(flyUnavailable("get_volume"));
-				}
-				return Option.fromNullishOr(volumes.find((volume) => volume.id === id));
-			}),
-		createVolume: (input: {
-			readonly appName: string;
-			readonly name: string;
-			readonly region: string;
-			readonly sizeGb: number;
-		}) =>
-			Effect.gen(function* () {
-				calls.createVolume += 1;
-				const volume = { ...volumeFor(input.name.replace(/^chirp_data_/, "")), name: input.name };
-				volumes.push(volume);
-				if (failCreateVolume) {
-					failCreateVolume = false;
-					return yield* Effect.fail(flyUnavailable("create_volume"));
-				}
-				return volume;
-			}),
-		listSecrets: (_name: string) =>
-			Effect.sync(() => {
-				calls.listSecrets += 1;
-				return [];
-			}),
-		updateSecrets: (_name: string, _values: Readonly<Record<string, string>>) =>
-			Effect.sync(() => {
-				calls.updateSecrets += 1;
-				return 1;
-			}),
-		listMachines: (_name: string) =>
-			Effect.gen(function* () {
-				if (failListMachines) {
-					failListMachines = false;
-					return yield* Effect.fail(flyUnavailable("list_machines"));
-				}
-				return machines;
-			}),
-		getMachine: (_name: string, id: string) =>
-			Effect.gen(function* () {
-				if (failGetMachine) {
-					failGetMachine = false;
-					return yield* Effect.fail(flyUnavailable("get_machine"));
-				}
-				return Option.fromNullishOr(machines.find((machine) => machine.id === id));
-			}),
-		createMachine: (input: {
-			readonly appName: string;
-			readonly name: string;
-			readonly region: string;
-			readonly config: FlyMachine["config"];
-			readonly minSecretsVersion?: number;
-		}) =>
-			Effect.gen(function* () {
-				calls.createMachine += 1;
-				const machine: FlyMachine = {
-					id: "machine-id",
-					name: input.name,
-					state: "stopped",
-					region: input.region,
-					instance_id: "machine-version-1",
-					config: input.config,
-					checks: [{ status: "passing" }],
-				};
-				const volumeIndex = volumes.findIndex((volume) => volume.id === input.config.mounts[0]?.volume);
-				if (volumeIndex >= 0) volumes[volumeIndex] = { ...volumes[volumeIndex]!, attached_machine_id: machine.id };
-				machines.push(machine);
-				if (failCreateMachine) {
-					failCreateMachine = false;
-					return yield* Effect.fail(flyUnavailable("create_machine"));
-				}
-				return machine;
-			}),
-		updateMachine: () => Effect.die("unexpected machine update"),
-		startMachine: (_name: string, id: string) =>
-			Effect.sync(() => {
-				const index = machines.findIndex((machine) => machine.id === id);
-				if (index >= 0) machines[index] = { ...machines[index]!, state: "started", checks: [{ status: "passing" }] };
-			}),
-		stopMachine: () => Effect.die("unexpected machine stop"),
-		waitMachine: (_name: string, _id: string, state: "started" | "stopped", version: string) =>
-			Effect.succeed({ ok: true, state, version }),
-		listVolumeSnapshots: () => Effect.succeed([]),
-	};
-	const edge = {
-		health: (_hostname: string) =>
-			Effect.gen(function* () {
-				if (failHealth) {
-					failHealth = false;
-					return yield* Effect.fail(new EdgeProbeError({ path: "/health", reason: "network" }));
-				}
-			}).pipe(Effect.asVoid),
-		childRoute: (_hostname: string) =>
-			Effect.gen(function* () {
-				if (failChildRoute) {
-					failChildRoute = false;
-					return yield* Effect.fail(new EdgeProbeError({ path: "/init", reason: "network" }));
-				}
-			}).pipe(Effect.asVoid),
-	};
-	return {
-		fake,
-		edge,
-		calls,
-		set: {
-			app: (value: FlyApp | undefined) => {
-				app = value;
-			},
-			hideAppAfterCreate: () => {
-				hideAppReads = 1;
-			},
-			failListVolumes: () => {
-				failListVolumes = true;
-			},
-			failGetVolume: () => {
-				failGetVolume = true;
-			},
-			failListMachines: () => {
-				failListMachines = true;
-			},
-			failGetMachine: () => {
-				failGetMachine = true;
-			},
-			failCreateApp: () => {
-				failCreateApp = true;
-			},
-			rejectCreateApp: () => {
-				rejectCreateApp = true;
-			},
-			failCreateVolume: () => {
-				failCreateVolume = true;
-			},
-			failCreateMachine: () => {
-				failCreateMachine = true;
-			},
-			failHealth: () => {
-				failHealth = true;
-			},
-			failChildRoute: () => {
-				failChildRoute = true;
-			},
-			addDuplicateVolume: (slug: string) => {
-				volumes.push(volumeFor(slug));
-				volumes.push({ ...volumeFor(slug), id: "duplicate-volume-id" });
-			},
-			volume: (value: FlyVolume) => {
-				volumes.push(value);
-			},
-			machine: (value: FlyMachine) => {
-				const volumeIndex = volumes.findIndex((volume) => volume.id === value.config.mounts[0]?.volume);
-				if (volumeIndex >= 0) volumes[volumeIndex] = { ...volumes[volumeIndex]!, attached_machine_id: value.id };
-				machines.push(value);
-			},
-		},
-		resources: () => ({ apps: app ? 1 : 0, volumes: volumes.length, machines: machines.length }),
-	};
-};
-
-const providerLayer = (provider: ReturnType<typeof makeFakeProvider>) =>
-	Layer.mergeAll(Layer.succeed(FlyBoardApi, provider.fake), Layer.succeed(EdgeProbe, provider.edge));
-
-const provisionerFor = (provider: ReturnType<typeof makeFakeProvider>) =>
-	provisionerLayer(settings).pipe(Layer.provide(providerLayer(provider)));
-
-const nextClaim = (workerId: string) =>
-	Effect.gen(function* () {
-		const sql = yield* SqlClient.SqlClient;
-		yield* sql`UPDATE board_operations SET available_at = clock_timestamp()`;
-		return Option.getOrThrow(yield* (yield* Operations).claim(workerId, 30_000));
-	});
+import {
+	appFor,
+	checkpoints,
+	makeFakeProvider,
+	nextClaim,
+	provisionerFor,
+	request,
+	settings,
+	volumeFor,
+} from "./fixtures/provisioner.ts";
 
 describe("Provisioner", () => {
+	test("blocks unauthorized provider observations immediately", async () => {
+		const provider = makeFakeProvider();
+		provider.set.rejectAppRead();
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				yield* (yield* Boards).request(request);
+				const operation = yield* nextClaim("worker");
+				expect(yield* (yield* Provisioner).run(operation, "worker")).toBe("blocked");
+				const sql = yield* SqlClient.SqlClient;
+				expect(yield* sql`SELECT state, last_error_code FROM board_operations WHERE id = ${operation.id}`).toEqual([
+					{ state: "failed", last_error_code: "provider_rejected" },
+				]);
+				expect(provider.resources()).toEqual({ apps: 0, volumes: 0, machines: 0 });
+			}).pipe(Effect.provide(provisionerFor(provider))),
+		);
+	});
+
+	test("bounds persistent failures with jittered backoff and releases the board slot", async () => {
+		const provider = makeFakeProvider();
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				const board = yield* (yield* Boards).request(request);
+				const operations = yield* Operations;
+				const sql = yield* SqlClient.SqlClient;
+				const provisioner = yield* Provisioner;
+				for (let attempt = 1; attempt <= 10; attempt += 1) {
+					provider.set.failHealth();
+					const operation = yield* nextClaim("worker-1");
+					const before = yield* Clock.currentTimeMillis;
+					expect(yield* provisioner.run(operation, "worker-1")).toBe(attempt === 10 ? "blocked" : "requeued");
+					if (attempt < 10) {
+						const rows = yield* sql<{
+							available_at: string;
+						}>`SELECT available_at::text FROM board_operations WHERE id = ${operation.id}`;
+						const ceiling = Math.min(300_000, 5_000 * 2 ** (attempt - 1));
+						const scheduled = Date.parse(rows[0]!.available_at);
+						expect(scheduled).toBeGreaterThanOrEqual(before + ceiling / 2);
+						expect(scheduled).toBeLessThanOrEqual((yield* Clock.currentTimeMillis) + ceiling);
+						expect(Option.isNone(yield* operations.claim("too-early", 30_000))).toBe(true);
+					}
+				}
+				expect(Option.getOrThrow(yield* (yield* Deployments).get(board.id)).state).toBe("blocked");
+				expect(
+					yield* sql`SELECT state, attempt, lease_token, last_error_code FROM board_operations WHERE board_id = ${board.id}`,
+				).toEqual([{ state: "failed", attempt: 10, lease_token: null, last_error_code: "retry_exhausted" }]);
+				expect(Option.isNone(yield* operations.claim("worker-2", 30_000))).toBe(true);
+				expect(provider.resources()).toEqual({ apps: 1, volumes: 1, machines: 1 });
+				expect(
+					(yield* operations.enqueue({
+						board_id: board.id,
+						owner_id: board.owner_id,
+						kind: "backup",
+						requested_by: "operator",
+						idempotency_key: "after-exhaustion",
+					})).state,
+				).toBe("queued");
+			}).pipe(Effect.provide(provisionerFor(provider))),
+		);
+	});
+
+	test.each([9, 10])(
+		"finishes a durably provisioned deployment after a finalization crash on attempt %i",
+		async (attempt) => {
+			const provider = makeFakeProvider();
+			await runFresh(
+				Effect.gen(function* () {
+					yield* migrateCloudDatabase;
+					const board = yield* (yield* Boards).request(request);
+					const operation = yield* nextClaim("worker-1");
+					expect(yield* (yield* Provisioner).run(operation, "worker-1")).toBe("succeeded");
+					const sql = yield* SqlClient.SqlClient;
+					yield* sql`UPDATE board_operations SET state = 'running', attempt = ${attempt}, finished_at = NULL,
+				lease_token = ${operation.lease_token}, lease_owner = 'worker-1',
+				lease_expires_at = clock_timestamp() - interval '1 second' WHERE id = ${operation.id}`;
+					provider.set.rejectAppRead();
+					const recovered = yield* nextClaim("worker-2");
+					expect(yield* (yield* Provisioner).run(recovered, "worker-2")).toBe("succeeded");
+					expect(Option.getOrThrow(yield* (yield* Deployments).get(board.id)).state).toBe("provisioned");
+					expect(provider.calls).toMatchObject({ createApp: 1, createVolume: 1, createMachine: 1 });
+				}).pipe(Effect.provide(provisionerFor(provider))),
+			);
+		},
+	);
+
+	test("stops crash-reclaimed attempts before another provider mutation", async () => {
+		const provider = makeFakeProvider();
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				yield* (yield* Boards).request(request);
+				const sql = yield* SqlClient.SqlClient;
+				yield* sql`UPDATE board_operations SET attempt = 10`;
+				const operation = yield* nextClaim("worker-1");
+				expect(yield* (yield* Provisioner).run(operation, "worker-1")).toBe("blocked");
+				expect(provider.resources()).toEqual({ apps: 0, volumes: 0, machines: 0 });
+			}).pipe(Effect.provide(provisionerFor(provider))),
+		);
+	});
+
 	test("provisions one app, volume, and machine and completes the operation", async () => {
 		const provider = makeFakeProvider();
 		await runFresh(
@@ -304,12 +134,31 @@ describe("Provisioner", () => {
 				const deployment = Option.getOrThrow(yield* deployments.get(board.id));
 				expect(outcome).toBe("succeeded");
 				expect(provider.calls).toMatchObject({ createApp: 1, createVolume: 1, createMachine: 1 });
-				expect(provider.calls).toMatchObject({ listSecrets: 0, updateSecrets: 0 });
 				expect(yield* sql`SELECT state, checkpoint FROM board_operations WHERE id = ${operation.id}`).toEqual([
 					{ state: "succeeded", checkpoint: "provisioned" },
 				]);
 				expect(deployment.state).toBe("provisioned");
 				expect(yield* sql`SELECT hostname, board_id, app_name FROM board_routes`).toHaveLength(1);
+			}).pipe(Effect.provide(provisionerFor(provider))),
+		);
+	});
+
+	test("waits for certificate readiness before publishing a route or probing the edge", async () => {
+		const provider = makeFakeProvider();
+		provider.networking.state.ready = false;
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				yield* (yield* Boards).request(request);
+				const provisioner = yield* Provisioner;
+				const first = yield* nextClaim("worker-1");
+				expect(yield* provisioner.run(first, "worker-1")).toBe("requeued");
+				const sql = yield* SqlClient.SqlClient;
+				expect(yield* sql`SELECT * FROM board_routes`).toEqual([]);
+				provider.networking.state.ready = true;
+				const resumed = yield* nextClaim("worker-1");
+				expect(yield* provisioner.run(resumed, "worker-1")).toBe("succeeded");
+				expect(yield* sql`SELECT hostname FROM board_routes`).toHaveLength(1);
 			}).pipe(Effect.provide(provisionerFor(provider))),
 		);
 	});
@@ -347,7 +196,7 @@ describe("Provisioner", () => {
 						next,
 						...(next === "app_created" ? { appId: "app-id" } : {}),
 						...(next === "volume_created" ? { volumeId: "volume-id" } : {}),
-						...(next === "machine_created" ? { machineId: "machine-id", machineVersion: "machine-version-1" } : {}),
+						...(next === "machine_created" ? { machineId: "machine-id" } : {}),
 					});
 				}
 				const checkpointIndex = checkpoints.indexOf(checkpoint);
@@ -390,7 +239,7 @@ describe("Provisioner", () => {
 					"storage_configuration_verified",
 					"app_created",
 					"volume_created",
-					"runtime_secrets_written",
+					"volume_created",
 					"machine_created",
 					"machine_started",
 					"edge_reachable",

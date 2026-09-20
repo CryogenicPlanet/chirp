@@ -1,8 +1,10 @@
-import { Context, Data, DateTime, Effect, Layer, Option, Result } from "effect";
+import { Context, Data, DateTime, Effect, Layer, Option, Random, Result } from "effect";
 import { Boards } from "./boards.ts";
+import { CloudflareDns } from "./cloudflare-dns.ts";
 import type { Deployment, DeploymentDrift, DeploymentState } from "./deployment.ts";
 import { Deployments, type DeploymentLease } from "./deployments.ts";
 import { EdgeProbe } from "./edge-probe.ts";
+import { EdgeNetworkingError, ensureEdgeNetworking } from "./edge-networking.ts";
 import { type FlyApiError, FlyBoardApi } from "./fly-board-api.ts";
 import type { FlyApp, FlyMachine, FlyVolume } from "./fly-model.ts";
 import { machineConfig, machineMatches } from "./machine-spec.ts";
@@ -18,6 +20,7 @@ export class ProvisioningError extends Data.TaggedError("ProvisioningError")<{
 		| "provider_rejected"
 		| "provider_drift"
 		| "provider_observation_pending"
+		| "retry_exhausted"
 		| "edge_unavailable";
 	readonly retriable: boolean;
 	readonly message: string;
@@ -25,20 +28,21 @@ export class ProvisioningError extends Data.TaggedError("ProvisioningError")<{
 
 export type ProvisioningOutcome = "succeeded" | "requeued" | "blocked";
 
+const maxAttempts = 10;
+
 const issue = (code: ProvisioningError["code"], retriable: boolean, message: string) =>
 	new ProvisioningError({ code, retriable, message });
-const mutationFailure = (error: FlyApiError, message: string) =>
+const rejected = (error: FlyApiError) =>
 	error.reason === "status" &&
 	error.status !== null &&
 	error.status >= 400 &&
 	error.status < 500 &&
-	![408, 409, 425, 429].includes(error.status)
-		? issue("provider_rejected", false, message)
-		: issue("provider_ambiguous", true, message);
+	![408, 409, 425, 429].includes(error.status);
+const mutationFailure = (error: FlyApiError, message: string) =>
+	rejected(error) ? issue("provider_rejected", false, message) : issue("provider_ambiguous", true, message);
 const afterAppCreated: ReadonlyArray<DeploymentState> = [
 	"app_created",
 	"volume_created",
-	"runtime_secrets_written",
 	"machine_created",
 	"machine_started",
 	"edge_reachable",
@@ -47,7 +51,6 @@ const afterAppCreated: ReadonlyArray<DeploymentState> = [
 ];
 const afterVolumeCreated: ReadonlyArray<DeploymentState> = [
 	"volume_created",
-	"runtime_secrets_written",
 	"machine_created",
 	"machine_started",
 	"edge_reachable",
@@ -68,9 +71,16 @@ const make = (settings: ProvisioningSettings) =>
 		const deployments = yield* Deployments;
 		const operations = yield* Operations;
 		const fly = yield* FlyBoardApi;
+		const dns = yield* CloudflareDns;
 		const edge = yield* EdgeProbe;
-		const observed = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-			effect.pipe(Effect.mapError(() => issue("provider_unavailable", true, "Fly observation failed")));
+		const observed = <A, R>(effect: Effect.Effect<A, FlyApiError, R>) =>
+			effect.pipe(
+				Effect.mapError((error) =>
+					rejected(error)
+						? issue("provider_rejected", false, "Fly rejected the observation")
+						: issue("provider_unavailable", true, "Fly observation failed"),
+				),
+			);
 		const assertApp = (app: FlyApp, deployment: Deployment) =>
 			(app.id === deployment.app_id || deployment.app_id === null) &&
 			app.name === deployment.app_name &&
@@ -126,12 +136,12 @@ const make = (settings: ProvisioningSettings) =>
 			});
 		const verifyRecordedResources = <E, R>(deployment: Deployment, renewLease: Effect.Effect<unknown, E, R>) =>
 			Effect.gen(function* () {
-				if (afterAppCreated.includes(deployment.state)) {
+				if (deployment.app_id !== null || afterAppCreated.includes(deployment.state)) {
 					const app = yield* observed(fly.getApp(deployment.app_name));
 					if (Option.isNone(app)) return yield* issue("provider_drift", false, "Recorded Fly App is missing");
 					yield* assertApp(app.value, deployment);
 				}
-				if (afterVolumeCreated.includes(deployment.state)) {
+				if (deployment.volume_id !== null || afterVolumeCreated.includes(deployment.state)) {
 					if (!deployment.volume_id) return yield* issue("provider_drift", false, "Fly Volume ID is missing");
 					const matching = (yield* observed(fly.listVolumes(deployment.app_name))).filter(
 						(volume) => volume.name === deployment.volume_name && volume.region === deployment.region,
@@ -147,10 +157,10 @@ const make = (settings: ProvisioningSettings) =>
 					const volume = yield* assertVolume(matching[0]!, deployment);
 					if (volume.state !== "created")
 						return yield* issue("provider_observation_pending", true, "Recorded Fly Volume is not ready");
-					if (afterMachineCreated.includes(deployment.state) && volume.attached_machine_id !== deployment.machine_id)
+					if (deployment.machine_id !== null && volume.attached_machine_id !== deployment.machine_id)
 						return yield* issue("provider_drift", false, "Fly Volume attachment drifted");
 				}
-				if (afterMachineCreated.includes(deployment.state)) {
+				if (deployment.machine_id !== null || afterMachineCreated.includes(deployment.state)) {
 					if (!deployment.machine_id) return yield* issue("provider_drift", false, "Fly Machine ID is missing");
 					const matching = (yield* observed(fly.listMachines(deployment.app_name))).filter(
 						(machine) =>
@@ -166,7 +176,28 @@ const make = (settings: ProvisioningSettings) =>
 							"Recorded Fly Machine is not observable",
 						);
 					const machine = yield* assertMachine(matching[0]!, deployment);
-					if (deployment.state !== "machine_created") yield* ensureMachineStarted(deployment, machine, renewLease);
+					if (deployment.state !== "machine_created") {
+						yield* ensureMachineStarted(deployment, machine, renewLease);
+						yield* ensureEdgeNetworking(deployment.app_name, deployment.hostname, renewLease).pipe(
+							Effect.provideService(FlyBoardApi, fly),
+							Effect.provideService(CloudflareDns, dns),
+							Effect.catchIf(
+								(error): error is EdgeNetworkingError => error instanceof EdgeNetworkingError,
+								(error) =>
+									Effect.fail(
+										issue(
+											error.reason === "conflict"
+												? "provider_drift"
+												: error.reason === "rejected"
+													? "provider_rejected"
+													: "provider_observation_pending",
+											error.reason === "pending" || error.reason === "unavailable",
+											`Edge networking ${error.reason}`,
+										),
+									),
+							),
+						);
+					}
 				}
 			});
 		return {
@@ -206,8 +237,6 @@ const make = (settings: ProvisioningSettings) =>
 								readonly appId?: string;
 								readonly volumeId?: string;
 								readonly machineId?: string;
-								readonly machineVersion?: string;
-								readonly secretsVersion?: number;
 							} = {},
 						) =>
 							deployments.transition({
@@ -219,7 +248,19 @@ const make = (settings: ProvisioningSettings) =>
 							});
 						while (true) {
 							yield* renewLease;
-							if (deployment.state !== "blocked") yield* verifyRecordedResources(deployment, renewLease);
+							if (deployment.state === "provisioned") {
+								yield* operations.succeed(operation.id, lease.leaseToken, workerId);
+								return "succeeded" as const;
+							}
+							if (deployment.state === "blocked")
+								return yield* issue("provider_drift", false, "Blocked deployment requires an operator retry");
+							if (operation.attempt > maxAttempts)
+								return yield* issue(
+									"retry_exhausted",
+									false,
+									"Provisioning attempt limit reached after lease recovery",
+								);
+							yield* verifyRecordedResources(deployment, renewLease);
 							switch (deployment.state) {
 								case "requested": {
 									if (deployment.storage_engine !== "sqlite")
@@ -300,11 +341,6 @@ const make = (settings: ProvisioningSettings) =>
 										return yield* issue("provider_observation_pending", true, "Fly Volume is not ready");
 									if (volume.state !== "created")
 										return yield* issue("provider_drift", false, "Fly Volume entered an unsupported state");
-									deployment = yield* advance("runtime_secrets_written");
-									break;
-								}
-								case "runtime_secrets_written": {
-									if (!deployment.volume_id) return yield* issue("provider_drift", false, "Fly Volume ID is missing");
 									const listed = yield* observed(fly.listMachines(deployment.app_name));
 									let matching = listed.filter(
 										(machine) =>
@@ -322,9 +358,6 @@ const make = (settings: ProvisioningSettings) =>
 												name: deployment.machine_name,
 												region: deployment.region,
 												config: machineConfig(deployment),
-												...(deployment.secrets_version === null
-													? {}
-													: { minSecretsVersion: deployment.secrets_version }),
 											})
 											.pipe(Effect.result);
 										matching = Result.isSuccess(created)
@@ -346,7 +379,6 @@ const make = (settings: ProvisioningSettings) =>
 									const machine = yield* assertMachine(matching[0]!, deployment);
 									deployment = yield* advance("machine_created", {
 										machineId: machine.id,
-										machineVersion: machine.instance_id,
 									});
 									break;
 								}
@@ -360,7 +392,7 @@ const make = (settings: ProvisioningSettings) =>
 										yield* assertMachine(found.value, deployment),
 										renewLease,
 									);
-									deployment = yield* advance("machine_started", { machineVersion: machine.instance_id });
+									deployment = yield* advance("machine_started");
 									break;
 								}
 								case "machine_started": {
@@ -382,12 +414,6 @@ const make = (settings: ProvisioningSettings) =>
 									deployment = yield* advance("provisioned");
 									break;
 								}
-								case "provisioned": {
-									yield* operations.succeed(operation.id, lease.leaseToken, workerId);
-									return "succeeded" as const;
-								}
-								case "blocked":
-									return "blocked" as const;
 							}
 						}
 					});
@@ -403,13 +429,15 @@ const make = (settings: ProvisioningSettings) =>
 									.pipe(Effect.as<ProvisioningOutcome>("blocked")),
 							ProvisioningError: (error) =>
 								Effect.gen(function* () {
-									if (error.retriable) {
+									if (error.retriable && operation.attempt < maxAttempts) {
 										const now = yield* DateTime.now;
+										const ceiling = Math.min(300_000, 5_000 * 2 ** (operation.attempt - 1));
+										const delay = Math.floor(ceiling / 2 + ((yield* Random.next) * ceiling) / 2);
 										yield* operations.requeue({
 											id: operation.id,
 											leaseToken: lease.leaseToken,
 											workerId,
-											availableAt: DateTime.toDateUtc(DateTime.addDuration(now, 5_000)),
+											availableAt: DateTime.toDateUtc(DateTime.addDuration(now, delay)),
 											errorCode: error.code,
 											errorMessage: error.message,
 										});
@@ -417,8 +445,10 @@ const make = (settings: ProvisioningSettings) =>
 									}
 									yield* deployments.block({
 										...lease,
-										errorCode: error.code,
-										errorMessage: error.message,
+										errorCode: error.retriable ? "retry_exhausted" : error.code,
+										errorMessage: error.retriable
+											? `Provisioning attempt limit reached: ${error.code}. ${error.message}`
+											: error.message,
 									});
 									return "blocked" as const;
 								}),

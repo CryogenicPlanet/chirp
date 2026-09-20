@@ -40,6 +40,8 @@ describe.skipIf(!realPostgres)("production cloud runtime", () => {
 				GOOGLE_CLIENT_ID: "google-client",
 				GOOGLE_CLIENT_SECRET: "google-secret",
 				FLY_API_TOKEN: "fly-token",
+				CLOUDFLARE_API_TOKEN: "cloudflare-token",
+				CLOUDFLARE_ZONE_ID: "a".repeat(32),
 				FLY_ORGANIZATION: "chirp-test",
 				FLY_REGION: "sjc",
 				CHIRP_IMAGE: `registry.example/chirp@sha256:${"a".repeat(64)}`,

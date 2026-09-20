@@ -1,11 +1,13 @@
+import { eq, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
-import { SqlClient } from "effect/unstable/sql";
 import { describe, expect, test } from "vitest";
 import { BackupScheduler, backupSchedulerLayer } from "../src/backup-scheduler.ts";
 import { Boards } from "../src/boards.ts";
+import { Database } from "../src/database.ts";
 import { Deployments } from "../src/deployments.ts";
 import { migrateCloudDatabase } from "../src/migrations.ts";
 import { Operations } from "../src/operations.ts";
+import { boardDeployments } from "../src/schema.ts";
 import { runFresh } from "./fixture.ts";
 
 const request = {
@@ -41,7 +43,6 @@ const prepare = Effect.gen(function* () {
 		"storage_configuration_verified",
 		"app_created",
 		"volume_created",
-		"runtime_secrets_written",
 		"machine_created",
 		"machine_started",
 		"edge_reachable",
@@ -79,13 +80,21 @@ describe("BackupScheduler", () => {
 		await runFresh(
 			Effect.gen(function* () {
 				const { board } = yield* prepare;
-				const sql = yield* SqlClient.SqlClient;
-				yield* sql`UPDATE board_deployments SET last_snapshot_id = 'snapshot-id',
-					last_snapshot_created_at = clock_timestamp(), last_snapshot_digest = 'sha256:digest',
-					last_snapshot_retention_days = 5 WHERE board_id = ${board.id}`;
+				const db = yield* Database;
+				yield* db
+					.update(boardDeployments)
+					.set({
+						last_snapshot_id: "snapshot-id",
+						last_snapshot_created_at: sql`clock_timestamp()`,
+						last_snapshot_digest: "sha256:digest",
+						last_snapshot_retention_days: 5,
+					})
+					.where(eq(boardDeployments.board_id, board.id));
 				expect(yield* schedule).toBe(0);
-				yield* sql`UPDATE board_deployments SET last_snapshot_created_at = clock_timestamp() - interval '25 hours'
-					WHERE board_id = ${board.id}`;
+				yield* db
+					.update(boardDeployments)
+					.set({ last_snapshot_created_at: sql`clock_timestamp() - interval '25 hours'` })
+					.where(eq(boardDeployments.board_id, board.id));
 				expect(yield* schedule).toBe(1);
 			}),
 		);

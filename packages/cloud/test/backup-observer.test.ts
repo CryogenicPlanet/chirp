@@ -1,13 +1,15 @@
+import { eq } from "drizzle-orm";
 import { Effect, Layer, Option } from "effect";
-import { SqlClient } from "effect/unstable/sql";
 import { describe, expect, test } from "vitest";
 import { BackupObserver, backupObserverLayer } from "../src/backup-observer.ts";
 import { Boards } from "../src/boards.ts";
+import { Database } from "../src/database.ts";
 import { Deployments } from "../src/deployments.ts";
 import { FlyBoardApi } from "../src/fly-board-api.ts";
 import type { FlyVolumeSnapshot } from "../src/fly-model.ts";
 import { migrateCloudDatabase } from "../src/migrations.ts";
 import { Operations } from "../src/operations.ts";
+import { boardOperations } from "../src/schema.ts";
 import { runFresh } from "./fixture.ts";
 
 const request = {
@@ -32,19 +34,20 @@ const spec = {
 const impossible = () => Effect.die("Unexpected Fly API call");
 const flyLayer = (snapshots: ReadonlyArray<FlyVolumeSnapshot>, observed?: { calls: number }) =>
 	Layer.succeed(FlyBoardApi, {
+		listIpAssignments: impossible,
+		allocateSharedIp: impossible,
+		getCertificate: impossible,
+		createCertificate: impossible,
+		checkCertificate: impossible,
 		getApp: impossible,
 		createApp: impossible,
 		listVolumes: impossible,
 		getVolume: impossible,
 		createVolume: impossible,
-		listSecrets: impossible,
-		updateSecrets: impossible,
 		listMachines: impossible,
 		getMachine: impossible,
 		createMachine: impossible,
-		updateMachine: impossible,
 		startMachine: impossible,
-		stopMachine: impossible,
 		waitMachine: impossible,
 		listVolumeSnapshots: () =>
 			Effect.sync(() => {
@@ -66,7 +69,6 @@ const prepare = Effect.gen(function* () {
 		"storage_configuration_verified",
 		"app_created",
 		"volume_created",
-		"runtime_secrets_written",
 		"machine_created",
 		"machine_started",
 		"edge_reachable",
@@ -80,7 +82,7 @@ const prepare = Effect.gen(function* () {
 			next,
 			...(next === "app_created" ? { appId: "app-id" } : {}),
 			...(next === "volume_created" ? { volumeId: "volume-id" } : {}),
-			...(next === "machine_created" ? { machineId: "machine-id", machineVersion: "version-1" } : {}),
+			...(next === "machine_created" ? { machineId: "machine-id" } : {}),
 		});
 	}
 	yield* operations.succeed(provision.id, lease.leaseToken, lease.workerId);
@@ -133,15 +135,18 @@ describe("BackupObserver", () => {
 					last_snapshot_retention_days: 5,
 				});
 				expect(deployment.last_snapshot_created_at?.toISOString()).toBe("2026-09-20T11:00:00.000Z");
-				const sql = yield* SqlClient.SqlClient;
-				expect(yield* sql`SELECT state FROM board_operations WHERE id = ${backup.id}`).toEqual([
-					{ state: "succeeded" },
-				]);
+				const db = yield* Database;
+				expect(
+					yield* db
+						.select({ state: boardOperations.state })
+						.from(boardOperations)
+						.where(eq(boardOperations.id, backup.id)),
+				).toEqual([{ state: "succeeded" }]);
 			}),
 		);
 	});
 
-	test("fails the observation without blocking board controls when Fly has no completed snapshot", async () => {
+	test("fails the observation without blocking later work when Fly has no completed snapshot", async () => {
 		await runFresh(
 			Effect.gen(function* () {
 				const { backup, board } = yield* prepare;
@@ -151,17 +156,20 @@ describe("BackupObserver", () => {
 				);
 				expect(outcome).toBe("failed");
 				expect(Option.getOrThrow(yield* (yield* Deployments).get(board.id)).last_snapshot_id).toBeNull();
-				const sql = yield* SqlClient.SqlClient;
-				expect(yield* sql`SELECT state, last_error_code FROM board_operations WHERE id = ${backup.id}`).toEqual([
-					{ state: "failed", last_error_code: "snapshot_pending" },
-				]);
+				const db = yield* Database;
+				expect(
+					yield* db
+						.select({ state: boardOperations.state, last_error_code: boardOperations.last_error_code })
+						.from(boardOperations)
+						.where(eq(boardOperations.id, backup.id)),
+				).toEqual([{ state: "failed", last_error_code: "snapshot_pending" }]);
 				expect(
 					(yield* (yield* Operations).enqueue({
 						board_id: board.id,
 						owner_id: board.owner_id,
-						kind: "start",
+						kind: "backup",
 						requested_by: board.owner_id,
-						idempotency_key: "start-after-backup-observation",
+						idempotency_key: "backup-after-backup-observation",
 					})).state,
 				).toBe("queued");
 			}),

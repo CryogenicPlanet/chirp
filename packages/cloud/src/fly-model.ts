@@ -21,6 +21,34 @@ export type FlyApp = typeof FlyApp.Type;
 
 export const FlyAppCreated = Schema.Struct({ id: Schema.String, created_at: Schema.Number });
 
+export const FlyIpAssignment = Schema.Struct({
+	ip: Schema.String,
+	shared: Schema.Boolean,
+	egress: Schema.optionalKey(Schema.Boolean),
+});
+export type FlyIpAssignment = typeof FlyIpAssignment.Type;
+export const FlyIpAssignments = Schema.Struct({ ips: Schema.Array(FlyIpAssignment) });
+export const FlyCertificate = Schema.Struct({
+	hostname: Schema.String,
+	configured: Schema.Boolean,
+	acme_requested: Schema.Boolean,
+	status: Schema.String,
+	certificates: Schema.Array(Schema.Struct({ source: Schema.String, status: Schema.String })),
+	validation: Schema.Struct({ ownership_txt_configured: Schema.Boolean }),
+	dns_requirements: Schema.Struct({
+		a: Schema.Array(Schema.String),
+		ownership: Schema.Struct({ name: Schema.String, app_value: Schema.String }),
+	}),
+});
+export type FlyCertificate = typeof FlyCertificate.Type;
+export const FlyCertificateCheck = Schema.Struct({
+	...FlyCertificate.fields,
+	dns_records: Schema.Struct({
+		a: Schema.NullOr(Schema.Array(Schema.String)),
+		aaaa: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.String))),
+	}),
+});
+
 export const FlyVolume = Schema.Struct({
 	id: Schema.String,
 	name: Schema.String,
@@ -111,17 +139,6 @@ export const FlyVolumeSnapshot = Schema.Struct({
 });
 export type FlyVolumeSnapshot = typeof FlyVolumeSnapshot.Type;
 
-export const FlySecret = Schema.Struct({
-	name: Schema.String,
-	digest: Schema.optionalKey(Schema.String),
-});
-export type FlySecret = typeof FlySecret.Type;
-
-export const FlySecrets = Schema.Struct({ secrets: Schema.optionalKey(Schema.Array(FlySecret)) });
-export const FlySecretsUpdate = Schema.Struct({
-	version: Schema.optionalKey(Schema.Int),
-	Version: Schema.optionalKey(Schema.Int),
-});
 export const FlyWaitResult = Schema.Struct({
 	ok: Schema.optionalKey(Schema.Boolean),
 	state: Schema.optionalKey(Schema.String),

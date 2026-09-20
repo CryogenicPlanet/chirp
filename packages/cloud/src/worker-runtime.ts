@@ -5,6 +5,7 @@ import { BackupObserver, backupObserverLayer } from "./backup-observer.ts";
 import { BackupScheduler, backupSchedulerLayer } from "./backup-scheduler.ts";
 import { BackupWorker, backupWorkerLayer } from "./backup-worker.ts";
 import { Boards, boardsLayer } from "./boards.ts";
+import { cloudflareDnsLayer, cloudflareSettings } from "./cloudflare-dns.ts";
 import { databaseLayer } from "./database.ts";
 import { Deployments, deploymentsLayer } from "./deployments.ts";
 import { edgeProbeLayer } from "./edge-probe.ts";
@@ -15,13 +16,18 @@ import { provisioningSettings } from "./provisioning-settings.ts";
 import { ProvisioningWorker, provisioningWorkerLayer } from "./provisioning-worker.ts";
 
 const workerLayer = Layer.unwrap(
-	Effect.all({ flyToken: Config.Redacted("FLY_API_TOKEN"), provisioning: provisioningSettings }).pipe(
-		Effect.map(({ flyToken, provisioning }) => {
+	Effect.all({
+		flyToken: Config.Redacted("FLY_API_TOKEN"),
+		provisioning: provisioningSettings,
+		cloudflare: cloudflareSettings,
+	}).pipe(
+		Effect.map(({ flyToken, provisioning, cloudflare }) => {
 			const stores = Layer.mergeAll(boardsLayer, deploymentsLayer, operationsLayer).pipe(
 				Layer.provideMerge(databaseLayer),
 				Layer.provideMerge(NodeServices.layer),
 			);
 			const providers = Layer.mergeAll(
+				cloudflareDnsLayer(cloudflare).pipe(Layer.provide(FetchHttpClient.layer)),
 				flyBoardApiLayer({ token: flyToken }).pipe(Layer.provide(FetchHttpClient.layer)),
 				edgeProbeLayer.pipe(Layer.provide(FetchHttpClient.layer)),
 			);

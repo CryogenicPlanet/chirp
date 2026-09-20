@@ -6,7 +6,6 @@ export const DeploymentState = Schema.Literals([
 	"storage_configuration_verified",
 	"app_created",
 	"volume_created",
-	"runtime_secrets_written",
 	"machine_created",
 	"machine_started",
 	"edge_reachable",
@@ -18,9 +17,7 @@ export type DeploymentState = typeof DeploymentState.Type;
 
 export const Deployment = Schema.Struct({
 	board_id: Schema.String,
-	provider: Schema.Literal("fly"),
 	state: DeploymentState,
-	desired_revision: Schema.Int,
 	row_version: Schema.Int,
 	hostname: Schema.String,
 	storage_engine: StorageEngine,
@@ -34,8 +31,6 @@ export const Deployment = Schema.Struct({
 	app_id: Schema.NullOr(Schema.String),
 	volume_id: Schema.NullOr(Schema.String),
 	machine_id: Schema.NullOr(Schema.String),
-	machine_version: Schema.NullOr(Schema.String),
-	secrets_version: Schema.NullOr(Schema.Int),
 	last_snapshot_id: Schema.NullOr(Schema.String),
 	last_snapshot_created_at: Schema.NullOr(Schema.DateFromString),
 	last_snapshot_digest: Schema.NullOr(Schema.String),

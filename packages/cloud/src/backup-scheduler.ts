@@ -1,30 +1,43 @@
-import { Context, DateTime, Effect, Layer, Schema } from "effect";
-import { SqlClient } from "effect/unstable/sql";
+import { and, asc, eq, inArray, isNull, lte, notExists, or, sql } from "drizzle-orm";
+import { Context, DateTime, Effect, Layer } from "effect";
+import { Database } from "./database.ts";
 import { Operations } from "./operations.ts";
-
-const dueBoards = Schema.decodeUnknownEffect(
-	Schema.Array(Schema.Struct({ board_id: Schema.String, owner_id: Schema.String })),
-);
+import { boardDeployments, boardOperations, boards } from "./schema.ts";
 
 const make = Effect.gen(function* () {
-	const sql = yield* SqlClient.SqlClient;
+	const db = yield* Database;
 	const operations = yield* Operations;
 	return {
 		scheduleDue: Effect.gen(function* () {
 			const now = yield* DateTime.now;
 			const hour = DateTime.formatIso(now).slice(0, 13);
-			const due = yield* sql`SELECT d.board_id, b.owner_id
-				FROM board_deployments d
-				JOIN boards b ON b.id = d.board_id
-				WHERE d.state = 'provisioned' AND d.storage_engine = 'sqlite'
-					AND (d.last_snapshot_created_at IS NULL
-						OR d.last_snapshot_created_at <= clock_timestamp() - interval '24 hours')
-					AND NOT EXISTS (
-						SELECT 1 FROM board_operations o
-						WHERE o.board_id = d.board_id AND o.state IN ('queued', 'running')
-					)
-				ORDER BY d.last_snapshot_created_at NULLS FIRST, d.board_id
-				LIMIT 100`.pipe(Effect.flatMap(dueBoards));
+			const due = yield* db
+				.select({ board_id: boardDeployments.board_id, owner_id: boards.owner_id })
+				.from(boardDeployments)
+				.innerJoin(boards, eq(boards.id, boardDeployments.board_id))
+				.where(
+					and(
+						eq(boardDeployments.state, "provisioned"),
+						eq(boardDeployments.storage_engine, "sqlite"),
+						or(
+							isNull(boardDeployments.last_snapshot_created_at),
+							lte(boardDeployments.last_snapshot_created_at, sql<Date>`clock_timestamp() - interval '24 hours'`),
+						),
+						notExists(
+							db
+								.select({ id: boardOperations.id })
+								.from(boardOperations)
+								.where(
+									and(
+										eq(boardOperations.board_id, boardDeployments.board_id),
+										inArray(boardOperations.state, ["queued", "running"]),
+									),
+								),
+						),
+					),
+				)
+				.orderBy(sql`${boardDeployments.last_snapshot_created_at} ASC NULLS FIRST`, asc(boardDeployments.board_id))
+				.limit(100);
 			let scheduled = 0;
 			for (const board of due) {
 				const inserted = yield* operations

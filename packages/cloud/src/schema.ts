@@ -12,9 +12,10 @@ import {
 	uuid,
 	varchar,
 } from "drizzle-orm/pg-core";
+import type { DeploymentState } from "./deployment.ts";
 
 const storageEngines = ["sqlite", "postgres", "mysql"] as const;
-const operationKinds = ["provision", "start", "stop", "restart", "backup"] as const;
+const operationKinds = ["provision", "backup"] as const;
 const operationStates = ["queued", "running", "succeeded", "failed"] as const;
 const cCollatedChar = customType<{
 	data: string;
@@ -66,7 +67,6 @@ export const boardOperations = pgTable(
 		requested_by: text().notNull(),
 		idempotency_key: text().notNull(),
 		request_hash: cCollatedChar({ length: 64 }).notNull(),
-		desired_revision: integer().notNull().default(1),
 		available_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
 		attempt: integer().notNull().default(0),
 		lease_token: uuid(),
@@ -104,3 +104,39 @@ export const boardOperations = pgTable(
 		index("board_operations_queue").on(table.state, table.available_at, table.created_at, table.id),
 	],
 );
+
+export const boardDeployments = pgTable("board_deployments", {
+	board_id: uuid()
+		.primaryKey()
+		.references(() => boards.id, { onDelete: "restrict" }),
+	state: text().$type<DeploymentState>().notNull(),
+	row_version: integer().notNull().default(0),
+	hostname: text().notNull().unique(),
+	storage_engine: text({ enum: storageEngines }).notNull(),
+	region: text().notNull(),
+	image_ref: text().notNull(),
+	app_name: text().notNull().unique(),
+	network_name: text().notNull(),
+	volume_name: text().notNull(),
+	machine_name: text().notNull(),
+	volume_size_gb: integer().notNull(),
+	app_id: text(),
+	volume_id: text().unique(),
+	machine_id: text().unique(),
+	last_snapshot_id: text(),
+	last_snapshot_created_at: timestamp({ withTimezone: true }),
+	last_snapshot_digest: text(),
+	last_snapshot_retention_days: integer(),
+	created_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
+	updated_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
+});
+
+export const boardRoutes = pgTable("board_routes", {
+	hostname: text().primaryKey(),
+	board_id: uuid()
+		.notNull()
+		.unique()
+		.references(() => boardDeployments.board_id, { onDelete: "restrict" }),
+	app_name: text().notNull(),
+	created_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
+});

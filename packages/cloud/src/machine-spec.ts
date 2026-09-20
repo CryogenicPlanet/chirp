@@ -9,7 +9,6 @@ export const machineConfig = (deployment: Deployment): FlyMachineConfig => ({
 	},
 	metadata: {
 		"chirp.deployment_id": deployment.board_id,
-		"chirp.desired_revision": String(deployment.desired_revision),
 		"chirp.controller_schema": "1",
 	},
 	mounts: [{ volume: deployment.volume_id ?? "", path: "/data" }],
@@ -83,7 +82,6 @@ export const machineMatches = (machine: FlyMachine, deployment: Deployment) => {
 		config.env.RP_ID === expected.env.RP_ID &&
 		config.env.PUBLIC_ORIGIN === expected.env.PUBLIC_ORIGIN &&
 		config.metadata["chirp.deployment_id"] === deployment.board_id &&
-		config.metadata["chirp.desired_revision"] === String(deployment.desired_revision) &&
 		config.metadata["chirp.controller_schema"] === "1" &&
 		config.mounts.length === 1 &&
 		mount?.volume === deployment.volume_id &&

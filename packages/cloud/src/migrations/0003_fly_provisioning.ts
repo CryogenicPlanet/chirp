@@ -12,7 +12,6 @@ export const effect = (database: DatabaseClient) =>
 			CHECK (desired_revision > 0)`);
 		yield* database.execute(sql`CREATE TABLE board_deployments (
 			board_id UUID PRIMARY KEY REFERENCES boards(id) ON DELETE RESTRICT,
-			provider TEXT NOT NULL DEFAULT 'fly' CHECK (provider = 'fly'),
 			state TEXT NOT NULL CHECK (state IN (
 				'requested', 'storage_configuration_verified', 'app_created', 'volume_created',
 				'runtime_secrets_written', 'machine_created', 'machine_started', 'edge_reachable',
@@ -32,7 +31,6 @@ export const effect = (database: DatabaseClient) =>
 			app_id TEXT,
 			volume_id TEXT UNIQUE,
 			machine_id TEXT UNIQUE,
-			machine_version TEXT,
 			secrets_version INTEGER CHECK (secrets_version IS NULL OR secrets_version >= 0),
 			last_snapshot_id TEXT,
 			last_snapshot_created_at TIMESTAMPTZ,

@@ -4,6 +4,7 @@ import { Database } from "./database.ts";
 import {
 	BoardNotFound,
 	type EnqueueOperation,
+	DeploymentRetryRequired,
 	IdempotencyConflict,
 	InvalidLeaseDuration,
 	LeaseLost,
@@ -103,6 +104,7 @@ const make = Effect.gen(function* () {
 						});
 					return existing.value;
 				}
+				if (input.kind === "provision") return yield* new DeploymentRetryRequired({ boardId: input.board_id });
 				const id = yield* crypto.randomUUIDv7;
 				const insert = db.transaction(() =>
 					db

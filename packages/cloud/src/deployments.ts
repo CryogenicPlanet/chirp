@@ -1,35 +1,27 @@
-import { Context, Effect, Layer, Option, Schema } from "effect";
-import { SqlClient } from "effect/unstable/sql";
+import { and, eq, gt, isNull, lte, or, sql } from "drizzle-orm";
+import { Context, Effect, Layer, Option } from "effect";
+import { Database } from "./database.ts";
 import {
-	Deployment,
+	type Deployment,
 	DeploymentDrift,
 	DeploymentFenceLost,
 	type DeploymentSpec,
 	type DeploymentState,
 	InvalidDeploymentTransition,
 } from "./deployment.ts";
+import { boardDeployments, boardOperations, boardRoutes, boards } from "./schema.ts";
 
-const deployments = Schema.decodeUnknownEffect(Schema.Array(Deployment));
-const leaseRows = Schema.decodeUnknownEffect(
-	Schema.Array(Schema.Struct({ board_id: Schema.String, desired_revision: Schema.Int, checkpoint: Schema.String })),
-);
-const boardRows = Schema.decodeUnknownEffect(
-	Schema.Array(Schema.Struct({ slug: Schema.String, storage_engine: Schema.String })),
-);
-const routeRows = Schema.decodeUnknownEffect(
-	Schema.Array(Schema.Struct({ board_id: Schema.String, app_name: Schema.String })),
-);
 const nextState: Readonly<Partial<Record<DeploymentState, DeploymentState>>> = {
 	requested: "storage_configuration_verified",
 	storage_configuration_verified: "app_created",
 	app_created: "volume_created",
-	volume_created: "runtime_secrets_written",
-	runtime_secrets_written: "machine_created",
+	volume_created: "machine_created",
 	machine_created: "machine_started",
 	machine_started: "edge_reachable",
 	edge_reachable: "child_route_observed",
 	child_route_observed: "provisioned",
 };
+const now = sql<Date>`clock_timestamp()`;
 
 export interface DeploymentLease {
 	readonly operationId: string;
@@ -44,8 +36,6 @@ export interface DeploymentTransition extends DeploymentLease {
 	readonly appId?: string;
 	readonly volumeId?: string;
 	readonly machineId?: string;
-	readonly machineVersion?: string;
-	readonly secretsVersion?: number;
 }
 
 export interface VerifiedSnapshot {
@@ -56,27 +46,32 @@ export interface VerifiedSnapshot {
 }
 
 const make = Effect.gen(function* () {
-	const sql = yield* SqlClient.SqlClient;
-	const columns = sql`board_id, provider, state, desired_revision, row_version, hostname, storage_engine,
-		region, image_ref, app_name, network_name, volume_name, machine_name, volume_size_gb,
-		app_id, volume_id, machine_id, machine_version, secrets_version, last_snapshot_id,
-		last_snapshot_created_at::text AS last_snapshot_created_at, last_snapshot_digest,
-		last_snapshot_retention_days, created_at::text AS created_at, updated_at::text AS updated_at`;
-	const decodeOne = <E, R>(effect: Effect.Effect<unknown, E, R>) =>
-		effect.pipe(
-			Effect.flatMap(deployments),
-			Effect.map((rows) => Option.fromNullishOr(rows[0])),
-		);
+	const db = yield* Database;
+	const one = <A>(rows: ReadonlyArray<A>) => Option.fromNullishOr(rows[0]);
 	const lease = (input: DeploymentLease, kind: "provision" | "backup") =>
-		sql`SELECT board_id, desired_revision, checkpoint FROM board_operations
-			WHERE id = ${input.operationId} AND state = 'running' AND lease_token = ${input.leaseToken}
-				AND lease_owner = ${input.workerId} AND lease_expires_at > clock_timestamp() AND kind = ${kind}
-			FOR UPDATE`.pipe(
-			Effect.flatMap(leaseRows),
-			Effect.flatMap((rows) =>
-				rows[0] ? Effect.succeed(rows[0]) : Effect.fail(new DeploymentFenceLost({ operationId: input.operationId })),
-			),
-		);
+		db
+			.select({
+				board_id: boardOperations.board_id,
+				checkpoint: boardOperations.checkpoint,
+			})
+			.from(boardOperations)
+			.where(
+				and(
+					eq(boardOperations.id, input.operationId),
+					eq(boardOperations.state, "running"),
+					eq(boardOperations.lease_token, input.leaseToken),
+					eq(boardOperations.lease_owner, input.workerId),
+					gt(boardOperations.lease_expires_at, now),
+					eq(boardOperations.kind, kind),
+				),
+			)
+			.for("update")
+			.limit(1)
+			.pipe(
+				Effect.flatMap((rows) =>
+					rows[0] ? Effect.succeed(rows[0]) : Effect.fail(new DeploymentFenceLost({ operationId: input.operationId })),
+				),
+			);
 	const assertSpec = (deployment: Deployment, storageEngine: string, spec: DeploymentSpec) => {
 		const values: ReadonlyArray<readonly [string, string | number, string | number]> = [
 			["storage_engine", deployment.storage_engine, storageEngine],
@@ -96,86 +91,137 @@ const make = Effect.gen(function* () {
 	};
 	return {
 		ensure: (input: DeploymentLease & { readonly spec: DeploymentSpec }) =>
-			sql.withTransaction(
+			db.transaction(() =>
 				Effect.gen(function* () {
 					const locked = yield* lease(input, "provision");
-					const board = yield* sql`SELECT slug, storage_engine FROM boards WHERE id = ${locked.board_id}`.pipe(
-						Effect.flatMap(boardRows),
-						Effect.map((rows) => rows[0]),
-					);
+					const foundBoards = yield* db
+						.select({ slug: boards.slug, storage_engine: boards.storage_engine })
+						.from(boards)
+						.where(eq(boards.id, locked.board_id))
+						.limit(1);
+					const board = foundBoards[0];
 					if (!board) return yield* Effect.die("Leased operation references no board");
-					yield* sql`INSERT INTO board_deployments (
-						board_id, state, desired_revision, hostname, storage_engine, region, image_ref,
-						app_name, network_name, volume_name, machine_name, volume_size_gb
-					) VALUES (
-						${locked.board_id}, 'requested', ${locked.desired_revision}, ${input.spec.hostname},
-						${board.storage_engine}, ${input.spec.region}, ${input.spec.image_ref}, ${input.spec.app_name},
-						${input.spec.network_name}, ${input.spec.volume_name}, ${input.spec.machine_name},
-						${input.spec.volume_size_gb}
-					) ON CONFLICT (board_id) DO NOTHING`;
-					const found = yield* decodeOne(
-						sql`SELECT ${columns} FROM board_deployments WHERE board_id = ${locked.board_id}`,
+					yield* db
+						.insert(boardDeployments)
+						.values({
+							board_id: locked.board_id,
+							state: "requested",
+							hostname: input.spec.hostname,
+							storage_engine: board.storage_engine,
+							region: input.spec.region,
+							image_ref: input.spec.image_ref,
+							app_name: input.spec.app_name,
+							network_name: input.spec.network_name,
+							volume_name: input.spec.volume_name,
+							machine_name: input.spec.machine_name,
+							volume_size_gb: input.spec.volume_size_gb,
+						})
+						.onConflictDoNothing({ target: boardDeployments.board_id });
+					const found = one(
+						yield* db.select().from(boardDeployments).where(eq(boardDeployments.board_id, locked.board_id)).limit(1),
 					);
 					if (Option.isNone(found)) return yield* Effect.die("Deployment insert returned no row");
-					if (found.value.desired_revision !== locked.desired_revision)
-						return yield* new DeploymentDrift({ boardId: locked.board_id, field: "desired_revision" });
 					if (found.value.state !== locked.checkpoint)
 						return yield* new DeploymentDrift({ boardId: locked.board_id, field: "checkpoint" });
 					return yield* assertSpec(found.value, board.storage_engine, input.spec);
 				}),
 			),
-		get: (boardId: string) => decodeOne(sql`SELECT ${columns} FROM board_deployments WHERE board_id = ${boardId}`),
+		get: (boardId: string) =>
+			db.select().from(boardDeployments).where(eq(boardDeployments.board_id, boardId)).limit(1).pipe(Effect.map(one)),
 		transition: (input: DeploymentTransition) =>
 			Effect.gen(function* () {
 				if (nextState[input.expectedCheckpoint] !== input.next)
 					return yield* new InvalidDeploymentTransition({ expected: input.expectedCheckpoint, next: input.next });
-				return yield* sql.withTransaction(
+				return yield* db.transaction(() =>
 					Effect.gen(function* () {
 						const locked = yield* lease(input, "provision");
-						const current = yield* decodeOne(sql`SELECT ${columns} FROM board_deployments
-						WHERE board_id = ${locked.board_id} AND desired_revision = ${locked.desired_revision}
-							AND row_version = ${input.expectedRowVersion} AND state = ${input.expectedCheckpoint}
-						FOR UPDATE`);
+						const current = one(
+							yield* db
+								.select()
+								.from(boardDeployments)
+								.where(
+									and(
+										eq(boardDeployments.board_id, locked.board_id),
+										eq(boardDeployments.row_version, input.expectedRowVersion),
+										eq(boardDeployments.state, input.expectedCheckpoint),
+									),
+								)
+								.for("update")
+								.limit(1),
+						);
 						if (Option.isNone(current)) return yield* new DeploymentFenceLost({ operationId: input.operationId });
-						const updated = yield* decodeOne(sql`UPDATE board_deployments SET
-						state = ${input.next}, row_version = row_version + 1,
-						app_id = COALESCE(${input.appId ?? null}, app_id),
-						volume_id = COALESCE(${input.volumeId ?? null}, volume_id),
-						machine_id = COALESCE(${input.machineId ?? null}, machine_id),
-						machine_version = COALESCE(${input.machineVersion ?? null}, machine_version),
-						secrets_version = COALESCE(${input.secretsVersion ?? null}, secrets_version),
-						updated_at = clock_timestamp()
-					WHERE board_id = ${locked.board_id} AND row_version = ${input.expectedRowVersion}
-					RETURNING ${columns}`);
+						const updated = one(
+							yield* db
+								.update(boardDeployments)
+								.set({
+									state: input.next,
+									row_version: sql`${boardDeployments.row_version} + 1`,
+									...(input.appId === undefined ? {} : { app_id: input.appId }),
+									...(input.volumeId === undefined ? {} : { volume_id: input.volumeId }),
+									...(input.machineId === undefined ? {} : { machine_id: input.machineId }),
+									updated_at: now,
+								})
+								.where(
+									and(
+										eq(boardDeployments.board_id, locked.board_id),
+										eq(boardDeployments.row_version, input.expectedRowVersion),
+									),
+								)
+								.returning(),
+						);
 						if (Option.isNone(updated)) return yield* new DeploymentFenceLost({ operationId: input.operationId });
-						const checkpointed = yield* sql`UPDATE board_operations SET checkpoint = ${input.next},
-						updated_at = clock_timestamp()
-					WHERE id = ${input.operationId} AND state = 'running' AND lease_token = ${input.leaseToken}
-						AND lease_owner = ${input.workerId} AND lease_expires_at > clock_timestamp()
-						AND checkpoint = ${input.expectedCheckpoint} AND desired_revision = ${locked.desired_revision}
-					RETURNING id`;
+						const checkpointed = yield* db
+							.update(boardOperations)
+							.set({ checkpoint: input.next, updated_at: now })
+							.where(
+								and(
+									eq(boardOperations.id, input.operationId),
+									eq(boardOperations.state, "running"),
+									eq(boardOperations.lease_token, input.leaseToken),
+									eq(boardOperations.lease_owner, input.workerId),
+									gt(boardOperations.lease_expires_at, now),
+									eq(boardOperations.checkpoint, input.expectedCheckpoint),
+								),
+							)
+							.returning({ id: boardOperations.id });
 						if (checkpointed.length !== 1) return yield* new DeploymentFenceLost({ operationId: input.operationId });
 						return updated.value;
 					}),
 				);
 			}),
 		publishRoute: (input: DeploymentLease & { readonly expectedRowVersion: number }) =>
-			sql.withTransaction(
+			db.transaction(() =>
 				Effect.gen(function* () {
 					const locked = yield* lease(input, "provision");
-					const deployment = yield* decodeOne(sql`SELECT ${columns} FROM board_deployments
-						WHERE board_id = ${locked.board_id} AND desired_revision = ${locked.desired_revision}
-							AND row_version = ${input.expectedRowVersion} AND state = 'machine_started'
-						FOR UPDATE`);
-					if (Option.isNone(deployment)) return yield* new DeploymentFenceLost({ operationId: input.operationId });
-					yield* sql`INSERT INTO board_routes (hostname, board_id, app_name)
-						VALUES (${deployment.value.hostname}, ${deployment.value.board_id}, ${deployment.value.app_name})
-						ON CONFLICT (hostname) DO NOTHING`;
-					const route = yield* sql`SELECT board_id, app_name FROM board_routes
-						WHERE hostname = ${deployment.value.hostname}`.pipe(
-						Effect.flatMap(routeRows),
-						Effect.map((rows) => rows[0]),
+					const deployment = one(
+						yield* db
+							.select()
+							.from(boardDeployments)
+							.where(
+								and(
+									eq(boardDeployments.board_id, locked.board_id),
+									eq(boardDeployments.row_version, input.expectedRowVersion),
+									eq(boardDeployments.state, "machine_started"),
+								),
+							)
+							.for("update")
+							.limit(1),
 					);
+					if (Option.isNone(deployment)) return yield* new DeploymentFenceLost({ operationId: input.operationId });
+					yield* db
+						.insert(boardRoutes)
+						.values({
+							hostname: deployment.value.hostname,
+							board_id: deployment.value.board_id,
+							app_name: deployment.value.app_name,
+						})
+						.onConflictDoNothing({ target: boardRoutes.hostname });
+					const routes = yield* db
+						.select({ board_id: boardRoutes.board_id, app_name: boardRoutes.app_name })
+						.from(boardRoutes)
+						.where(eq(boardRoutes.hostname, deployment.value.hostname))
+						.limit(1);
+					const route = routes[0];
 					if (!route || route.board_id !== deployment.value.board_id || route.app_name !== deployment.value.app_name)
 						return yield* new DeploymentDrift({ boardId: deployment.value.board_id, field: "route" });
 					return deployment.value;
@@ -187,39 +233,75 @@ const make = Effect.gen(function* () {
 				readonly snapshot: VerifiedSnapshot;
 			},
 		) =>
-			sql.withTransaction(
+			db.transaction(() =>
 				Effect.gen(function* () {
 					const locked = yield* lease(input, "backup");
-					const updated = yield* decodeOne(sql`UPDATE board_deployments SET
-						last_snapshot_id = ${input.snapshot.id},
-						last_snapshot_created_at = ${input.snapshot.createdAt},
-						last_snapshot_digest = ${input.snapshot.digest},
-						last_snapshot_retention_days = ${input.snapshot.retentionDays},
-						row_version = row_version + 1, updated_at = clock_timestamp()
-					WHERE board_id = ${locked.board_id} AND desired_revision = ${locked.desired_revision}
-						AND row_version = ${input.expectedRowVersion} AND state = 'provisioned'
-						AND (last_snapshot_created_at IS NULL OR last_snapshot_created_at <= ${input.snapshot.createdAt})
-					RETURNING ${columns}`);
+					const updated = one(
+						yield* db
+							.update(boardDeployments)
+							.set({
+								last_snapshot_id: input.snapshot.id,
+								last_snapshot_created_at: input.snapshot.createdAt,
+								last_snapshot_digest: input.snapshot.digest,
+								last_snapshot_retention_days: input.snapshot.retentionDays,
+								row_version: sql`${boardDeployments.row_version} + 1`,
+								updated_at: now,
+							})
+							.where(
+								and(
+									eq(boardDeployments.board_id, locked.board_id),
+									eq(boardDeployments.row_version, input.expectedRowVersion),
+									eq(boardDeployments.state, "provisioned"),
+									or(
+										isNull(boardDeployments.last_snapshot_created_at),
+										lte(boardDeployments.last_snapshot_created_at, input.snapshot.createdAt),
+									),
+								),
+							)
+							.returning(),
+					);
 					if (Option.isNone(updated)) return yield* new DeploymentFenceLost({ operationId: input.operationId });
 					return updated.value;
 				}),
 			),
 		block: (input: DeploymentLease & { readonly errorCode: string; readonly errorMessage: string }) =>
-			sql.withTransaction(
+			db.transaction(() =>
 				Effect.gen(function* () {
 					const locked = yield* lease(input, "provision");
-					const deployment = yield* decodeOne(sql`UPDATE board_deployments SET state = 'blocked',
-						row_version = row_version + 1, updated_at = clock_timestamp()
-					WHERE board_id = ${locked.board_id} AND desired_revision = ${locked.desired_revision}
-					RETURNING ${columns}`);
+					const deployment = one(
+						yield* db
+							.update(boardDeployments)
+							.set({
+								state: "blocked",
+								row_version: sql`${boardDeployments.row_version} + 1`,
+								updated_at: now,
+							})
+							.where(eq(boardDeployments.board_id, locked.board_id))
+							.returning(),
+					);
 					if (Option.isNone(deployment)) return yield* new DeploymentFenceLost({ operationId: input.operationId });
-					const failed = yield* sql`UPDATE board_operations SET state = 'failed', lease_token = NULL,
-						lease_owner = NULL, lease_expires_at = NULL, last_error_code = ${input.errorCode},
-						last_error_message = ${input.errorMessage}, updated_at = clock_timestamp(),
-						finished_at = clock_timestamp()
-					WHERE id = ${input.operationId} AND state = 'running' AND lease_token = ${input.leaseToken}
-						AND lease_owner = ${input.workerId} AND lease_expires_at > clock_timestamp()
-					RETURNING id`;
+					const failed = yield* db
+						.update(boardOperations)
+						.set({
+							state: "failed",
+							lease_token: null,
+							lease_owner: null,
+							lease_expires_at: null,
+							last_error_code: input.errorCode,
+							last_error_message: input.errorMessage,
+							updated_at: now,
+							finished_at: now,
+						})
+						.where(
+							and(
+								eq(boardOperations.id, input.operationId),
+								eq(boardOperations.state, "running"),
+								eq(boardOperations.lease_token, input.leaseToken),
+								eq(boardOperations.lease_owner, input.workerId),
+								gt(boardOperations.lease_expires_at, now),
+							),
+						)
+						.returning({ id: boardOperations.id });
 					if (failed.length !== 1) return yield* new DeploymentFenceLost({ operationId: input.operationId });
 					return deployment.value;
 				}),

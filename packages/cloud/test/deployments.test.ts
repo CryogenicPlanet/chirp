@@ -1,11 +1,13 @@
+import { eq } from "drizzle-orm";
 import { Effect, Exit, Option } from "effect";
-import { SqlClient } from "effect/unstable/sql";
 import { describe, expect, test } from "vitest";
 import { Boards } from "../src/boards.ts";
+import { Database } from "../src/database.ts";
 import { DeploymentDrift } from "../src/deployment.ts";
 import { Deployments } from "../src/deployments.ts";
 import { migrateCloudDatabase } from "../src/migrations.ts";
 import { Operations } from "../src/operations.ts";
+import { boardOperations, boardRoutes } from "../src/schema.ts";
 import { runFresh } from "./fixture.ts";
 
 const request = {
@@ -67,10 +69,13 @@ describe("Deployments", () => {
 					next: "storage_configuration_verified",
 				});
 				expect(advanced.row_version).toBe(1);
-				const sql = yield* SqlClient.SqlClient;
+				const db = yield* Database;
 				expect(
-					yield* sql`SELECT checkpoint, desired_revision FROM board_operations WHERE id = ${operation.id}`,
-				).toEqual([{ checkpoint: "storage_configuration_verified", desired_revision: 1 }]);
+					yield* db
+						.select({ checkpoint: boardOperations.checkpoint })
+						.from(boardOperations)
+						.where(eq(boardOperations.id, operation.id)),
+				).toEqual([{ checkpoint: "storage_configuration_verified" }]);
 			}),
 		);
 	});
@@ -132,7 +137,6 @@ describe("Deployments", () => {
 					"storage_configuration_verified",
 					"app_created",
 					"volume_created",
-					"runtime_secrets_written",
 					"machine_created",
 					"machine_started",
 				] as const) {
@@ -144,10 +148,10 @@ describe("Deployments", () => {
 					});
 				}
 				yield* deployments.publishRoute({ ...lease, expectedRowVersion: deployment.row_version });
-				const sql = yield* SqlClient.SqlClient;
-				expect(yield* sql`SELECT hostname, app_name FROM board_routes`).toEqual([
-					{ hostname: spec.hostname, app_name: spec.app_name },
-				]);
+				const db = yield* Database;
+				expect(
+					yield* db.select({ hostname: boardRoutes.hostname, app_name: boardRoutes.app_name }).from(boardRoutes),
+				).toEqual([{ hostname: spec.hostname, app_name: spec.app_name }]);
 				expect(
 					Exit.isFailure(
 						yield* Effect.exit(

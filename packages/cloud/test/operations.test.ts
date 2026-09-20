@@ -131,23 +131,23 @@ describe("Operations", () => {
 					operations.enqueue({
 						board_id: board.id,
 						owner_id: "user-1",
-						kind: "start",
+						kind: "backup",
 						requested_by: "user-1",
-						idempotency_key: "start-1",
+						idempotency_key: "backup-1",
 					}),
 				);
 				expect(Exit.isFailure(blocked)).toBe(true);
 				const provision = Option.getOrThrow(yield* operations.claim("worker-1", 30_000));
 				if (!provision.lease_token) return yield* Effect.die("Claim returned no lease token");
 				yield* operations.succeed(provision.id, provision.lease_token, "worker-1");
-				const start = yield* operations.enqueue({
+				const backup = yield* operations.enqueue({
 					board_id: board.id,
 					owner_id: "user-1",
-					kind: "start",
+					kind: "backup",
 					requested_by: "user-1",
-					idempotency_key: "start-1",
+					idempotency_key: "backup-1",
 				});
-				expect(start.state).toBe("queued");
+				expect(backup.state).toBe("queued");
 			}),
 		);
 	});
@@ -167,7 +167,7 @@ describe("Operations", () => {
 							.enqueue({
 								board_id: board.id,
 								owner_id: "user-1",
-								kind: "stop",
+								kind: "backup",
 								requested_by: "user-1",
 								idempotency_key: "stop-conflict",
 							})
@@ -194,9 +194,9 @@ describe("Operations", () => {
 				const input = {
 					board_id: board.id,
 					owner_id: "user-1",
-					kind: "start",
+					kind: "backup",
 					requested_by: "user-1",
-					idempotency_key: "concurrent-start",
+					idempotency_key: "concurrent-backup",
 				} as const;
 				const repeated = yield* Effect.all(
 					[sqlClient.withTransaction(operations.enqueue(input)), sqlClient.withTransaction(operations.enqueue(input))],
@@ -216,16 +216,23 @@ describe("Operations", () => {
 				const provision = Option.getOrThrow(yield* operations.claim("worker-1", 30_000));
 				if (!provision.lease_token) return yield* Effect.die("Claim returned no lease token");
 				yield* operations.succeed(provision.id, provision.lease_token, "worker-1");
+				const otherBoard = yield* (yield* Boards).request({
+					...boardRequest,
+					name: "Other board",
+					idempotency_key: "provision-2",
+				});
 				const input = {
 					board_id: board.id,
 					owner_id: "user-1",
-					kind: "start",
+					kind: "backup",
 					requested_by: "user-1",
 					idempotency_key: "control-1",
 				} as const;
 				const first = yield* operations.enqueue(input);
 				expect((yield* operations.enqueue(input)).id).toBe(first.id);
-				expect(Exit.isFailure(yield* Effect.exit(operations.enqueue({ ...input, kind: "stop" })))).toBe(true);
+				expect(
+					Exit.isFailure(yield* Effect.exit(operations.enqueue({ ...input, board_id: otherBoard.id }))),
+				).toBe(true);
 			}),
 		);
 	});
@@ -240,7 +247,7 @@ describe("Operations", () => {
 					operations.enqueue({
 						board_id: board.id,
 						owner_id: "user-2",
-						kind: "stop",
+						kind: "backup",
 						requested_by: "user-2",
 						idempotency_key: "cross-owner-stop",
 					}),
