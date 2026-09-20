@@ -4,7 +4,7 @@ import { CloudflareDns } from "./cloudflare-dns.ts";
 import type { Deployment, DeploymentDrift, DeploymentState } from "./deployment.ts";
 import { Deployments, type DeploymentLease } from "./deployments.ts";
 import { EdgeProbe } from "./edge-probe.ts";
-import { type EdgeMutation, EdgeNetworkingError, ensureEdgeNetworking } from "./edge-networking.ts";
+import { EdgeNetworkingError, ensureEdgeNetworking } from "./edge-networking.ts";
 import { type FlyApiError, FlyBoardApi } from "./fly-board-api.ts";
 import type { FlyApp, FlyMachine, FlyVolume } from "./fly-model.ts";
 import { machineConfig, machineMatches } from "./machine-spec.ts";
@@ -521,7 +521,7 @@ const make = (settings: ProvisioningSettings) =>
 									const found = yield* observed(fly.getMachine(deployment.app_name, deployment.machine_id));
 									if (Option.isNone(found))
 										return yield* issue("provider_observation_pending", true, "Fly Machine is not observable");
-									const machine = yield* ensureMachineStarted(
+									yield* ensureMachineStarted(
 										deployment,
 										yield* assertMachine(found.value, deployment),
 										renewLease,
