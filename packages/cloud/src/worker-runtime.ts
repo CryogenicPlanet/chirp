@@ -3,7 +3,6 @@ import { Config, Effect, Fiber, Layer, ManagedRuntime, Option } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { BackupObserver, backupObserverLayer } from "./backup-observer.ts";
 import { BackupScheduler, backupSchedulerLayer } from "./backup-scheduler.ts";
-import { BackupWorker, backupWorkerLayer } from "./backup-worker.ts";
 import { Boards, boardsLayer } from "./boards.ts";
 import { cloudflareDnsLayer, cloudflareSettings } from "./cloudflare-dns.ts";
 import { databaseLayer } from "./database.ts";
@@ -13,7 +12,6 @@ import { flyBoardApiLayer } from "./fly-board-api.ts";
 import { Operations, operationsLayer } from "./operations.ts";
 import { Provisioner, provisionerLayer } from "./provisioner.ts";
 import { provisioningSettings } from "./provisioning-settings.ts";
-import { ProvisioningWorker, provisioningWorkerLayer } from "./provisioning-worker.ts";
 
 const workerLayer = Layer.unwrap(
 	Effect.all({
@@ -31,24 +29,38 @@ const workerLayer = Layer.unwrap(
 				flyBoardApiLayer({ token: flyToken }).pipe(Layer.provide(FetchHttpClient.layer)),
 				edgeProbeLayer.pipe(Layer.provide(FetchHttpClient.layer)),
 			);
-			const reconcilers = Layer.mergeAll(
+			return Layer.mergeAll(
 				provisionerLayer(provisioning),
 				backupObserverLayer,
 				backupSchedulerLayer,
 			).pipe(Layer.provideMerge(stores), Layer.provideMerge(providers));
-			return Layer.mergeAll(provisioningWorkerLayer, backupWorkerLayer).pipe(Layer.provideMerge(reconcilers));
 		}),
 	),
 );
 
 const loop = Effect.gen(function* () {
-	const provisioning = yield* ProvisioningWorker;
+	const operations = yield* Operations;
+	const provisioner = yield* Provisioner;
 	const scheduler = yield* BackupScheduler;
-	const backups = yield* BackupWorker;
+	const observer = yield* BackupObserver;
 	return yield* Effect.gen(function* () {
-		const provisioned = yield* provisioning.runOnce("chirp-cloud-provisioner");
+		const provisioned = yield* operations.claim("chirp-cloud-provisioner", 90_000, "provision").pipe(
+			Effect.flatMap(
+				Option.match({
+					onNone: () => Effect.succeedNone,
+					onSome: (operation) => provisioner.run(operation, "chirp-cloud-provisioner").pipe(Effect.asSome),
+				}),
+			),
+		);
 		yield* scheduler.scheduleDue;
-		const observed = yield* backups.runOnce("chirp-cloud-backup-observer");
+		const observed = yield* operations.claim("chirp-cloud-backup-observer", 90_000, "backup").pipe(
+			Effect.flatMap(
+				Option.match({
+					onNone: () => Effect.succeedNone,
+					onSome: (operation) => observer.run(operation, "chirp-cloud-backup-observer").pipe(Effect.asSome),
+				}),
+			),
+		);
 		if (Option.isNone(provisioned) && Option.isNone(observed)) yield* Effect.sleep("1 second");
 	}).pipe(
 		Effect.catchCause((cause) => Effect.logError("Chirp Cloud worker iteration failed", cause)),
@@ -72,8 +84,6 @@ export const startWorkerRuntime = (): Promise<WorkerRuntime> => {
 					Provisioner,
 					BackupObserver,
 					BackupScheduler,
-					ProvisioningWorker,
-					BackupWorker,
 				],
 				{ discard: true },
 			),

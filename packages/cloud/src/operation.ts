@@ -3,7 +3,7 @@ import { Data, Schema } from "effect";
 export const OperationKind = Schema.Literals(["provision", "backup"]);
 export type OperationKind = typeof OperationKind.Type;
 
-export const OperationState = Schema.Literals(["queued", "running", "succeeded", "failed"]);
+const OperationState = Schema.Literals(["queued", "running", "succeeded", "failed"]);
 
 export const Operation = Schema.Struct({
 	id: Schema.String,

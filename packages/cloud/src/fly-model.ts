@@ -7,7 +7,7 @@ export const FlyAppDetails = Schema.Struct({
 	name: Schema.String,
 	organization: Schema.Struct({ slug: Schema.String }),
 });
-export const FlyAppListing = Schema.Struct({
+const FlyAppListing = Schema.Struct({
 	id: Schema.String,
 	name: Schema.String,
 	network: Schema.String,
@@ -63,23 +63,20 @@ export const FlyVolume = Schema.Struct({
 });
 export type FlyVolume = typeof FlyVolume.Type;
 
-export const FlyMachineMount = Schema.Struct({ volume: Schema.String, path: Schema.String });
-export type FlyMachineMount = typeof FlyMachineMount.Type;
+const FlyMachineMount = Schema.Struct({ volume: Schema.String, path: Schema.String });
 
-export const FlyMachineCheck = Schema.Struct({
+const FlyMachineCheck = Schema.Struct({
 	name: Schema.optionalKey(Schema.String),
 	status: Schema.optionalKey(Schema.String),
 });
-export type FlyMachineCheck = typeof FlyMachineCheck.Type;
 
-export const FlyMachinePort = Schema.Struct({
+const FlyMachinePort = Schema.Struct({
 	port: Schema.Int,
 	handlers: Schema.Array(Schema.String),
 	force_https: Schema.optionalKey(Schema.Boolean),
 });
-export type FlyMachinePort = typeof FlyMachinePort.Type;
 
-export const FlyMachineServiceCheck = Schema.Struct({
+const FlyMachineServiceCheck = Schema.Struct({
 	type: Schema.String,
 	port: Schema.Int,
 	method: Schema.String,
@@ -88,9 +85,8 @@ export const FlyMachineServiceCheck = Schema.Struct({
 	timeout: Schema.String,
 	grace_period: Schema.String,
 });
-export type FlyMachineServiceCheck = typeof FlyMachineServiceCheck.Type;
 
-export const FlyMachineService = Schema.Struct({
+const FlyMachineService = Schema.Struct({
 	protocol: Schema.String,
 	internal_port: Schema.Int,
 	autostart: Schema.Boolean,
@@ -99,14 +95,12 @@ export const FlyMachineService = Schema.Struct({
 	ports: Schema.Array(FlyMachinePort),
 	checks: Schema.Array(FlyMachineServiceCheck),
 });
-export type FlyMachineService = typeof FlyMachineService.Type;
 
-export const FlyMachineGuest = Schema.Struct({
+const FlyMachineGuest = Schema.Struct({
 	cpu_kind: Schema.String,
 	cpus: Schema.Int,
 	memory_mb: Schema.Int,
 });
-export type FlyMachineGuest = typeof FlyMachineGuest.Type;
 
 export const FlyMachineConfig = Schema.Struct({
 	image: Schema.String,

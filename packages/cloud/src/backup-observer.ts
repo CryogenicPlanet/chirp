@@ -9,7 +9,6 @@ export class BackupObservationError extends Data.TaggedError("BackupObservationE
 	readonly code: "deployment_unavailable" | "snapshot_pending" | "provider_unavailable";
 	readonly message: string;
 }> {}
-export type BackupObservationOutcome = "succeeded" | "failed";
 
 const verified = (snapshot: FlyVolumeSnapshot): VerifiedSnapshot | undefined => {
 	if (
