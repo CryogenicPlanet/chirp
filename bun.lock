@@ -34,6 +34,17 @@
         "@effect/sql-pg": "4.0.0-rc.113",
       },
     },
+    "packages/cloud": {
+      "name": "@comms/cloud",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect/sql-pg": "4.0.0-rc.113",
+        "effect": "4.0.0-rc.113",
+      },
+      "devDependencies": {
+        "@effect/sql-pglite": "4.0.0-rc.113",
+      },
+    },
     "packages/landing": {
       "name": "@comms/landing",
       "version": "0.0.0",
@@ -113,10 +124,10 @@
     },
   },
   "patchedDependencies": {
-    "effect@4.0.0-rc.113": "patches/effect@4.0.0-rc.113.patch",
-    "@effect/sql-pg@4.0.0-rc.113": "patches/@effect%2Fsql-pg@4.0.0-rc.113.patch",
     "@effect/sql-mysql2@4.0.0-rc.113": "patches/@effect%2Fsql-mysql2@4.0.0-rc.113.patch",
+    "effect@4.0.0-rc.113": "patches/effect@4.0.0-rc.113.patch",
     "@effect/platform-bun@4.0.0-rc.113": "patches/@effect%2Fplatform-bun@4.0.0-rc.113.patch",
+    "@effect/sql-pg@4.0.0-rc.113": "patches/@effect%2Fsql-pg@4.0.0-rc.113.patch",
   },
   "packages": {
     "@antfu/install-pkg": ["@antfu/install-pkg@2.0.1", "", { "dependencies": { "package-manager-detector": "^1.7.0", "tinyexec": "^1.2.4" } }, "sha512-iCKVQcIC0e3oDxEfs3SHQGW+ovhBMZmS1TE+bTk50rVyMCBmCfClv7Qi3HQKlumYwvjb/iIMeWCW2i67q6kFfQ=="],
@@ -172,6 +183,8 @@
     "@chevrotain/utils": ["@chevrotain/utils@11.1.2", "", {}, "sha512-4mudFAQ6H+MqBTfqLmU7G1ZwRzCLfJEooL/fsF6rCX5eePMbGhoy5n4g+G4vlh2muDcsCTJtL+uKbOzWxs5LHA=="],
 
     "@comms/boot": ["@comms/boot@workspace:packages/boot"],
+
+    "@comms/cloud": ["@comms/cloud@workspace:packages/cloud"],
 
     "@comms/landing": ["@comms/landing@workspace:packages/landing"],
 
