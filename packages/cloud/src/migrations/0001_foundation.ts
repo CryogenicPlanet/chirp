@@ -4,6 +4,7 @@ import type { DatabaseClient } from "../database.ts";
 
 export const id = 1;
 export const name = "foundation";
+export const compatibleSchemaVersions: ReadonlyArray<number> = [];
 
 export const effect = (database: DatabaseClient) =>
 	Effect.gen(function* () {

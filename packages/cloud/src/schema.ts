@@ -20,6 +20,10 @@ const operationStates = ["queued", "running", "succeeded", "failed"] as const;
 export const cloudMigrations = pgTable("cloud_migrations", {
 	migration_id: integer().primaryKey(),
 	name: text().notNull(),
+	compatible_schema_versions: integer()
+		.array()
+		.notNull()
+		.default(sql`'{}'::integer[]`),
 	created_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
 });
 
