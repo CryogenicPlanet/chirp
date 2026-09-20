@@ -1,12 +1,13 @@
 import { Data, Effect, Schema } from "effect";
-import { SqlClient } from "effect/unstable/sql";
-import type { SqlError } from "effect/unstable/sql/SqlError";
+import { asc, sql } from "drizzle-orm";
+import { Database } from "./database.ts";
 import * as foundation from "./migrations/0001_foundation.ts";
+import { cloudMigrations } from "./schema.ts";
 
 interface Migration {
 	readonly id: number;
 	readonly name: string;
-	readonly effect: Effect.Effect<unknown, SqlError, SqlClient.SqlClient>;
+	readonly effect: typeof foundation.effect;
 }
 
 const migrations: ReadonlyArray<Migration> = [foundation];
@@ -19,18 +20,20 @@ export class CloudMigrationError extends Data.TaggedError("CloudMigrationError")
 }> {}
 
 export const migrateCloudDatabase = Effect.gen(function* () {
-	const sql = yield* SqlClient.SqlClient;
-	yield* sql.withTransaction(
+	const database = yield* Database;
+	yield* database.transaction((transaction) =>
 		Effect.gen(function* () {
-			yield* sql`SELECT pg_advisory_xact_lock(485017403101)`;
-			yield* sql`CREATE TABLE IF NOT EXISTS cloud_migrations (
+			yield* transaction.execute(sql`SELECT pg_advisory_xact_lock(485017403101)`);
+			yield* transaction.execute(sql`CREATE TABLE IF NOT EXISTS cloud_migrations (
 				migration_id INTEGER PRIMARY KEY,
 				name TEXT NOT NULL,
 				created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-			)`;
-			const applied = yield* sql`SELECT migration_id, name FROM cloud_migrations ORDER BY migration_id`.pipe(
-				Effect.flatMap(receipts),
-			);
+			)`);
+			const applied = yield* transaction
+				.select({ migration_id: cloudMigrations.migration_id, name: cloudMigrations.name })
+				.from(cloudMigrations)
+				.orderBy(asc(cloudMigrations.migration_id))
+				.pipe(Effect.flatMap(receipts));
 			for (let index = 0; index < applied.length; index += 1) {
 				const receipt = applied[index];
 				const expected = migrations[index];
@@ -40,8 +43,11 @@ export const migrateCloudDatabase = Effect.gen(function* () {
 					});
 			}
 			for (const migration of migrations.slice(applied.length)) {
-				yield* migration.effect;
-				yield* sql`INSERT INTO cloud_migrations (migration_id, name) VALUES (${migration.id}, ${migration.name})`;
+				yield* migration.effect(transaction);
+				yield* transaction.insert(cloudMigrations).values({
+					migration_id: migration.id,
+					name: migration.name,
+				});
 			}
 		}),
 	);

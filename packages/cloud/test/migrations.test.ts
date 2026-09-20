@@ -1,17 +1,22 @@
+import { eq } from "drizzle-orm";
 import { Effect, Exit } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import { describe, expect, test } from "vitest";
+import { Database } from "../src/database.ts";
 import { CloudMigrationError, migrateCloudDatabase } from "../src/migrations.ts";
+import { cloudMigrations } from "../src/schema.ts";
 import { realPostgres, runFresh } from "./fixture.ts";
 
 describe("cloud migrations", () => {
 	test("applies the static registry and reruns idempotently", async () => {
 		await runFresh(
 			Effect.gen(function* () {
-				const sql = yield* SqlClient.SqlClient;
+				const database = yield* Database;
 				yield* migrateCloudDatabase;
 				yield* migrateCloudDatabase;
-				const receipts = yield* sql`SELECT migration_id, name FROM cloud_migrations`;
+				const receipts = yield* database
+					.select({ migration_id: cloudMigrations.migration_id, name: cloudMigrations.name })
+					.from(cloudMigrations);
 				expect(receipts).toEqual([{ migration_id: 1, name: "foundation" }]);
 			}),
 		);
@@ -20,9 +25,9 @@ describe("cloud migrations", () => {
 	test("refuses a changed historical receipt", async () => {
 		await runFresh(
 			Effect.gen(function* () {
-				const sql = yield* SqlClient.SqlClient;
+				const database = yield* Database;
 				yield* migrateCloudDatabase;
-				yield* sql`UPDATE cloud_migrations SET name = 'changed' WHERE migration_id = 1`;
+				yield* database.update(cloudMigrations).set({ name: "changed" }).where(eq(cloudMigrations.migration_id, 1));
 				const result = yield* Effect.exit(migrateCloudDatabase);
 				expect(Exit.isFailure(result)).toBe(true);
 				if (Exit.isFailure(result)) expect(result.cause.toString()).toContain(CloudMigrationError.name);
@@ -33,9 +38,9 @@ describe("cloud migrations", () => {
 	test("refuses a migration newer than the static registry", async () => {
 		await runFresh(
 			Effect.gen(function* () {
-				const sql = yield* SqlClient.SqlClient;
+				const database = yield* Database;
 				yield* migrateCloudDatabase;
-				yield* sql`INSERT INTO cloud_migrations (migration_id, name) VALUES (2, 'unknown')`;
+				yield* database.insert(cloudMigrations).values({ migration_id: 2, name: "unknown" });
 				const result = yield* Effect.exit(migrateCloudDatabase);
 				expect(Exit.isFailure(result)).toBe(true);
 			}),

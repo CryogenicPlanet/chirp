@@ -1,21 +1,22 @@
 import { Effect } from "effect";
-import { SqlClient } from "effect/unstable/sql";
+import { sql } from "drizzle-orm";
+import type { DatabaseClient } from "../database.ts";
 
 export const id = 1;
 export const name = "foundation";
 
-export const effect = Effect.gen(function* () {
-	const sql = yield* SqlClient.SqlClient;
-	yield* sql`CREATE TABLE boards (
+export const effect = (database: DatabaseClient) =>
+	Effect.gen(function* () {
+		yield* database.execute(sql`CREATE TABLE boards (
 		id UUID PRIMARY KEY,
 		owner_id TEXT NOT NULL,
 		name TEXT NOT NULL CHECK (length(btrim(name)) > 0),
 		slug CHAR(32) COLLATE "C" NOT NULL UNIQUE CHECK (slug ~ '^[0-9a-f]{32}$'),
 		storage_engine TEXT NOT NULL CHECK (storage_engine IN ('sqlite', 'postgres', 'mysql')),
 		created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-	)`;
-	yield* sql`CREATE INDEX boards_owner_created ON boards (owner_id, created_at DESC, id DESC)`;
-	yield* sql`CREATE TABLE board_operations (
+	)`);
+		yield* database.execute(sql`CREATE INDEX boards_owner_created ON boards (owner_id, created_at DESC, id DESC)`);
+		yield* database.execute(sql`CREATE TABLE board_operations (
 		id UUID PRIMARY KEY,
 		board_id UUID NOT NULL REFERENCES boards(id) ON DELETE RESTRICT,
 		kind TEXT NOT NULL CHECK (kind IN ('provision', 'start', 'stop', 'restart', 'backup')),
@@ -43,7 +44,11 @@ export const effect = Effect.gen(function* () {
 			(state IN ('succeeded', 'failed') AND finished_at IS NOT NULL)
 			OR (state IN ('queued', 'running') AND finished_at IS NULL)
 		)
-	)`;
-	yield* sql`CREATE UNIQUE INDEX board_operations_active_board ON board_operations (board_id) WHERE state IN ('queued', 'running')`;
-	yield* sql`CREATE INDEX board_operations_queue ON board_operations (state, available_at, created_at, id)`;
-});
+	)`);
+		yield* database.execute(
+			sql`CREATE UNIQUE INDEX board_operations_active_board ON board_operations (board_id) WHERE state IN ('queued', 'running')`,
+		);
+		yield* database.execute(
+			sql`CREATE INDEX board_operations_queue ON board_operations (state, available_at, created_at, id)`,
+		);
+	});

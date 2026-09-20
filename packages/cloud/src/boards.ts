@@ -1,12 +1,10 @@
+import { and, desc, eq, getTableColumns } from "drizzle-orm";
 import { Context, Crypto, Effect, Layer, Option, Schema } from "effect";
-import { SqlClient } from "effect/unstable/sql";
-import { Board, type RequestBoard } from "./board.ts";
+import type { Board, RequestBoard } from "./board.ts";
+import { Database } from "./database.ts";
 import { IdempotencyConflict } from "./operation.ts";
+import { boardOperations, boards } from "./schema.ts";
 
-const boards = Schema.decodeUnknownEffect(Schema.Array(Board));
-const requestRows = Schema.decodeUnknownEffect(
-	Schema.Array(Schema.Struct({ ...Board.fields, request_hash: Schema.String })),
-);
 const encodeRequestHash = Schema.encodeSync(
 	Schema.fromJsonString(Schema.Struct({ owner_id: Schema.String, name: Schema.String, storage_engine: Schema.String })),
 );
@@ -18,28 +16,30 @@ const hex = (bytes: Uint8Array) => {
 };
 
 const make = Effect.gen(function* () {
-	const sql = yield* SqlClient.SqlClient;
+	const database = yield* Database;
 	const crypto = yield* Crypto.Crypto;
-	const columns = sql`b.id, b.owner_id, b.name, b.slug, b.storage_engine, b.created_at::text AS created_at`;
 	const findRequest = (requestedBy: string, idempotencyKey: string) =>
-		sql`SELECT ${columns}, o.request_hash FROM board_operations o
-			JOIN boards b ON b.id = o.board_id
-			WHERE o.requested_by = ${requestedBy} AND o.idempotency_key = ${idempotencyKey}`.pipe(
-			Effect.flatMap(requestRows),
-			Effect.map((found) => Option.fromNullishOr(found[0])),
-		);
+		database
+			.select({ ...getTableColumns(boards), request_hash: boardOperations.request_hash })
+			.from(boardOperations)
+			.innerJoin(boards, eq(boards.id, boardOperations.board_id))
+			.where(and(eq(boardOperations.requested_by, requestedBy), eq(boardOperations.idempotency_key, idempotencyKey)))
+			.limit(1)
+			.pipe(Effect.map((found) => Option.fromNullishOr(found[0])));
 	const resolveRequest = (input: RequestBoard, requestHash: string) =>
 		findRequest(input.requested_by, input.idempotency_key).pipe(
 			Effect.flatMap(
 				Option.match({
 					onNone: () => Effect.succeed(Option.none<Board>()),
-					onSome: (found) =>
-						found.request_hash === requestHash
-							? Effect.succeedSome(found)
-							: new IdempotencyConflict({
-									requestedBy: input.requested_by,
-									idempotencyKey: input.idempotency_key,
-								}),
+					onSome: (found) => {
+						if (found.request_hash !== requestHash)
+							return new IdempotencyConflict({
+								requestedBy: input.requested_by,
+								idempotencyKey: input.idempotency_key,
+							});
+						const { request_hash: _, ...board } = found;
+						return Effect.succeedSome(board);
+					},
 				}),
 			),
 		);
@@ -65,26 +65,35 @@ const make = Effect.gen(function* () {
 					crypto.randomUUIDv7,
 					crypto.randomBytes(16),
 				]);
-				const create = sql.withTransaction(
+				const create = database.transaction((transaction) =>
 					Effect.gen(function* () {
-						const created = yield* sql`INSERT INTO boards (id, owner_id, name, slug, storage_engine)
-							VALUES (${id}, ${input.owner_id}, ${input.name}, ${hex(slugBytes)}, ${input.storage_engine})
-							RETURNING id, owner_id, name, slug, storage_engine, created_at::text AS created_at`.pipe(
-							Effect.flatMap(boards),
-						);
+						const created = yield* transaction
+							.insert(boards)
+							.values({
+								id,
+								owner_id: input.owner_id,
+								name: input.name,
+								slug: hex(slugBytes),
+								storage_engine: input.storage_engine,
+							})
+							.returning();
 						const board = created[0];
 						if (!board) return yield* Effect.die("Board insert returned no row");
-						yield* sql`INSERT INTO board_operations (
-							id, board_id, kind, state, checkpoint, requested_by, idempotency_key, request_hash
-						) VALUES (
-							${operationId}, ${id}, 'provision', 'queued', 'requested', ${input.requested_by},
-							${input.idempotency_key}, ${requestHash}
-						)`;
+						yield* transaction.insert(boardOperations).values({
+							id: operationId,
+							board_id: id,
+							kind: "provision",
+							state: "queued",
+							checkpoint: "requested",
+							requested_by: input.requested_by,
+							idempotency_key: input.idempotency_key,
+							request_hash: requestHash,
+						});
 						return board;
 					}),
 				);
 				return yield* create.pipe(
-					Effect.catchTag("SqlError", (error) =>
+					Effect.catchTag("EffectDrizzleQueryError", (error) =>
 						resolveRequest(input, requestHash).pipe(
 							Effect.flatMap(Option.match({ onNone: () => Effect.fail(error), onSome: Effect.succeed })),
 						),
@@ -92,14 +101,18 @@ const make = Effect.gen(function* () {
 				);
 			}),
 		get: (ownerId: string, id: string) =>
-			sql`SELECT ${columns} FROM boards b WHERE b.owner_id = ${ownerId} AND b.id = ${id}`.pipe(
-				Effect.flatMap(boards),
-				Effect.map((found) => Option.fromNullishOr(found[0])),
-			),
+			database
+				.select()
+				.from(boards)
+				.where(and(eq(boards.owner_id, ownerId), eq(boards.id, id)))
+				.limit(1)
+				.pipe(Effect.map((found) => Option.fromNullishOr(found[0]))),
 		list: (ownerId: string) =>
-			sql`SELECT ${columns} FROM boards b WHERE b.owner_id = ${ownerId} ORDER BY b.created_at DESC, b.id DESC`.pipe(
-				Effect.flatMap(boards),
-			),
+			database
+				.select()
+				.from(boards)
+				.where(eq(boards.owner_id, ownerId))
+				.orderBy(desc(boards.created_at), desc(boards.id)),
 	};
 });
 

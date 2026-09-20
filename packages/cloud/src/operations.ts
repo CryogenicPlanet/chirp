@@ -1,67 +1,76 @@
+import { and, asc, eq, gt, inArray, lte, or, sql } from "drizzle-orm";
 import { Context, Crypto, Effect, Layer, Option, Schema } from "effect";
-import { SqlClient } from "effect/unstable/sql";
+import { Database, type DatabaseClient } from "./database.ts";
 import {
 	BoardNotFound,
 	type EnqueueOperation,
 	IdempotencyConflict,
 	InvalidLeaseDuration,
 	LeaseLost,
-	Operation,
+	type Operation,
 	OperationAlreadyActive,
 } from "./operation.ts";
+import { boardOperations, boards } from "./schema.ts";
 
-const operations = Schema.decodeUnknownEffect(Schema.Array(Operation));
 const encodeRequestHash = Schema.encodeSync(
 	Schema.fromJsonString(Schema.Struct({ board_id: Schema.String, owner_id: Schema.String, kind: Schema.String })),
 );
-const ids = Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ id: Schema.String })));
+
+const clockTimestamp = () => sql<Date>`clock_timestamp()`;
+const leaseExpiry = (milliseconds: number) => sql<Date>`clock_timestamp() + ${milliseconds} * interval '1 millisecond'`;
 
 const make = Effect.gen(function* () {
-	const sql = yield* SqlClient.SqlClient;
+	const database = yield* Database;
 	const crypto = yield* Crypto.Crypto;
-	const columns = sql`id, board_id, kind, state, checkpoint, requested_by, idempotency_key, request_hash,
-		available_at::text AS available_at, attempt, lease_token, lease_owner,
-		lease_expires_at::text AS lease_expires_at, last_error_code, last_error_message,
-		created_at::text AS created_at, updated_at::text AS updated_at, finished_at::text AS finished_at`;
-	const decodeOne = <E, R>(effect: Effect.Effect<unknown, E, R>) =>
-		effect.pipe(
-			Effect.flatMap(operations),
-			Effect.map((found) => Option.fromNullishOr(found[0])),
-		);
 	const byRequest = (requestedBy: string, idempotencyKey: string) =>
-		decodeOne(
-			sql`SELECT ${columns} FROM board_operations WHERE requested_by = ${requestedBy} AND idempotency_key = ${idempotencyKey}`,
-		);
+		database
+			.select()
+			.from(boardOperations)
+			.where(and(eq(boardOperations.requested_by, requestedBy), eq(boardOperations.idempotency_key, idempotencyKey)))
+			.limit(1)
+			.pipe(Effect.map((found) => Option.fromNullishOr(found[0])));
 	const activeForBoard = (boardId: string) =>
-		decodeOne(
-			sql`SELECT ${columns} FROM board_operations WHERE board_id = ${boardId} AND state IN ('queued', 'running')`,
-		);
+		database
+			.select()
+			.from(boardOperations)
+			.where(and(eq(boardOperations.board_id, boardId), inArray(boardOperations.state, ["queued", "running"])))
+			.limit(1)
+			.pipe(Effect.map((found) => Option.fromNullishOr(found[0])));
 	const ownedBoard = (boardId: string, ownerId: string) =>
-		sql`SELECT id FROM boards WHERE id = ${boardId} AND owner_id = ${ownerId}`.pipe(
-			Effect.flatMap(ids),
-			Effect.map((found) => found.length > 0),
-		);
-	const leased = <E, R>(effect: Effect.Effect<unknown, E, R>, operationId: string) =>
-		decodeOne(effect).pipe(
-			Effect.flatMap(
-				Option.match({
-					onNone: () => new LeaseLost({ operationId }),
-					onSome: Effect.succeed,
-				}),
-			),
+		database
+			.select({ id: boards.id })
+			.from(boards)
+			.where(and(eq(boards.id, boardId), eq(boards.owner_id, ownerId)))
+			.limit(1)
+			.pipe(Effect.map((found) => found.length > 0));
+	const leased = <E, R>(effect: Effect.Effect<readonly Operation[], E, R>, operationId: string) =>
+		effect.pipe(
+			Effect.flatMap((found) => {
+				const operation = found[0];
+				return operation ? Effect.succeed(operation) : new LeaseLost({ operationId });
+			}),
 		);
 	const withLease = <A, E, R>(
 		input: { readonly id: string; readonly leaseToken: string; readonly workerId: string },
-		effect: Effect.Effect<A, E, R>,
+		effect: (transaction: DatabaseClient) => Effect.Effect<A, E, R>,
 	) =>
-		sql.withTransaction(
+		database.transaction((transaction) =>
 			Effect.gen(function* () {
-				const locked = yield* sql`SELECT id FROM board_operations
-					WHERE id = ${input.id} AND state = 'running' AND lease_token = ${input.leaseToken}
-						AND lease_owner = ${input.workerId}
-					FOR UPDATE`.pipe(Effect.flatMap(ids));
+				const locked = yield* transaction
+					.select({ id: boardOperations.id })
+					.from(boardOperations)
+					.where(
+						and(
+							eq(boardOperations.id, input.id),
+							eq(boardOperations.state, "running"),
+							eq(boardOperations.lease_token, input.leaseToken),
+							eq(boardOperations.lease_owner, input.workerId),
+						),
+					)
+					.for("update")
+					.limit(1);
 				if (!locked[0]) return yield* new LeaseLost({ operationId: input.id });
-				return yield* effect;
+				return yield* effect(transaction);
 			}),
 		);
 	const leaseDuration = (milliseconds: number): Effect.Effect<number, InvalidLeaseDuration> =>
@@ -91,23 +100,29 @@ const make = Effect.gen(function* () {
 					return existing.value;
 				}
 				const id = yield* crypto.randomUUIDv7;
-				const insert = sql.withTransaction(
-					decodeOne(sql`INSERT INTO board_operations (
-						id, board_id, kind, state, checkpoint, requested_by, idempotency_key, request_hash
-					) VALUES (
-						${id}, ${input.board_id}, ${input.kind}, 'queued', 'requested', ${input.requested_by},
-						${input.idempotency_key}, ${requestHash}
-					) RETURNING ${columns}`).pipe(
-						Effect.flatMap(
-							Option.match({
-								onNone: () => Effect.die("Operation insert returned no row"),
-								onSome: Effect.succeed,
+				const insert = database.transaction((transaction) =>
+					transaction
+						.insert(boardOperations)
+						.values({
+							id,
+							board_id: input.board_id,
+							kind: input.kind,
+							state: "queued",
+							checkpoint: "requested",
+							requested_by: input.requested_by,
+							idempotency_key: input.idempotency_key,
+							request_hash: requestHash,
+						})
+						.returning()
+						.pipe(
+							Effect.flatMap((created) => {
+								const operation = created[0];
+								return operation ? Effect.succeed(operation) : Effect.die("Operation insert returned no row");
 							}),
 						),
-					),
 				);
 				return yield* insert.pipe(
-					Effect.catchTag("SqlError", (error) =>
+					Effect.catchTag("EffectDrizzleQueryError", (error) =>
 						Effect.gen(function* () {
 							const sameRequest = yield* byRequest(input.requested_by, input.idempotency_key);
 							if (Option.isSome(sameRequest)) {
@@ -130,25 +145,37 @@ const make = Effect.gen(function* () {
 				Effect.flatMap((duration) =>
 					crypto.randomUUIDv7.pipe(Effect.map((leaseToken) => [duration, leaseToken] as const)),
 				),
-				Effect.flatMap(([duration, leaseToken]) =>
-					decodeOne(sql`WITH candidate AS (
-						SELECT id FROM board_operations
-						WHERE (state = 'queued' AND available_at <= clock_timestamp())
-							OR (state = 'running' AND lease_expires_at <= clock_timestamp())
-						ORDER BY available_at, created_at, id
-						FOR UPDATE SKIP LOCKED
-						LIMIT 1
-					)
-					UPDATE board_operations o SET
-						state = 'running', lease_token = ${leaseToken}, lease_owner = ${workerId},
-						lease_expires_at = clock_timestamp() + ${duration} * interval '1 millisecond',
-						attempt = attempt + 1, updated_at = clock_timestamp()
-					FROM candidate WHERE o.id = candidate.id
-					RETURNING o.id, board_id, kind, state, checkpoint, requested_by, idempotency_key, request_hash,
-						available_at::text AS available_at, attempt, lease_token, lease_owner,
-						lease_expires_at::text AS lease_expires_at, last_error_code, last_error_message,
-						created_at::text AS created_at, updated_at::text AS updated_at, finished_at::text AS finished_at`),
-				),
+				Effect.flatMap(([duration, leaseToken]) => {
+					const candidate = database.$with("candidate").as(
+						database
+							.select({ id: boardOperations.id })
+							.from(boardOperations)
+							.where(
+								or(
+									and(eq(boardOperations.state, "queued"), lte(boardOperations.available_at, clockTimestamp())),
+									and(eq(boardOperations.state, "running"), lte(boardOperations.lease_expires_at, clockTimestamp())),
+								),
+							)
+							.orderBy(asc(boardOperations.available_at), asc(boardOperations.created_at), asc(boardOperations.id))
+							.for("update", { skipLocked: true })
+							.limit(1),
+					);
+					return database
+						.with(candidate)
+						.update(boardOperations)
+						.set({
+							state: "running",
+							lease_token: leaseToken,
+							lease_owner: workerId,
+							lease_expires_at: leaseExpiry(duration),
+							attempt: sql`${boardOperations.attempt} + 1`,
+							updated_at: clockTimestamp(),
+						})
+						.from(candidate)
+						.where(eq(boardOperations.id, candidate.id))
+						.returning()
+						.pipe(Effect.map((claimed) => Option.fromNullishOr(claimed[0])));
+				}),
 			),
 		renew: (input: {
 			readonly id: string;
@@ -158,15 +185,21 @@ const make = Effect.gen(function* () {
 		}) =>
 			leaseDuration(input.leaseMilliseconds).pipe(
 				Effect.flatMap((duration) =>
-					withLease(
-						input,
+					withLease(input, (transaction) =>
 						leased(
-							sql`UPDATE board_operations SET
-					lease_expires_at = clock_timestamp() + ${duration} * interval '1 millisecond',
-					updated_at = clock_timestamp()
-				WHERE id = ${input.id} AND state = 'running' AND lease_token = ${input.leaseToken}
-					AND lease_owner = ${input.workerId} AND lease_expires_at > clock_timestamp()
-				RETURNING ${columns}`,
+							transaction
+								.update(boardOperations)
+								.set({ lease_expires_at: leaseExpiry(duration), updated_at: clockTimestamp() })
+								.where(
+									and(
+										eq(boardOperations.id, input.id),
+										eq(boardOperations.state, "running"),
+										eq(boardOperations.lease_token, input.leaseToken),
+										eq(boardOperations.lease_owner, input.workerId),
+										gt(boardOperations.lease_expires_at, clockTimestamp()),
+									),
+								)
+								.returning(),
 							input.id,
 						),
 					),
@@ -179,14 +212,22 @@ const make = Effect.gen(function* () {
 			readonly expected: string;
 			readonly next: string;
 		}) =>
-			withLease(
-				input,
+			withLease(input, (transaction) =>
 				leased(
-					sql`UPDATE board_operations SET checkpoint = ${input.next}, updated_at = clock_timestamp()
-				WHERE id = ${input.id} AND state = 'running' AND lease_token = ${input.leaseToken}
-					AND lease_owner = ${input.workerId} AND lease_expires_at > clock_timestamp()
-					AND checkpoint = ${input.expected}
-				RETURNING ${columns}`,
+					transaction
+						.update(boardOperations)
+						.set({ checkpoint: input.next, updated_at: clockTimestamp() })
+						.where(
+							and(
+								eq(boardOperations.id, input.id),
+								eq(boardOperations.state, "running"),
+								eq(boardOperations.lease_token, input.leaseToken),
+								eq(boardOperations.lease_owner, input.workerId),
+								gt(boardOperations.lease_expires_at, clockTimestamp()),
+								eq(boardOperations.checkpoint, input.expected),
+							),
+						)
+						.returning(),
 					input.id,
 				),
 			),
@@ -198,29 +239,58 @@ const make = Effect.gen(function* () {
 			readonly errorCode: string;
 			readonly errorMessage: string;
 		}) =>
-			withLease(
-				input,
+			withLease(input, (transaction) =>
 				leased(
-					sql`UPDATE board_operations SET
-					state = 'queued', available_at = ${input.availableAt}, lease_token = NULL, lease_owner = NULL,
-					lease_expires_at = NULL, last_error_code = ${input.errorCode},
-					last_error_message = ${input.errorMessage}, updated_at = clock_timestamp()
-				WHERE id = ${input.id} AND state = 'running' AND lease_token = ${input.leaseToken}
-					AND lease_owner = ${input.workerId} AND lease_expires_at > clock_timestamp()
-				RETURNING ${columns}`,
+					transaction
+						.update(boardOperations)
+						.set({
+							state: "queued",
+							available_at: input.availableAt,
+							lease_token: null,
+							lease_owner: null,
+							lease_expires_at: null,
+							last_error_code: input.errorCode,
+							last_error_message: input.errorMessage,
+							updated_at: clockTimestamp(),
+						})
+						.where(
+							and(
+								eq(boardOperations.id, input.id),
+								eq(boardOperations.state, "running"),
+								eq(boardOperations.lease_token, input.leaseToken),
+								eq(boardOperations.lease_owner, input.workerId),
+								gt(boardOperations.lease_expires_at, clockTimestamp()),
+							),
+						)
+						.returning(),
 					input.id,
 				),
 			),
 		succeed: (id: string, leaseToken: string, workerId: string) =>
-			withLease(
-				{ id, leaseToken, workerId },
+			withLease({ id, leaseToken, workerId }, (transaction) =>
 				leased(
-					sql`UPDATE board_operations SET state = 'succeeded', lease_token = NULL, lease_owner = NULL,
-					lease_expires_at = NULL, last_error_code = NULL, last_error_message = NULL,
-					updated_at = clock_timestamp(), finished_at = clock_timestamp()
-				WHERE id = ${id} AND state = 'running' AND lease_token = ${leaseToken}
-					AND lease_owner = ${workerId} AND lease_expires_at > clock_timestamp()
-				RETURNING ${columns}`,
+					transaction
+						.update(boardOperations)
+						.set({
+							state: "succeeded",
+							lease_token: null,
+							lease_owner: null,
+							lease_expires_at: null,
+							last_error_code: null,
+							last_error_message: null,
+							updated_at: clockTimestamp(),
+							finished_at: clockTimestamp(),
+						})
+						.where(
+							and(
+								eq(boardOperations.id, id),
+								eq(boardOperations.state, "running"),
+								eq(boardOperations.lease_token, leaseToken),
+								eq(boardOperations.lease_owner, workerId),
+								gt(boardOperations.lease_expires_at, clockTimestamp()),
+							),
+						)
+						.returning(),
 					id,
 				),
 			),
@@ -231,16 +301,30 @@ const make = Effect.gen(function* () {
 			readonly errorCode: string;
 			readonly errorMessage: string;
 		}) =>
-			withLease(
-				input,
+			withLease(input, (transaction) =>
 				leased(
-					sql`UPDATE board_operations SET state = 'failed', lease_token = NULL, lease_owner = NULL,
-					lease_expires_at = NULL, last_error_code = ${input.errorCode},
-					last_error_message = ${input.errorMessage}, updated_at = clock_timestamp(),
-					finished_at = clock_timestamp()
-				WHERE id = ${input.id} AND state = 'running' AND lease_token = ${input.leaseToken}
-					AND lease_owner = ${input.workerId} AND lease_expires_at > clock_timestamp()
-				RETURNING ${columns}`,
+					transaction
+						.update(boardOperations)
+						.set({
+							state: "failed",
+							lease_token: null,
+							lease_owner: null,
+							lease_expires_at: null,
+							last_error_code: input.errorCode,
+							last_error_message: input.errorMessage,
+							updated_at: clockTimestamp(),
+							finished_at: clockTimestamp(),
+						})
+						.where(
+							and(
+								eq(boardOperations.id, input.id),
+								eq(boardOperations.state, "running"),
+								eq(boardOperations.lease_token, input.leaseToken),
+								eq(boardOperations.lease_owner, input.workerId),
+								gt(boardOperations.lease_expires_at, clockTimestamp()),
+							),
+						)
+						.returning(),
 					input.id,
 				),
 			),

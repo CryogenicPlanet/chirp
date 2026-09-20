@@ -1,8 +1,10 @@
+import { eq } from "drizzle-orm";
 import { Effect, Exit, Option } from "effect";
-import { SqlClient } from "effect/unstable/sql";
 import { describe, expect, test } from "vitest";
 import { Boards } from "../src/boards.ts";
+import { Database } from "../src/database.ts";
 import { migrateCloudDatabase } from "../src/migrations.ts";
+import { boardOperations } from "../src/schema.ts";
 import { runFresh } from "./fixture.ts";
 
 const request = {
@@ -19,12 +21,19 @@ describe("Boards", () => {
 			Effect.gen(function* () {
 				yield* migrateCloudDatabase;
 				const boards = yield* Boards;
-				const sql = yield* SqlClient.SqlClient;
+				const database = yield* Database;
 				const board = yield* boards.request(request);
 				expect(board.slug).toMatch(/^[0-9a-f]{32}$/);
-				expect(yield* sql`SELECT kind, state, checkpoint FROM board_operations WHERE board_id = ${board.id}`).toEqual([
-					{ kind: "provision", state: "queued", checkpoint: "requested" },
-				]);
+				expect(
+					yield* database
+						.select({
+							kind: boardOperations.kind,
+							state: boardOperations.state,
+							checkpoint: boardOperations.checkpoint,
+						})
+						.from(boardOperations)
+						.where(eq(boardOperations.board_id, board.id)),
+				).toEqual([{ kind: "provision", state: "queued", checkpoint: "requested" }]);
 			}),
 		);
 	});

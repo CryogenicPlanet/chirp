@@ -1,9 +1,12 @@
+import { eq, sql } from "drizzle-orm";
 import { DateTime, Deferred, Effect, Exit, Fiber, Option } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import { describe, expect, test } from "vitest";
 import { Boards } from "../src/boards.ts";
+import { Database } from "../src/database.ts";
 import { migrateCloudDatabase } from "../src/migrations.ts";
 import { Operations } from "../src/operations.ts";
+import { boardOperations, boards } from "../src/schema.ts";
 import { realPostgres, runFresh } from "./fixture.ts";
 
 const boardRequest = {
@@ -36,9 +39,12 @@ describe("Operations", () => {
 				yield* migrateCloudDatabase;
 				yield* (yield* Boards).request(boardRequest);
 				const operations = yield* Operations;
-				const sql = yield* SqlClient.SqlClient;
+				const database = yield* Database;
 				const first = Option.getOrThrow(yield* operations.claim("worker-1", 30_000));
-				yield* sql`UPDATE board_operations SET lease_expires_at = now() - interval '1 second' WHERE id = ${first.id}`;
+				yield* database
+					.update(boardOperations)
+					.set({ lease_expires_at: sql<Date>`clock_timestamp() - interval '1 second'` })
+					.where(eq(boardOperations.id, first.id));
 				const second = Option.getOrThrow(yield* operations.claim("worker-2", 30_000));
 				expect(second.id).toBe(first.id);
 				expect(second.attempt).toBe(2);
@@ -138,10 +144,11 @@ describe("Operations", () => {
 				yield* migrateCloudDatabase;
 				const board = yield* (yield* Boards).request(boardRequest);
 				const operations = yield* Operations;
-				const sql = yield* SqlClient.SqlClient;
-				yield* sql.withTransaction(
+				const database = yield* Database;
+				const sqlClient = yield* SqlClient.SqlClient;
+				yield* sqlClient.withTransaction(
 					Effect.gen(function* () {
-						yield* sql`UPDATE boards SET name = 'Updated' WHERE id = ${board.id}`;
+						yield* database.update(boards).set({ name: "Updated" }).where(eq(boards.id, board.id));
 						yield* operations
 							.enqueue({
 								board_id: board.id,
@@ -153,7 +160,9 @@ describe("Operations", () => {
 							.pipe(Effect.catchTag("OperationAlreadyActive", () => Effect.void));
 					}),
 				);
-				expect(yield* sql`SELECT name FROM boards WHERE id = ${board.id}`).toEqual([{ name: "Updated" }]);
+				expect(yield* database.select({ name: boards.name }).from(boards).where(eq(boards.id, board.id))).toEqual([
+					{ name: "Updated" },
+				]);
 			}),
 		);
 	});
@@ -164,7 +173,7 @@ describe("Operations", () => {
 				yield* migrateCloudDatabase;
 				const board = yield* (yield* Boards).request(boardRequest);
 				const operations = yield* Operations;
-				const sql = yield* SqlClient.SqlClient;
+				const sqlClient = yield* SqlClient.SqlClient;
 				const provision = Option.getOrThrow(yield* operations.claim("worker-1", 30_000));
 				if (!provision.lease_token) return yield* Effect.die("Claim returned no lease token");
 				yield* operations.succeed(provision.id, provision.lease_token, "worker-1");
@@ -176,7 +185,7 @@ describe("Operations", () => {
 					idempotency_key: "concurrent-start",
 				} as const;
 				const repeated = yield* Effect.all(
-					[sql.withTransaction(operations.enqueue(input)), sql.withTransaction(operations.enqueue(input))],
+					[sqlClient.withTransaction(operations.enqueue(input)), sqlClient.withTransaction(operations.enqueue(input))],
 					{ concurrency: "unbounded" },
 				);
 				expect(new Set(repeated.map(({ id }) => id)).size).toBe(1);
@@ -278,8 +287,8 @@ describe("Operations", () => {
 				yield* migrateCloudDatabase;
 				yield* (yield* Boards).request(boardRequest);
 				const operations = yield* Operations;
-				const sql = yield* SqlClient.SqlClient;
-				yield* sql.withTransaction(
+				const sqlClient = yield* SqlClient.SqlClient;
+				yield* sqlClient.withTransaction(
 					Effect.gen(function* () {
 						const claimed = Option.getOrThrow(yield* operations.claim("worker-1", 25));
 						if (!claimed.lease_token) return yield* Effect.die("Claim returned no lease token");
@@ -309,15 +318,20 @@ describe("Operations", () => {
 				yield* migrateCloudDatabase;
 				yield* (yield* Boards).request(boardRequest);
 				const operations = yield* Operations;
-				const sql = yield* SqlClient.SqlClient;
+				const database = yield* Database;
+				const sqlClient = yield* SqlClient.SqlClient;
 				const claimed = Option.getOrThrow(yield* operations.claim("worker-1", 250));
 				if (!claimed.lease_token) return yield* Effect.die("Claim returned no lease token");
 				const locked = yield* Deferred.make<void>();
 				const release = yield* Deferred.make<void>();
 				const holder = yield* Effect.forkChild(
-					sql.withTransaction(
+					sqlClient.withTransaction(
 						Effect.gen(function* () {
-							yield* sql`SELECT id FROM board_operations WHERE id = ${claimed.id} FOR UPDATE`;
+							yield* database
+								.select({ id: boardOperations.id })
+								.from(boardOperations)
+								.where(eq(boardOperations.id, claimed.id))
+								.for("update");
 							yield* Deferred.succeed(locked, undefined);
 							yield* Deferred.await(release);
 						}),

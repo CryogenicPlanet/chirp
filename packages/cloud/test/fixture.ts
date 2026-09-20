@@ -1,18 +1,25 @@
 import * as PgClient from "@effect/sql-pg/PgClient";
 import * as PgliteClient from "@effect/sql-pglite/PgliteClient";
+import { sql } from "drizzle-orm";
+import * as PgDrizzle from "drizzle-orm/effect-postgres";
+import * as PgliteDrizzle from "drizzle-orm/effect-pglite";
 import { Crypto, Effect, Layer, Redacted } from "effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import type * as SqlClient from "effect/unstable/sql/SqlClient";
 import { type Boards, boardsLayer } from "../src/boards.ts";
+import { Database } from "../src/database.ts";
 import { type Operations, operationsLayer } from "../src/operations.ts";
 
 const databaseUrl = process.env.CLOUD_TEST_DATABASE_URL;
-const databaseLayer = databaseUrl
+const sqlLayer = databaseUrl
 	? PgClient.layer({
 			url: Redacted.make(databaseUrl),
 			maxConnections: 8,
 			multiplex: false,
 		})
 	: PgliteClient.layer();
+const databaseLayer = databaseUrl
+	? Layer.effect(Database, PgDrizzle.makeWithDefaults()).pipe(Layer.provideMerge(sqlLayer))
+	: Layer.effect(Database, PgliteDrizzle.makeWithDefaults()).pipe(Layer.provideMerge(sqlLayer));
 const cryptoLayer = Layer.succeed(
 	Crypto.Crypto,
 	Crypto.make({
@@ -33,11 +40,11 @@ const testLayer = Layer.mergeAll(boardsLayer, operationsLayer).pipe(
 
 export const realPostgres = databaseUrl !== undefined;
 
-export const runFresh = <A, E>(effect: Effect.Effect<A, E, Boards | Operations | SqlClient.SqlClient>) =>
+export const runFresh = <A, E>(effect: Effect.Effect<A, E, Boards | Database | Operations | SqlClient.SqlClient>) =>
 	Effect.runPromise(
 		Effect.gen(function* () {
-			const sql = yield* SqlClient.SqlClient;
-			yield* sql`DROP TABLE IF EXISTS board_operations, boards, cloud_migrations CASCADE`;
+			const database = yield* Database;
+			yield* database.execute(sql`DROP TABLE IF EXISTS board_operations, boards, cloud_migrations CASCADE`);
 			return yield* effect;
 		}).pipe(Effect.provide(testLayer)),
 	);
