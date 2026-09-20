@@ -10,8 +10,10 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
 	return (
-		<html lang="en">
-			<body>{children}</body>
+		<html className="scheme-dark bg-background text-foreground" lang="en">
+			<body className="min-h-svh min-w-80 bg-background font-sans text-sm font-normal tracking-[-0.011em] text-foreground antialiased [font-synthesis:none] [scrollbar-color:var(--color-input)_var(--color-background)] [text-rendering:optimizeLegibility] selection:bg-primary/25">
+				{children}
+			</body>
 		</html>
 	);
 }

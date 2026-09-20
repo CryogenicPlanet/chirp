@@ -28,9 +28,11 @@
 	"devDependencies": {
 		"@effect/sql-pglite": "4.0.0-rc.113",
 		"@simplewebauthn/server": "13.3.3",
+		"@tailwindcss/postcss": "4.3.3",
 		"@types/node": "22.20.4",
 		"@types/pg": "8.23.1",
 		"@types/react": "19.3.0",
-		"@types/react-dom": "19.3.0"
+		"@types/react-dom": "19.3.0",
+		"tailwindcss": "4.3.3"
 	}
 }
