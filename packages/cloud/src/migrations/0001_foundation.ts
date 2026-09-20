@@ -11,23 +11,31 @@ export const effect = (database: DatabaseClient) =>
 		yield* database.execute(sql`CREATE TABLE boards (
 		id UUID PRIMARY KEY,
 		owner_id TEXT NOT NULL,
-		name TEXT NOT NULL CHECK (length(btrim(name)) > 0),
-		slug CHAR(32) COLLATE "C" NOT NULL UNIQUE CHECK (slug ~ '^[0-9a-f]{32}$'),
-		storage_engine TEXT NOT NULL CHECK (storage_engine IN ('sqlite', 'postgres', 'mysql')),
+		name TEXT NOT NULL CONSTRAINT boards_name_nonempty CHECK (length(btrim(name)) > 0),
+		slug CHAR(32) COLLATE "C" NOT NULL
+			CONSTRAINT boards_slug_unique UNIQUE
+			CONSTRAINT boards_slug_hex CHECK (slug ~ '^[0-9a-f]{32}$'),
+		storage_engine TEXT NOT NULL
+			CONSTRAINT boards_storage_engine_check CHECK (storage_engine IN ('sqlite', 'postgres', 'mysql')),
 		created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 	)`);
 		yield* database.execute(sql`CREATE INDEX boards_owner_created ON boards (owner_id, created_at DESC, id DESC)`);
 		yield* database.execute(sql`CREATE TABLE board_operations (
 		id UUID PRIMARY KEY,
-		board_id UUID NOT NULL REFERENCES boards(id) ON DELETE RESTRICT,
-		kind TEXT NOT NULL CHECK (kind IN ('provision', 'start', 'stop', 'restart', 'backup')),
-		state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'failed')),
+		board_id UUID NOT NULL
+			CONSTRAINT board_operations_board_id_boards_id_fk REFERENCES boards(id) ON DELETE RESTRICT,
+		kind TEXT NOT NULL
+			CONSTRAINT board_operations_kind_check CHECK (kind IN ('provision', 'start', 'stop', 'restart', 'backup')),
+		state TEXT NOT NULL
+			CONSTRAINT board_operations_state_check CHECK (state IN ('queued', 'running', 'succeeded', 'failed')),
 		checkpoint TEXT NOT NULL DEFAULT 'requested',
 		requested_by TEXT NOT NULL,
 		idempotency_key TEXT NOT NULL,
-		request_hash CHAR(64) COLLATE "C" NOT NULL CHECK (request_hash ~ '^[0-9a-f]{64}$'),
+		request_hash CHAR(64) COLLATE "C" NOT NULL
+			CONSTRAINT board_operations_request_hash_hex CHECK (request_hash ~ '^[0-9a-f]{64}$'),
 		available_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-		attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+		attempt INTEGER NOT NULL DEFAULT 0
+			CONSTRAINT board_operations_attempt_nonnegative CHECK (attempt >= 0),
 		lease_token UUID,
 		lease_owner TEXT,
 		lease_expires_at TIMESTAMPTZ,
@@ -36,12 +44,12 @@ export const effect = (database: DatabaseClient) =>
 		created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 		updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 		finished_at TIMESTAMPTZ,
-		UNIQUE (requested_by, idempotency_key),
-		CHECK (
+		CONSTRAINT board_operations_request_unique UNIQUE (requested_by, idempotency_key),
+		CONSTRAINT board_operations_lease_shape CHECK (
 			(state = 'running' AND lease_token IS NOT NULL AND lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)
 			OR (state <> 'running' AND lease_token IS NULL AND lease_owner IS NULL AND lease_expires_at IS NULL)
 		),
-		CHECK (
+		CONSTRAINT board_operations_finished_shape CHECK (
 			(state IN ('succeeded', 'failed') AND finished_at IS NOT NULL)
 			OR (state IN ('queued', 'running') AND finished_at IS NULL)
 		)

@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
-	char,
 	check,
+	customType,
 	index,
 	integer,
 	pgTable,
@@ -16,6 +16,13 @@ import {
 const storageEngines = ["sqlite", "postgres", "mysql"] as const;
 const operationKinds = ["provision", "start", "stop", "restart", "backup"] as const;
 const operationStates = ["queued", "running", "succeeded", "failed"] as const;
+const cCollatedChar = customType<{
+	data: string;
+	config: { readonly length: number };
+	configRequired: true;
+}>({
+	dataType: ({ length }) => `char(${length}) COLLATE "C"`,
+});
 
 export const cloudMigrations = pgTable("cloud_migrations", {
 	migration_id: integer().primaryKey(),
@@ -33,7 +40,7 @@ export const boards = pgTable(
 		id: uuid().primaryKey(),
 		owner_id: text().notNull(),
 		name: text().notNull(),
-		slug: char({ length: 32 }).notNull(),
+		slug: cCollatedChar({ length: 32 }).notNull(),
 		storage_engine: text({ enum: storageEngines }).notNull(),
 		created_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
 	},
@@ -41,6 +48,7 @@ export const boards = pgTable(
 		unique("boards_slug_unique").on(table.slug),
 		check("boards_name_nonempty", sql`length(btrim(${table.name})) > 0`),
 		check("boards_slug_hex", sql`${table.slug} ~ '^[0-9a-f]{32}$'`),
+		check("boards_storage_engine_check", sql`${table.storage_engine} IN ('sqlite', 'postgres', 'mysql')`),
 		index("boards_owner_created").on(table.owner_id, table.created_at.desc(), table.id.desc()),
 	],
 );
@@ -57,7 +65,7 @@ export const boardOperations = pgTable(
 		checkpoint: text().notNull().default("requested"),
 		requested_by: text().notNull(),
 		idempotency_key: text().notNull(),
-		request_hash: char({ length: 64 }).notNull(),
+		request_hash: cCollatedChar({ length: 64 }).notNull(),
 		available_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
 		attempt: integer().notNull().default(0),
 		lease_token: uuid(),
@@ -71,6 +79,8 @@ export const boardOperations = pgTable(
 	},
 	(table) => [
 		unique("board_operations_request_unique").on(table.requested_by, table.idempotency_key),
+		check("board_operations_kind_check", sql`${table.kind} IN ('provision', 'start', 'stop', 'restart', 'backup')`),
+		check("board_operations_state_check", sql`${table.state} IN ('queued', 'running', 'succeeded', 'failed')`),
 		check("board_operations_request_hash_hex", sql`${table.request_hash} ~ '^[0-9a-f]{64}$'`),
 		check("board_operations_attempt_nonnegative", sql`${table.attempt} >= 0`),
 		check(
