@@ -34,6 +34,7 @@ describe.skipIf(!realPostgres)("production cloud runtime", () => {
 				CLOUD_DATABASE_URL: databaseUrl,
 				BETTER_AUTH_URL: `http://127.0.0.1:${port}`,
 				BETTER_AUTH_SECRET: "production-test-auth-secret-with-32-characters",
+				CLOUD_CLIENT_IP_HEADER: "fly-client-ip",
 				GITHUB_CLIENT_ID: "github-client",
 				GITHUB_CLIENT_SECRET: "github-secret",
 				GOOGLE_CLIENT_ID: "google-client",
