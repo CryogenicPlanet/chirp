@@ -122,6 +122,14 @@ jobs:
         env:
           CLOUD_TEST_DATABASE_URL: postgres://chirp:chirp@127.0.0.1:5432/chirp_cloud
         run: bun run --filter @comms/cloud test
+      - name: Build full-stack cloud application
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: bun run --filter @comms/cloud build
+      - name: Verify cloud production runtime lifecycle
+        env:
+          CLOUD_TEST_DATABASE_URL: postgres://chirp:chirp@127.0.0.1:5432/chirp_cloud
+        run: bun run --filter @comms/cloud test:production
 
   image:
     runs-on: ubuntu-24.04

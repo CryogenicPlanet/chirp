@@ -144,7 +144,7 @@ function checkInvariants() {
 
 	function walk(directory: string, collectTables = false) {
 		for (const entry of readdirSync(directory, { withFileTypes: true })) {
-			if (["node_modules", "dist"].includes(entry.name)) continue;
+			if (["node_modules", "dist", ".next"].includes(entry.name)) continue;
 			const path = resolve(directory, entry.name);
 			if (entry.isDirectory()) walk(path, collectTables);
 			else if (/\.tsx?$/.test(entry.name)) inspect(path, collectTables);

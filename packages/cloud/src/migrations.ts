@@ -5,6 +5,7 @@ import type { SqlError } from "effect/unstable/sql/SqlError";
 import { Database, type DatabaseClient } from "./database.ts";
 import { CloudMigrationError, type MigrationMetadata, validateMigrationLedger } from "./migration-ledger.ts";
 import * as foundation from "./migrations/0001_foundation.ts";
+import * as cloudAuth from "./migrations/0002_cloud_auth.ts";
 import { cloudMigrations } from "./schema.ts";
 
 export { CloudMigrationError } from "./migration-ledger.ts";
@@ -13,7 +14,7 @@ interface Migration extends MigrationMetadata {
 	readonly effect: (database: DatabaseClient) => Effect.Effect<unknown, EffectDrizzleQueryError | SqlError>;
 }
 
-const migrations: ReadonlyArray<Migration> = [foundation];
+const migrations: ReadonlyArray<Migration> = [foundation, cloudAuth];
 const receipts = Schema.decodeUnknownEffect(
 	Schema.Array(
 		Schema.Struct({ id: Schema.Int, name: Schema.String, compatibleSchemaVersions: Schema.Array(Schema.Int) }),
