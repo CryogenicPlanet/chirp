@@ -47,7 +47,7 @@ describe.skipIf(!realPostgres)("production cloud runtime", () => {
 		const signature = createHmac("sha256", "production-test-auth-secret-with-32-characters")
 			.update("runtime-token")
 			.digest("base64");
-		const headers = { cookie: `better-auth.session_token=${encodeURIComponent(`runtime-token.${signature}`)}` };
+		const headers = { cookie: `__Host-chirp-cloud.session_token=${encodeURIComponent(`runtime-token.${signature}`)}` };
 		const monitor = new Pool({ connectionString: databaseUrl, max: 2 });
 		const lock = await monitor.connect();
 		const child = spawn(process.execPath, ["src/server.ts"], {
