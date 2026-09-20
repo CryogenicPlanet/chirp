@@ -16,4 +16,8 @@ Set `CLOUD_CLIENT_IP_HEADER` to one authoritative, single-value client address h
 
 To issue a single-use invitation after migrations are applied, run `INVITATION_EMAIL=person@example.com bun run --filter @comms/cloud invite`. The command prints the invitation fragment once; only its SHA-256 digest is stored. Invitations expire after 24 hours.
 
-The Next.js process owns one bounded authentication pool in a managed Effect runtime. The production server stops accepting requests, drains them, closes Next.js, and then awaits disposal of that scope; request handlers reuse it rather than creating a pool per request.
+The Next.js process owns one bounded authentication pool and a separate scoped provisioning worker. The worker reconciles one deterministic Fly App, encrypted Volume, and Machine per board through direct API observation; it never deletes provider resources. The production server stops accepting requests, drains them, closes Next.js, and then awaits disposal of both runtimes.
+
+Managed SQLite needs no provider runtime secret, so its `runtime_secrets_written` checkpoint is a verified no-op. External PostgreSQL and MySQL provisioning remains blocked until the deployment contract can be verified and its two database URLs can be passed directly from a secret manager to Fly without control-plane persistence.
+
+Managed SQLite Volumes enable Fly's automatic snapshots. Once the last verified snapshot is 24 hours old, the worker schedules an observation and records only the newest snapshot that Fly reports as completed, including its digest and observed retention. A failed observation releases the board operation slot and is retried on the next hourly schedule boundary. Chirp does not promise a retention period beyond that observation; Fly's current default is daily snapshots retained for five days when no explicit retention is configured.

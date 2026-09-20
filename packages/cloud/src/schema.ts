@@ -66,6 +66,7 @@ export const boardOperations = pgTable(
 		requested_by: text().notNull(),
 		idempotency_key: text().notNull(),
 		request_hash: cCollatedChar({ length: 64 }).notNull(),
+		desired_revision: integer().notNull().default(1),
 		available_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
 		attempt: integer().notNull().default(0),
 		lease_token: uuid(),

@@ -15,6 +15,7 @@ export const Operation = Schema.Struct({
 	requested_by: Schema.String,
 	idempotency_key: Schema.String,
 	request_hash: Schema.String,
+	desired_revision: Schema.Int,
 	available_at: Schema.DateFromString,
 	attempt: Schema.Int,
 	lease_token: Schema.NullOr(Schema.String),

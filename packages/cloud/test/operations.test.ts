@@ -18,6 +18,20 @@ const boardRequest = {
 } as const;
 
 describe("Operations", () => {
+	test("claims only the requested operation kind", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				yield* (yield* Boards).request(boardRequest);
+				const operations = yield* Operations;
+				expect(Option.isNone(yield* operations.claim("backup-worker", 30_000, "backup"))).toBe(true);
+				expect(Option.getOrThrow(yield* operations.claim("provision-worker", 30_000, "provision")).kind).toBe(
+					"provision",
+				);
+			}),
+		);
+	});
+
 	test.skipIf(!realPostgres)("allows only one concurrent claim of an operation", async () => {
 		await runFresh(
 			Effect.gen(function* () {

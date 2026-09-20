@@ -107,6 +107,13 @@ const make = Effect.gen(function* () {
 				.where(and(eq(boards.owner_id, ownerId), eq(boards.id, id)))
 				.limit(1)
 				.pipe(Effect.map((found) => Option.fromNullishOr(found[0]))),
+		getById: (id: string) =>
+			database
+				.select()
+				.from(boards)
+				.where(eq(boards.id, id))
+				.limit(1)
+				.pipe(Effect.map((found) => Option.fromNullishOr(found[0]))),
 		list: (ownerId: string) =>
 			database
 				.select()

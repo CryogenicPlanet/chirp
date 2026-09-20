@@ -7,6 +7,7 @@ import { Crypto, Effect, Layer, Redacted } from "effect";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
 import { type Boards, boardsLayer } from "../src/boards.ts";
 import { Database } from "../src/database.ts";
+import { type Deployments, deploymentsLayer } from "../src/deployments.ts";
 import { type Invitations, invitationsLayer } from "../src/invitations.ts";
 import { type Operations, operationsLayer } from "../src/operations.ts";
 
@@ -36,7 +37,7 @@ export const cryptoLayer = Layer.succeed(
 	}),
 );
 
-const testLayer = Layer.mergeAll(boardsLayer, invitationsLayer, operationsLayer).pipe(
+const testLayer = Layer.mergeAll(boardsLayer, deploymentsLayer, invitationsLayer, operationsLayer).pipe(
 	Layer.provideMerge(databaseLayer),
 	Layer.provideMerge(cryptoLayer),
 );
@@ -44,13 +45,14 @@ const testLayer = Layer.mergeAll(boardsLayer, invitationsLayer, operationsLayer)
 export const realPostgres = databaseUrl !== undefined;
 
 export const runFresh = <A, E>(
-	effect: Effect.Effect<A, E, Boards | Database | Invitations | Operations | SqlClient.SqlClient>,
+	effect: Effect.Effect<A, E, Boards | Database | Deployments | Invitations | Operations | SqlClient.SqlClient>,
 ) =>
 	Effect.runPromise(
 		Effect.gen(function* () {
 			const database = yield* Database;
 			yield* database.execute(sql`DROP TABLE IF EXISTS passkey, "rateLimit", account, session, verification,
-				"user", cloud_invitations, board_operations, boards, cloud_migrations CASCADE`);
+				"user", cloud_invitations, board_routes, board_deployments, board_operations, boards,
+				cloud_migrations CASCADE`);
 			return yield* effect;
 		}).pipe(Effect.provide(testLayer)),
 	);

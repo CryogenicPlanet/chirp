@@ -27,6 +27,7 @@ describe("cloud migrations", () => {
 				expect(receipts).toEqual([
 					{ migration_id: 1, name: "foundation", compatibleSchemaVersions: [] },
 					{ migration_id: 2, name: "cloud_auth", compatibleSchemaVersions: [1] },
+					{ migration_id: 3, name: "fly_provisioning", compatibleSchemaVersions: [1, 2] },
 				]);
 			}),
 		);
@@ -52,7 +53,7 @@ describe("cloud migrations", () => {
 				yield* migrateCloudDatabase;
 				yield* database
 					.insert(cloudMigrations)
-					.values({ migration_id: 3, name: "unknown", compatible_schema_versions: [] });
+					.values({ migration_id: 4, name: "unknown", compatible_schema_versions: [] });
 				const result = yield* Effect.exit(migrateCloudDatabase);
 				expect(Exit.isFailure(result)).toBe(true);
 			}),
