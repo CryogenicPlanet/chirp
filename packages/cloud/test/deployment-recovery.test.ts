@@ -19,6 +19,12 @@ const prepare = (provider: ReturnType<typeof makeFakeProvider>) =>
 		expect(yield* (yield* Provisioner).run(first, "worker")).toBe("requeued");
 		const failed = yield* nextClaim("worker");
 		if (!failed.lease_token) return yield* Effect.die("Missing lease");
+		yield* (yield* Operations).markAmbiguousMutation({
+			id: failed.id,
+			leaseToken: failed.lease_token,
+			workerId: "worker",
+			mutation: "edge_a_record",
+		});
 		const lease = { operationId: failed.id, leaseToken: failed.lease_token, workerId: "worker" };
 		const deployment = yield* (yield* Deployments).block({
 			...lease,
@@ -47,7 +53,12 @@ describe("deployment recovery", () => {
 				expect(yield* retryBlockedDeployment(input)).toBe(id);
 				expect(id).not.toBe(failed.id);
 				const retry = yield* nextClaim("recovery-worker");
-				expect(retry).toMatchObject({ id, checkpoint: "machine_started", attempt: 1 });
+				expect(retry).toMatchObject({
+					id,
+					checkpoint: "machine_started",
+					attempt: 1,
+					ambiguous_mutations: ["edge_a_record"],
+				});
 				expect(
 					Exit.isFailure(
 						yield* Effect.exit((yield* Deployments).block({ ...lease, errorCode: "stale", errorMessage: "stale" })),
@@ -68,6 +79,26 @@ describe("deployment recovery", () => {
 					yield* sql`SELECT state, last_error_code, checkpoint, attempt FROM board_operations WHERE id = ${failed.id}`,
 				).toEqual([{ state: "failed", last_error_code: "provider_drift", checkpoint: "machine_started", attempt: 2 }]);
 				expect(provider.calls).toMatchObject({ createApp: 1, createVolume: 1, createMachine: 1 });
+			}).pipe(Effect.provide(provisionerFor(provider))),
+		);
+	});
+
+	test("clears only provider mutations explicitly confirmed absent by the operator", async () => {
+		const provider = makeFakeProvider();
+		await runFresh(
+			Effect.gen(function* () {
+				const { input } = yield* prepare(provider);
+				expect(
+					Exit.isFailure(
+						yield* Effect.exit(retryBlockedDeployment({ ...input, confirmedAbsentMutations: ["volume_create"] })),
+					),
+				).toBe(true);
+				const resolved = { ...input, confirmedAbsentMutations: ["edge_a_record"] as const };
+				const id = yield* retryBlockedDeployment(resolved);
+				expect(yield* retryBlockedDeployment(resolved)).toBe(id);
+				expect(Exit.isFailure(yield* Effect.exit(retryBlockedDeployment(input)))).toBe(true);
+				const retry = yield* nextClaim("recovery-worker");
+				expect(retry).toMatchObject({ id, ambiguous_mutations: [] });
 			}).pipe(Effect.provide(provisionerFor(provider))),
 		);
 	});

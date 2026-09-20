@@ -4,11 +4,11 @@ import { CloudflareDns } from "./cloudflare-dns.ts";
 import type { Deployment, DeploymentDrift, DeploymentState } from "./deployment.ts";
 import { Deployments, type DeploymentLease } from "./deployments.ts";
 import { EdgeProbe } from "./edge-probe.ts";
-import { EdgeNetworkingError, ensureEdgeNetworking } from "./edge-networking.ts";
+import { type EdgeMutation, EdgeNetworkingError, ensureEdgeNetworking } from "./edge-networking.ts";
 import { type FlyApiError, FlyBoardApi } from "./fly-board-api.ts";
 import type { FlyApp, FlyMachine, FlyVolume } from "./fly-model.ts";
 import { machineConfig, machineMatches } from "./machine-spec.ts";
-import type { Operation } from "./operation.ts";
+import type { Operation, ProviderMutation } from "./operation.ts";
 import { Operations } from "./operations.ts";
 import { deploymentSpec, type ProvisioningSettings } from "./provisioning-settings.ts";
 
@@ -17,6 +17,14 @@ export class ProvisioningError extends Data.TaggedError("ProvisioningError")<{
 		| "storage_configuration_unsupported"
 		| "provider_unavailable"
 		| "provider_ambiguous"
+		| "app_create_ambiguous"
+		| "volume_create_ambiguous"
+		| "machine_create_ambiguous"
+		| "machine_start_ambiguous"
+		| "edge_ip_ambiguous"
+		| "edge_certificate_ambiguous"
+		| "edge_a_record_ambiguous"
+		| "edge_txt_record_ambiguous"
 		| "provider_rejected"
 		| "provider_drift"
 		| "provider_observation_pending"
@@ -38,8 +46,12 @@ const rejected = (error: FlyApiError) =>
 	error.status >= 400 &&
 	error.status < 500 &&
 	![408, 409, 425, 429].includes(error.status);
-const mutationFailure = (error: FlyApiError, message: string) =>
-	rejected(error) ? issue("provider_rejected", false, message) : issue("provider_ambiguous", true, message);
+const isAmbiguity = (code: string | null) => code === "provider_ambiguous" || code?.endsWith("_ambiguous") === true;
+interface MutationJournal<E, R> {
+	readonly pending: Set<ProviderMutation>;
+	readonly mark: (mutation: ProviderMutation) => Effect.Effect<unknown, E, R>;
+	readonly clear: (mutation: ProviderMutation) => Effect.Effect<unknown, E, R>;
+}
 const afterAppCreated: ReadonlyArray<DeploymentState> = [
 	"app_created",
 	"volume_created",
@@ -76,9 +88,11 @@ const make = (settings: ProvisioningSettings) =>
 		const observed = <A, R>(effect: Effect.Effect<A, FlyApiError, R>) =>
 			effect.pipe(
 				Effect.mapError((error) =>
-					rejected(error)
-						? issue("provider_rejected", false, "Fly rejected the observation")
-						: issue("provider_unavailable", true, "Fly observation failed"),
+					error.reason === "decode"
+						? issue("provider_drift", false, "Fly returned an unsupported response shape")
+						: rejected(error)
+							? issue("provider_rejected", false, "Fly rejected the observation")
+							: issue("provider_unavailable", true, "Fly observation failed"),
 				),
 			);
 		const assertApp = (app: FlyApp, deployment: Deployment) =>
@@ -103,43 +117,61 @@ const make = (settings: ProvisioningSettings) =>
 			(machine.id === deployment.machine_id || deployment.machine_id === null) && machineMatches(machine, deployment)
 				? Effect.succeed(machine)
 				: Effect.fail(issue("provider_drift", false, "Fly Machine identity drifted"));
-		const ensureMachineStarted = <E, R>(
+		const ensureMachineStarted = <E, R, E2, R2>(
 			deployment: Deployment,
 			initial: FlyMachine,
 			renewLease: Effect.Effect<unknown, E, R>,
+			journal: MutationJournal<E2, R2>,
 		) =>
 			Effect.gen(function* () {
 				if (!deployment.machine_id) return yield* issue("provider_drift", false, "Fly Machine ID is missing");
 				let machine = initial;
 				if (machine.state !== "started") {
+					if (journal.pending.has("machine_start"))
+						return yield* issue(
+							"machine_start_ambiguous",
+							true,
+							"Fly Machine start remains unobservable; refusing to repeat it",
+						);
 					yield* renewLease;
+					yield* journal.mark("machine_start");
 					const started = yield* fly.startMachine(deployment.app_name, deployment.machine_id).pipe(Effect.result);
 					let found = yield* observed(fly.getMachine(deployment.app_name, deployment.machine_id));
 					if (Option.isNone(found))
-						return yield* issue("provider_observation_pending", true, "Fly Machine start is not observable");
+						return yield* issue("machine_start_ambiguous", true, "Fly Machine start is not observable");
 					machine = yield* assertMachine(found.value, deployment);
 					if (machine.state !== "started") {
-						if (Result.isFailure(started))
-							return yield* mutationFailure(started.failure, "Fly rejected the Machine start");
+						if (Result.isFailure(started)) {
+							if (rejected(started.failure)) yield* journal.clear("machine_start");
+							return yield* rejected(started.failure)
+								? issue("provider_rejected", false, "Fly rejected the Machine start")
+								: issue("machine_start_ambiguous", true, "Fly Machine start is not observable");
+						}
 						yield* observed(
 							fly.waitMachine(deployment.app_name, deployment.machine_id, "started", machine.instance_id),
 						);
 						found = yield* observed(fly.getMachine(deployment.app_name, deployment.machine_id));
 						if (Option.isNone(found))
-							return yield* issue("provider_observation_pending", true, "Fly Machine disappeared after start");
+							return yield* issue("machine_start_ambiguous", true, "Fly Machine disappeared after start");
 						machine = yield* assertMachine(found.value, deployment);
 					}
 				}
+				if (machine.state === "started" && journal.pending.has("machine_start")) yield* journal.clear("machine_start");
 				if (machine.state !== "started" || !machine.checks?.some((check) => check.status === "passing"))
 					return yield* issue("provider_observation_pending", true, "Fly Machine health check is not passing");
 				return machine;
 			});
-		const verifyRecordedResources = <E, R>(deployment: Deployment, renewLease: Effect.Effect<unknown, E, R>) =>
+		const verifyRecordedResources = <E, R, E2, R2>(
+			deployment: Deployment,
+			renewLease: Effect.Effect<unknown, E, R>,
+			journal: MutationJournal<E2, R2>,
+		) =>
 			Effect.gen(function* () {
 				if (deployment.app_id !== null || afterAppCreated.includes(deployment.state)) {
 					const app = yield* observed(fly.getApp(deployment.app_name));
 					if (Option.isNone(app)) return yield* issue("provider_drift", false, "Recorded Fly App is missing");
 					yield* assertApp(app.value, deployment);
+					if (journal.pending.has("app_create")) yield* journal.clear("app_create");
 				}
 				if (deployment.volume_id !== null || afterVolumeCreated.includes(deployment.state)) {
 					if (!deployment.volume_id) return yield* issue("provider_drift", false, "Fly Volume ID is missing");
@@ -155,6 +187,7 @@ const make = (settings: ProvisioningSettings) =>
 							"Recorded Fly Volume is not observable",
 						);
 					const volume = yield* assertVolume(matching[0]!, deployment);
+					if (journal.pending.has("volume_create")) yield* journal.clear("volume_create");
 					if (volume.state !== "created")
 						return yield* issue("provider_observation_pending", true, "Recorded Fly Volume is not ready");
 					if (deployment.machine_id !== null && volume.attached_machine_id !== deployment.machine_id)
@@ -162,7 +195,12 @@ const make = (settings: ProvisioningSettings) =>
 				}
 				if (deployment.machine_id !== null || afterMachineCreated.includes(deployment.state)) {
 					if (!deployment.machine_id) return yield* issue("provider_drift", false, "Fly Machine ID is missing");
-					const matching = (yield* observed(fly.listMachines(deployment.app_name))).filter(
+					const serving = (yield* observed(fly.listMachines(deployment.app_name))).filter(
+						(machine) => machine.config.services.length > 0,
+					);
+					if (serving.length > 1)
+						return yield* issue("provider_drift", false, "Multiple service-bearing Fly Machines exist in this App");
+					const matching = serving.filter(
 						(machine) =>
 							machine.name === deployment.machine_name &&
 							machine.config.metadata["chirp.deployment_id"] === deployment.board_id,
@@ -176,9 +214,14 @@ const make = (settings: ProvisioningSettings) =>
 							"Recorded Fly Machine is not observable",
 						);
 					const machine = yield* assertMachine(matching[0]!, deployment);
+					if (journal.pending.has("machine_create")) yield* journal.clear("machine_create");
 					if (deployment.state !== "machine_created") {
-						yield* ensureMachineStarted(deployment, machine, renewLease);
-						yield* ensureEdgeNetworking(deployment.app_name, deployment.hostname, renewLease).pipe(
+						yield* ensureMachineStarted(deployment, machine, renewLease, journal);
+						yield* ensureEdgeNetworking(deployment.app_name, deployment.hostname, renewLease, {
+							isPending: (mutation) => journal.pending.has(`edge_${mutation}` as ProviderMutation),
+							mark: (mutation) => journal.mark(`edge_${mutation}` as ProviderMutation),
+							clear: (mutation) => journal.clear(`edge_${mutation}` as ProviderMutation),
+						}).pipe(
 							Effect.provideService(FlyBoardApi, fly),
 							Effect.provideService(CloudflareDns, dns),
 							Effect.catchIf(
@@ -186,12 +229,14 @@ const make = (settings: ProvisioningSettings) =>
 								(error) =>
 									Effect.fail(
 										issue(
-											error.reason === "conflict"
-												? "provider_drift"
-												: error.reason === "rejected"
-													? "provider_rejected"
-													: "provider_observation_pending",
-											error.reason === "pending" || error.reason === "unavailable",
+											error.reason === "ambiguous" && error.mutation
+												? `edge_${error.mutation}_ambiguous`
+												: error.reason === "conflict"
+													? "provider_drift"
+													: error.reason === "rejected"
+														? "provider_rejected"
+														: "provider_observation_pending",
+											error.reason === "pending" || error.reason === "unavailable" || error.reason === "ambiguous",
 											`Edge networking ${error.reason}`,
 										),
 									),
@@ -211,6 +256,28 @@ const make = (settings: ProvisioningSettings) =>
 						operationId: operation.id,
 						leaseToken: operation.lease_token,
 						workerId,
+					};
+					const pending = new Set(operation.ambiguous_mutations);
+					const journal = {
+						pending,
+						mark: (mutation: ProviderMutation) =>
+							operations
+								.markAmbiguousMutation({
+									id: operation.id,
+									leaseToken: lease.leaseToken,
+									workerId,
+									mutation,
+								})
+								.pipe(Effect.tap(() => Effect.sync(() => pending.add(mutation)))),
+						clear: (mutation: ProviderMutation) =>
+							operations
+								.clearAmbiguousMutation({
+									id: operation.id,
+									leaseToken: lease.leaseToken,
+									workerId,
+									mutation,
+								})
+								.pipe(Effect.tap(() => Effect.sync(() => pending.delete(mutation)))),
 					};
 					const renewLease = operations.renew({
 						id: operation.id,
@@ -237,30 +304,43 @@ const make = (settings: ProvisioningSettings) =>
 								readonly appId?: string;
 								readonly volumeId?: string;
 								readonly machineId?: string;
+								readonly resolvedMutation?: ProviderMutation;
 							} = {},
-						) =>
-							deployments.transition({
-								...lease,
-								expectedCheckpoint: deployment.state,
-								expectedRowVersion: deployment.row_version,
-								next,
-								...changes,
-							});
+						) => {
+							const resolvedMutation = changes.resolvedMutation;
+							return deployments
+								.transition({
+									...lease,
+									expectedCheckpoint: deployment.state,
+									expectedRowVersion: deployment.row_version,
+									next,
+									...changes,
+								})
+								.pipe(
+									Effect.tap(() =>
+										resolvedMutation === undefined ? Effect.void : Effect.sync(() => pending.delete(resolvedMutation)),
+									),
+								);
+						};
 						while (true) {
 							yield* renewLease;
-							if (deployment.state === "provisioned") {
+							if (deployment.state === "blocked")
+								return yield* issue("provider_drift", false, "Blocked deployment requires an operator retry");
+							if (deployment.state === "provisioned" && pending.size === 0) {
 								yield* operations.succeed(operation.id, lease.leaseToken, workerId);
 								return "succeeded" as const;
 							}
-							if (deployment.state === "blocked")
-								return yield* issue("provider_drift", false, "Blocked deployment requires an operator retry");
 							if (operation.attempt > maxAttempts)
 								return yield* issue(
 									"retry_exhausted",
 									false,
 									"Provisioning attempt limit reached after lease recovery",
 								);
-							yield* verifyRecordedResources(deployment, renewLease);
+							yield* verifyRecordedResources(deployment, renewLease, journal);
+							if (deployment.state === "provisioned") {
+								yield* operations.succeed(operation.id, lease.leaseToken, workerId);
+								return "succeeded" as const;
+							}
 							switch (deployment.state) {
 								case "requested": {
 									if (deployment.storage_engine !== "sqlite")
@@ -276,7 +356,14 @@ const make = (settings: ProvisioningSettings) =>
 									let app = yield* observed(fly.getApp(deployment.app_name));
 									let creation: Result.Result<void, FlyApiError> | undefined;
 									if (Option.isNone(app)) {
+										if (pending.has("app_create"))
+											return yield* issue(
+												"app_create_ambiguous",
+												true,
+												"Fly App creation remains unobservable; refusing to create a duplicate",
+											);
 										yield* renewLease;
+										yield* journal.mark("app_create");
 										creation = yield* fly
 											.createApp({
 												name: deployment.app_name,
@@ -287,12 +374,17 @@ const make = (settings: ProvisioningSettings) =>
 										app = yield* observed(fly.getApp(deployment.app_name));
 									}
 									if (Option.isNone(app)) {
-										if (creation && Result.isFailure(creation))
-											return yield* mutationFailure(creation.failure, "Fly rejected the App creation");
-										return yield* issue("provider_ambiguous", true, "Fly App creation is not yet observable");
+										if (creation && Result.isFailure(creation) && rejected(creation.failure)) {
+											yield* journal.clear("app_create");
+											return yield* issue("provider_rejected", false, "Fly rejected the App creation");
+										}
+										return yield* issue("app_create_ambiguous", true, "Fly App creation is not yet observable");
 									}
 									yield* assertApp(app.value, deployment);
-									deployment = yield* advance("app_created", { appId: app.value.id });
+									deployment = yield* advance("app_created", {
+										appId: app.value.id,
+										resolvedMutation: "app_create",
+									});
 									break;
 								}
 								case "app_created": {
@@ -302,9 +394,16 @@ const make = (settings: ProvisioningSettings) =>
 									);
 									if (matching.length > 1)
 										return yield* issue("provider_drift", false, "Multiple Fly Volumes match this deployment");
+									if (matching.length === 0 && pending.has("volume_create"))
+										return yield* issue(
+											"volume_create_ambiguous",
+											true,
+											"Fly Volume creation remains unobservable; refusing to create a duplicate",
+										);
 									let creationFailure: FlyApiError | undefined;
 									if (matching.length === 0) {
 										yield* renewLease;
+										yield* journal.mark("volume_create");
 										const created = yield* fly
 											.createVolume({
 												appName: deployment.app_name,
@@ -323,12 +422,21 @@ const make = (settings: ProvisioningSettings) =>
 									if (matching.length > 1)
 										return yield* issue("provider_drift", false, "Multiple Fly Volumes match this deployment");
 									if (matching.length !== 1) {
-										if (matching.length === 0 && creationFailure)
-											return yield* mutationFailure(creationFailure, "Fly rejected the Volume creation");
-										return yield* issue("provider_ambiguous", true, "Fly Volume creation is not uniquely observable");
+										if (matching.length === 0 && creationFailure && rejected(creationFailure)) {
+											yield* journal.clear("volume_create");
+											return yield* issue("provider_rejected", false, "Fly rejected the Volume creation");
+										}
+										return yield* issue(
+											"volume_create_ambiguous",
+											true,
+											"Fly Volume creation is not uniquely observable",
+										);
 									}
 									const volume = yield* assertVolume(matching[0]!, deployment);
-									deployment = yield* advance("volume_created", { volumeId: volume.id });
+									deployment = yield* advance("volume_created", {
+										volumeId: volume.id,
+										resolvedMutation: "volume_create",
+									});
 									break;
 								}
 								case "volume_created": {
@@ -341,17 +449,34 @@ const make = (settings: ProvisioningSettings) =>
 										return yield* issue("provider_observation_pending", true, "Fly Volume is not ready");
 									if (volume.state !== "created")
 										return yield* issue("provider_drift", false, "Fly Volume entered an unsupported state");
-									const listed = yield* observed(fly.listMachines(deployment.app_name));
-									let matching = listed.filter(
+									const serving = (yield* observed(fly.listMachines(deployment.app_name))).filter(
+										(machine) => machine.config.services.length > 0,
+									);
+									if (serving.length > 1)
+										return yield* issue(
+											"provider_drift",
+											false,
+											"Multiple service-bearing Fly Machines exist in this App",
+										);
+									let matching = serving.filter(
 										(machine) =>
 											machine.name === deployment.machine_name &&
 											machine.config.metadata["chirp.deployment_id"] === deployment.board_id,
 									);
 									if (matching.length > 1)
 										return yield* issue("provider_drift", false, "Multiple Fly Machines match this deployment");
+									if (serving.length === 1 && matching.length === 0)
+										return yield* issue("provider_drift", false, "An untracked service-bearing Fly Machine exists");
+									if (matching.length === 0 && pending.has("machine_create"))
+										return yield* issue(
+											"machine_create_ambiguous",
+											true,
+											"Fly Machine creation remains unobservable; refusing to create a duplicate",
+										);
 									let creationFailure: FlyApiError | undefined;
 									if (matching.length === 0) {
 										yield* renewLease;
+										yield* journal.mark("machine_create");
 										const created = yield* fly
 											.createMachine({
 												appName: deployment.app_name,
@@ -362,23 +487,32 @@ const make = (settings: ProvisioningSettings) =>
 											.pipe(Effect.result);
 										matching = Result.isSuccess(created)
 											? [created.success]
-											: (yield* observed(fly.listMachines(deployment.app_name))).filter(
-													(machine) =>
-														machine.name === deployment.machine_name &&
-														machine.config.metadata["chirp.deployment_id"] === deployment.board_id,
-												);
+											: (yield* observed(fly.listMachines(deployment.app_name)))
+													.filter((machine) => machine.config.services.length > 0)
+													.filter(
+														(machine) =>
+															machine.name === deployment.machine_name &&
+															machine.config.metadata["chirp.deployment_id"] === deployment.board_id,
+													);
 										if (Result.isFailure(created)) creationFailure = created.failure;
 									}
 									if (matching.length > 1)
 										return yield* issue("provider_drift", false, "Multiple Fly Machines match this deployment");
 									if (matching.length !== 1) {
-										if (matching.length === 0 && creationFailure)
-											return yield* mutationFailure(creationFailure, "Fly rejected the Machine creation");
-										return yield* issue("provider_ambiguous", true, "Fly Machine creation is not uniquely observable");
+										if (matching.length === 0 && creationFailure && rejected(creationFailure)) {
+											yield* journal.clear("machine_create");
+											return yield* issue("provider_rejected", false, "Fly rejected the Machine creation");
+										}
+										return yield* issue(
+											"machine_create_ambiguous",
+											true,
+											"Fly Machine creation is not uniquely observable",
+										);
 									}
 									const machine = yield* assertMachine(matching[0]!, deployment);
 									deployment = yield* advance("machine_created", {
 										machineId: machine.id,
+										resolvedMutation: "machine_create",
 									});
 									break;
 								}
@@ -391,6 +525,7 @@ const make = (settings: ProvisioningSettings) =>
 										deployment,
 										yield* assertMachine(found.value, deployment),
 										renewLease,
+										journal,
 									);
 									deployment = yield* advance("machine_started");
 									break;
@@ -427,18 +562,22 @@ const make = (settings: ProvisioningSettings) =>
 										errorMessage: `Immutable deployment field drifted: ${error.field}`,
 									})
 									.pipe(Effect.as<ProvisioningOutcome>("blocked")),
-							ProvisioningError: (error) =>
+							ProvisioningError: (error: ProvisioningError) =>
 								Effect.gen(function* () {
 									if (error.retriable && operation.attempt < maxAttempts) {
 										const now = yield* DateTime.now;
-										const ceiling = Math.min(300_000, 5_000 * 2 ** (operation.attempt - 1));
-										const delay = Math.floor(ceiling / 2 + ((yield* Random.next) * ceiling) / 2);
+										const baseCeiling = Math.min(300_000, 5_000 * 2 ** (operation.attempt - 1));
+										const errorCode = error.code;
+										const ambiguous = isAmbiguity(errorCode) || pending.size > 0;
+										const floor = ambiguous ? 60_000 : baseCeiling / 2;
+										const ceiling = Math.max(floor, baseCeiling);
+										const delay = Math.floor(floor + (yield* Random.next) * (ceiling - floor));
 										yield* operations.requeue({
 											id: operation.id,
 											leaseToken: lease.leaseToken,
 											workerId,
 											availableAt: DateTime.toDateUtc(DateTime.addDuration(now, delay)),
-											errorCode: error.code,
+											errorCode,
 											errorMessage: error.message,
 										});
 										return "requeued" as const;

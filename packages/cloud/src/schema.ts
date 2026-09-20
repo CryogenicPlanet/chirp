@@ -13,6 +13,7 @@ import {
 	varchar,
 } from "drizzle-orm/pg-core";
 import type { DeploymentState } from "./deployment.ts";
+import type { ProviderMutation } from "./operation.ts";
 
 const storageEngines = ["sqlite", "postgres", "mysql"] as const;
 const operationKinds = ["provision", "backup"] as const;
@@ -74,6 +75,11 @@ export const boardOperations = pgTable(
 		lease_expires_at: timestamp({ withTimezone: true }),
 		last_error_code: varchar({ length: 64 }),
 		last_error_message: varchar({ length: 2_000 }),
+		ambiguous_mutations: text()
+			.$type<ProviderMutation>()
+			.array()
+			.notNull()
+			.default(sql`'{}'::text[]`),
 		created_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
 		updated_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
 		finished_at: timestamp({ withTimezone: true }),
@@ -84,6 +90,13 @@ export const boardOperations = pgTable(
 		check("board_operations_state_check", sql`${table.state} IN ('queued', 'running', 'succeeded', 'failed')`),
 		check("board_operations_request_hash_hex", sql`${table.request_hash} ~ '^[0-9a-f]{64}$'`),
 		check("board_operations_attempt_nonnegative", sql`${table.attempt} >= 0`),
+		check(
+			"board_operations_ambiguous_mutations_known",
+			sql`array_position(${table.ambiguous_mutations}, NULL) IS NULL AND ${table.ambiguous_mutations} <@ ARRAY[
+				'app_create', 'volume_create', 'machine_create', 'machine_start',
+				'edge_ip', 'edge_certificate', 'edge_a_record', 'edge_txt_record'
+			]::text[]`,
+		),
 		check(
 			"board_operations_lease_shape",
 			sql`(

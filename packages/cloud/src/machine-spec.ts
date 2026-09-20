@@ -11,6 +11,8 @@ export const machineConfig = (deployment: Deployment): FlyMachineConfig => ({
 		"chirp.deployment_id": deployment.board_id,
 		"chirp.controller_schema": "1",
 	},
+	auto_destroy: false,
+	restart: { policy: "on-failure", max_retries: 10 },
 	mounts: [{ volume: deployment.volume_id ?? "", path: "/data" }],
 	guest: { cpu_kind: "shared", cpus: 1, memory_mb: 512 },
 	services: [
@@ -40,6 +42,12 @@ export const machineConfig = (deployment: Deployment): FlyMachineConfig => ({
 	stop_config: { signal: "SIGTERM", timeout: "30s" },
 });
 
+const exactKeys = (value: Readonly<Record<string, unknown>>, keys: ReadonlyArray<string>) =>
+	Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+
+const sameRecord = (actual: Readonly<Record<string, string>>, expected: Readonly<Record<string, string>>) =>
+	exactKeys(actual, Object.keys(expected)) && Object.entries(expected).every(([key, value]) => actual[key] === value);
+
 export const machineMatches = (machine: FlyMachine, deployment: Deployment) => {
 	const config = machine.config;
 	const expected = machineConfig(deployment);
@@ -50,54 +58,96 @@ export const machineMatches = (machine: FlyMachine, deployment: Deployment) => {
 		service !== undefined &&
 		expectedService !== undefined &&
 		service.ports.length === expectedService.ports.length &&
-		service.ports.every(
-			(port, index) =>
-				port.port === expectedService.ports[index]?.port &&
-				port.force_https === expectedService.ports[index]?.force_https &&
-				port.handlers.length === expectedService.ports[index]?.handlers.length &&
-				port.handlers.every(
-					(handler, handlerIndex) => handler === expectedService.ports[index]?.handlers[handlerIndex],
-				),
-		);
+		new Set(service.ports.map((port) => port.port)).size === service.ports.length &&
+		service.ports.every((port) => {
+			const expectedPort = expectedService.ports.find((candidate) => candidate.port === port.port);
+			return (
+				expectedPort !== undefined &&
+				exactKeys(port, ["port", "handlers", ...(port.force_https == null ? [] : ["force_https"])]) &&
+				(port.force_https ?? false) === (expectedPort.force_https ?? false) &&
+				port.handlers.length === expectedPort.handlers.length &&
+				new Set(port.handlers).size === port.handlers.length &&
+				port.handlers.every((handler) => expectedPort.handlers.includes(handler))
+			);
+		});
 	const checksMatch =
 		service !== undefined &&
 		expectedService !== undefined &&
 		service.checks.length === expectedService.checks.length &&
-		service.checks.every((check, index) => {
-			const expectedCheck = expectedService.checks[index];
+		service.checks.every((check) => {
+			const expectedCheck = expectedService.checks.find(
+				(candidate) =>
+					candidate.type === check.type &&
+					candidate.port === check.port &&
+					candidate.method === check.method &&
+					candidate.path === check.path,
+			);
 			return (
-				check.type === expectedCheck?.type &&
-				check.port === expectedCheck.port &&
-				check.method === expectedCheck.method &&
-				check.path === expectedCheck.path &&
+				expectedCheck !== undefined &&
+				exactKeys(check, ["type", "port", "method", "path", "interval", "timeout", "grace_period"]) &&
 				check.interval === expectedCheck.interval &&
 				check.timeout === expectedCheck.timeout &&
 				check.grace_period === expectedCheck.grace_period
 			);
 		});
+	const normalizedAutostop = service?.autostop === true || service?.autostop === "stop" ? "stop" : service?.autostop;
 	return (
 		machine.name === deployment.machine_name &&
 		machine.region === deployment.region &&
+		Object.keys(config).every((key) =>
+			[
+				"image",
+				"env",
+				"metadata",
+				"mounts",
+				"guest",
+				"services",
+				"stop_config",
+				"auto_destroy",
+				"init",
+				"restart",
+				"dns",
+			].includes(key),
+		) &&
 		config.image === expected.image &&
-		config.env.RP_ID === expected.env.RP_ID &&
-		config.env.PUBLIC_ORIGIN === expected.env.PUBLIC_ORIGIN &&
-		config.metadata["chirp.deployment_id"] === deployment.board_id &&
-		config.metadata["chirp.controller_schema"] === "1" &&
+		sameRecord(config.env, expected.env) &&
+		sameRecord(config.metadata, expected.metadata) &&
+		(config.auto_destroy ?? false) === false &&
+		(config.init == null || Object.keys(config.init).length === 0) &&
+		config.restart != null &&
+		config.restart?.policy === expected.restart?.policy &&
+		config.restart?.max_retries === expected.restart?.max_retries &&
+		exactKeys(config.restart, ["policy", "max_retries"]) &&
+		(config.dns == null || Object.keys(config.dns).length === 0) &&
 		config.mounts.length === 1 &&
 		mount?.volume === deployment.volume_id &&
 		mount.path === "/data" &&
+		exactKeys(mount, ["volume", "path"]) &&
 		config.services.length === 1 &&
 		service !== undefined &&
+		exactKeys(service, [
+			"protocol",
+			"internal_port",
+			"autostart",
+			"autostop",
+			"min_machines_running",
+			...(service.force_instance_key === undefined ? [] : ["force_instance_key"]),
+			"ports",
+			"checks",
+		]) &&
 		service.protocol === expectedService?.protocol &&
 		service.internal_port === 8080 &&
 		service.autostart === true &&
-		service.autostop === "stop" &&
-		service.min_machines_running === 0 &&
+		normalizedAutostop === "stop" &&
+		(service.min_machines_running ?? 0) === 0 &&
+		service.force_instance_key == null &&
 		portsMatch &&
 		checksMatch &&
+		exactKeys(config.guest, ["cpu_kind", "cpus", "memory_mb"]) &&
 		config.guest.cpu_kind === expected.guest.cpu_kind &&
 		config.guest.cpus === expected.guest.cpus &&
 		config.guest.memory_mb === expected.guest.memory_mb &&
+		exactKeys(config.stop_config, ["signal", "timeout"]) &&
 		config.stop_config.signal === expected.stop_config.signal &&
 		config.stop_config.timeout === expected.stop_config.timeout
 	);

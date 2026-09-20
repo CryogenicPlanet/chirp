@@ -9,6 +9,7 @@ import {
 	type DeploymentState,
 	InvalidDeploymentTransition,
 } from "./deployment.ts";
+import type { ProviderMutation } from "./operation.ts";
 import { boardDeployments, boardOperations, boardRoutes, boards } from "./schema.ts";
 
 const nextState: Readonly<Partial<Record<DeploymentState, DeploymentState>>> = {
@@ -36,6 +37,7 @@ export interface DeploymentTransition extends DeploymentLease {
 	readonly appId?: string;
 	readonly volumeId?: string;
 	readonly machineId?: string;
+	readonly resolvedMutation?: ProviderMutation;
 }
 
 export interface VerifiedSnapshot {
@@ -172,7 +174,15 @@ const make = Effect.gen(function* () {
 						if (Option.isNone(updated)) return yield* new DeploymentFenceLost({ operationId: input.operationId });
 						const checkpointed = yield* db
 							.update(boardOperations)
-							.set({ checkpoint: input.next, updated_at: now })
+							.set({
+								checkpoint: input.next,
+								...(input.resolvedMutation === undefined
+									? {}
+									: {
+											ambiguous_mutations: sql`array_remove(${boardOperations.ambiguous_mutations}, ${input.resolvedMutation})`,
+										}),
+								updated_at: now,
+							})
 							.where(
 								and(
 									eq(boardOperations.id, input.operationId),

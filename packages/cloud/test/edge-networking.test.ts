@@ -1,20 +1,26 @@
 import { Effect, Layer, Result } from "effect";
 import { describe, expect, test } from "vitest";
 import { CloudflareDns } from "../src/cloudflare-dns.ts";
-import { ensureEdgeNetworking } from "../src/edge-networking.ts";
+import { type EdgeMutation, ensureEdgeNetworking } from "../src/edge-networking.ts";
 import { FlyApiError, FlyBoardApi } from "../src/fly-board-api.ts";
 import { makeNetworking } from "./fixtures/edge-networking.ts";
 
 const hostname = "board.boards.chirp.wiki";
-const run = (provider: ReturnType<typeof makeNetworking>, renew = Effect.void) =>
-	Effect.runPromise(
-		ensureEdgeNetworking("chirp-board", hostname, renew).pipe(
+const run = (provider: ReturnType<typeof makeNetworking>, renew = Effect.void, blockedMutation?: EdgeMutation) => {
+	const pending = new Set(blockedMutation === undefined ? [] : [blockedMutation]);
+	return Effect.runPromise(
+		ensureEdgeNetworking("chirp-board", hostname, renew, {
+			isPending: (mutation) => pending.has(mutation),
+			mark: (mutation) => Effect.sync(() => pending.add(mutation)),
+			clear: (mutation) => Effect.sync(() => pending.delete(mutation)),
+		}).pipe(
 			Effect.result,
 			Effect.provide(
 				Layer.mergeAll(Layer.succeed(FlyBoardApi, provider.fly), Layer.succeed(CloudflareDns, provider.dns)),
 			),
 		),
 	);
+};
 
 describe("edge networking reconciliation", () => {
 	test("adopts matching resources on replay and creates only DNS-only exact records", async () => {
@@ -35,11 +41,26 @@ describe("edge networking reconciliation", () => {
 			const provider = makeNetworking();
 			provider.fly.allocateSharedIp = () =>
 				Effect.fail(new FlyApiError({ operation: "allocate_ip", reason: "status", status }));
-			expect(await run(provider)).toMatchObject({ failure: { reason: status === 403 ? "rejected" : "pending" } });
+			expect(await run(provider)).toMatchObject({
+				failure: { reason: status === 403 ? "rejected" : "ambiguous", mutation: status === 403 ? null : "ip" },
+			});
 			expect(provider.state.calls).toEqual(["list_ips", "list_ips"]);
 			expect(provider.state.records).toEqual([]);
 		},
 	);
+
+	test.each([
+		{ operation: "allocate_ip", mutation: "ip" },
+		{ operation: "create_certificate", mutation: "certificate" },
+		{ operation: "create:A", mutation: "a_record" },
+		{ operation: "create:TXT", mutation: "txt_record" },
+	] as const)("does not repeat an unobserved $operation mutation", async ({ operation, mutation }) => {
+		const provider = makeNetworking();
+		provider.state.failBefore.add(operation);
+		expect(await run(provider)).toMatchObject({ failure: { reason: "ambiguous", mutation } });
+		expect(await run(provider, Effect.void, mutation)).toMatchObject({ failure: { reason: "ambiguous", mutation } });
+		expect(provider.state.calls.filter((call) => call === operation)).toHaveLength(1);
+	});
 
 	test("refuses duplicate or malformed shared IPs without allocating another", async () => {
 		for (const ips of [
@@ -115,8 +136,8 @@ describe("edge networking reconciliation", () => {
 					}),
 				),
 			);
-		expect(await run(provider)).toMatchObject({ failure: { reason: "unavailable" } });
-		expect(Result.isSuccess(await run(provider))).toBe(true);
+		expect(await run(provider)).toMatchObject({ failure: { reason: "ambiguous", mutation: "a_record" } });
+		expect(Result.isSuccess(await run(provider, Effect.void, "a_record"))).toBe(true);
 		expect(provider.state.calls.filter((call) => call === "create:A")).toHaveLength(1);
 	});
 

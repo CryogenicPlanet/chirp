@@ -5,6 +5,18 @@ export type OperationKind = typeof OperationKind.Type;
 
 const OperationState = Schema.Literals(["queued", "running", "succeeded", "failed"]);
 
+export const ProviderMutation = Schema.Literals([
+	"app_create",
+	"volume_create",
+	"machine_create",
+	"machine_start",
+	"edge_ip",
+	"edge_certificate",
+	"edge_a_record",
+	"edge_txt_record",
+]);
+export type ProviderMutation = typeof ProviderMutation.Type;
+
 export const Operation = Schema.Struct({
 	id: Schema.String,
 	board_id: Schema.String,
@@ -21,6 +33,7 @@ export const Operation = Schema.Struct({
 	lease_expires_at: Schema.NullOr(Schema.DateFromString),
 	last_error_code: Schema.NullOr(Schema.String),
 	last_error_message: Schema.NullOr(Schema.String),
+	ambiguous_mutations: Schema.Array(ProviderMutation),
 	created_at: Schema.DateFromString,
 	updated_at: Schema.DateFromString,
 	finished_at: Schema.NullOr(Schema.DateFromString),

@@ -29,11 +29,10 @@ const workerLayer = Layer.unwrap(
 				flyBoardApiLayer({ token: flyToken }).pipe(Layer.provide(FetchHttpClient.layer)),
 				edgeProbeLayer.pipe(Layer.provide(FetchHttpClient.layer)),
 			);
-			return Layer.mergeAll(
-				provisionerLayer(provisioning),
-				backupObserverLayer,
-				backupSchedulerLayer,
-			).pipe(Layer.provideMerge(stores), Layer.provideMerge(providers));
+			return Layer.mergeAll(provisionerLayer(provisioning), backupObserverLayer, backupSchedulerLayer).pipe(
+				Layer.provideMerge(stores),
+				Layer.provideMerge(providers),
+			);
 		}),
 	),
 );
@@ -63,7 +62,9 @@ const loop = Effect.gen(function* () {
 		);
 		if (Option.isNone(provisioned) && Option.isNone(observed)) yield* Effect.sleep("1 second");
 	}).pipe(
-		Effect.catchCause((cause) => Effect.logError("Chirp Cloud worker iteration failed", cause)),
+		Effect.catchCause((cause) =>
+			Effect.logError("Chirp Cloud worker iteration failed", cause).pipe(Effect.andThen(Effect.sleep("1 second"))),
+		),
 		Effect.forever,
 	);
 });
@@ -76,17 +77,7 @@ export const startWorkerRuntime = (): Promise<WorkerRuntime> => {
 	const runtime = ManagedRuntime.make(workerLayer);
 	return runtime
 		.runPromise(
-			Effect.all(
-				[
-					Boards,
-					Deployments,
-					Operations,
-					Provisioner,
-					BackupObserver,
-					BackupScheduler,
-				],
-				{ discard: true },
-			),
+			Effect.all([Boards, Deployments, Operations, Provisioner, BackupObserver, BackupScheduler], { discard: true }),
 		)
 		.then(() => {
 			const fiber = runtime.runFork(loop);

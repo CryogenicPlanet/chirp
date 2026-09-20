@@ -1,4 +1,4 @@
-import { Clock, Effect, Option } from "effect";
+import { Clock, Effect, Exit, Option } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import { describe, expect, test } from "vitest";
 import { Boards } from "../src/boards.ts";
@@ -34,6 +34,197 @@ describe("Provisioner", () => {
 					{ state: "failed", last_error_code: "provider_rejected" },
 				]);
 				expect(provider.resources()).toEqual({ apps: 0, volumes: 0, machines: 0 });
+			}).pipe(Effect.provide(provisionerFor(provider))),
+		);
+	});
+
+	test("blocks unsupported provider response shapes immediately", async () => {
+		const provider = makeFakeProvider();
+		provider.set.decodeAppRead();
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				yield* (yield* Boards).request(request);
+				const operation = yield* nextClaim("worker");
+				expect(yield* (yield* Provisioner).run(operation, "worker")).toBe("blocked");
+				const sql = yield* SqlClient.SqlClient;
+				expect(yield* sql`SELECT state, last_error_code FROM board_operations WHERE id = ${operation.id}`).toEqual([
+					{ state: "failed", last_error_code: "provider_drift" },
+				]);
+			}).pipe(Effect.provide(provisionerFor(provider))),
+		);
+	});
+
+	test.each(["app", "volume", "machine"] as const)(
+		"never repeats an unobserved %s create automatically",
+		async (resource) => {
+			const provider = makeFakeProvider();
+			if (resource === "app") provider.set.failCreateAppBeforeMutation();
+			else if (resource === "volume") provider.set.failCreateVolumeBeforeMutation();
+			else provider.set.failCreateMachineBeforeMutation();
+			await runFresh(
+				Effect.gen(function* () {
+					yield* migrateCloudDatabase;
+					yield* (yield* Boards).request(request);
+					const provisioner = yield* Provisioner;
+					const first = yield* nextClaim("worker-1");
+					expect(yield* provisioner.run(first, "worker-1")).toBe("requeued");
+					const second = yield* nextClaim("worker-2");
+					expect(yield* provisioner.run(second, "worker-2")).toBe("requeued");
+					expect(
+						provider.calls[resource === "app" ? "createApp" : resource === "volume" ? "createVolume" : "createMachine"],
+					).toBe(1);
+					const sql = yield* SqlClient.SqlClient;
+					expect(yield* sql`SELECT last_error_code FROM board_operations WHERE id = ${first.id}`).toEqual([
+						{ last_error_code: `${resource}_create_ambiguous` },
+					]);
+				}).pipe(Effect.provide(provisionerFor(provider))),
+			);
+		},
+	);
+
+	test("retains an ambiguity marker across an intervening observation failure", async () => {
+		const provider = makeFakeProvider();
+		provider.set.failCreateVolumeBeforeMutation();
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				yield* (yield* Boards).request(request);
+				const provisioner = yield* Provisioner;
+				const first = yield* nextClaim("worker-1");
+				expect(yield* provisioner.run(first, "worker-1")).toBe("requeued");
+				provider.set.failListVolumes();
+				const second = yield* nextClaim("worker-2");
+				expect(yield* provisioner.run(second, "worker-2")).toBe("requeued");
+				const third = yield* nextClaim("worker-3");
+				expect(yield* provisioner.run(third, "worker-3")).toBe("requeued");
+				expect(provider.calls.createVolume).toBe(1);
+				const sql = yield* SqlClient.SqlClient;
+				expect(yield* sql`SELECT last_error_code FROM board_operations WHERE id = ${first.id}`).toEqual([
+					{ last_error_code: "volume_create_ambiguous" },
+				]);
+			}).pipe(Effect.provide(provisionerFor(provider))),
+		);
+	});
+
+	test("persists a Volume marker before the call and survives a failed readback", async () => {
+		const provider = makeFakeProvider();
+		provider.set.failCreateVolumeAndReadback();
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				yield* (yield* Boards).request(request);
+				const provisioner = yield* Provisioner;
+				const first = yield* nextClaim("worker-1");
+				expect(yield* provisioner.run(first, "worker-1")).toBe("requeued");
+				const sql = yield* SqlClient.SqlClient;
+				expect(
+					yield* sql`SELECT ambiguous_mutations, last_error_code FROM board_operations WHERE id = ${first.id}`,
+				).toEqual([{ ambiguous_mutations: ["volume_create"], last_error_code: "provider_unavailable" }]);
+				provider.set.hideVolumes();
+				const second = yield* nextClaim("worker-2");
+				expect(yield* provisioner.run(second, "worker-2")).toBe("requeued");
+				expect(provider.calls.createVolume).toBe(1);
+				expect(provider.resources().volumes).toBe(1);
+			}).pipe(Effect.provide(provisionerFor(provider))),
+		);
+	});
+
+	test("persists a Volume marker across a worker crash after provider acceptance", async () => {
+		const provider = makeFakeProvider();
+		provider.set.hideVolumes();
+		const createVolume = provider.fake.createVolume;
+		provider.fake.createVolume = (input) =>
+			createVolume(input).pipe(Effect.andThen(Effect.die("simulated worker interruption")));
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				yield* (yield* Boards).request(request);
+				const first = yield* nextClaim("worker-1");
+				expect(Exit.isFailure(yield* Effect.exit((yield* Provisioner).run(first, "worker-1")))).toBe(true);
+				const sql = yield* SqlClient.SqlClient;
+				expect(yield* sql`SELECT ambiguous_mutations FROM board_operations WHERE id = ${first.id}`).toEqual([
+					{ ambiguous_mutations: ["volume_create"] },
+				]);
+				yield* sql`UPDATE board_operations SET lease_expires_at = clock_timestamp() - interval '1 second'
+					WHERE id = ${first.id}`;
+				const second = Option.getOrThrow(yield* (yield* Operations).claim("worker-2", 30_000));
+				expect(yield* (yield* Provisioner).run(second, "worker-2")).toBe("requeued");
+				expect(provider.calls.createVolume).toBe(1);
+				expect(provider.resources().volumes).toBe(1);
+			}).pipe(Effect.provide(provisionerFor(provider))),
+		);
+	});
+
+	test("keeps unresolved edge and Machine-start mutations independently", async () => {
+		const provider = makeFakeProvider();
+		provider.set.failHealth();
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				yield* (yield* Boards).request(request);
+				const provisioner = yield* Provisioner;
+				const first = yield* nextClaim("worker-1");
+				expect(yield* provisioner.run(first, "worker-1")).toBe("requeued");
+				const second = yield* nextClaim("worker-2");
+				if (!second.lease_token) return yield* Effect.die("Claim returned no lease token");
+				const operations = yield* Operations;
+				yield* operations.markAmbiguousMutation({
+					id: second.id,
+					leaseToken: second.lease_token,
+					workerId: "worker-2",
+					mutation: "edge_a_record",
+				});
+				yield* operations.requeue({
+					id: second.id,
+					leaseToken: second.lease_token,
+					workerId: "worker-2",
+					availableAt: new Date(yield* Clock.currentTimeMillis),
+					errorCode: "provider_unavailable",
+					errorMessage: "intervening observation failed",
+				});
+				provider.set.stopMachines();
+				provider.set.failStartMachineBeforeMutation();
+				const third = yield* nextClaim("worker-3");
+				expect(yield* provisioner.run(third, "worker-3")).toBe("requeued");
+				const sql = yield* SqlClient.SqlClient;
+				expect(yield* sql`SELECT ambiguous_mutations FROM board_operations WHERE id = ${first.id}`).toEqual([
+					{ ambiguous_mutations: ["edge_a_record", "machine_start"] },
+				]);
+				expect(provider.calls.startMachine).toBe(2);
+				const fourth = yield* nextClaim("worker-4");
+				expect(yield* provisioner.run(fourth, "worker-4")).toBe("requeued");
+				expect(provider.calls.startMachine).toBe(2);
+			}).pipe(Effect.provide(provisionerFor(provider))),
+		);
+	});
+
+	test("blocks an untracked service-bearing Machine without creating another", async () => {
+		const provider = makeFakeProvider();
+		provider.set.failCreateMachineBeforeMutation();
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				const board = yield* (yield* Boards).request(request);
+				const provisioner = yield* Provisioner;
+				const first = yield* nextClaim("worker-1");
+				expect(yield* provisioner.run(first, "worker-1")).toBe("requeued");
+				const deployment = Option.getOrThrow(yield* (yield* Deployments).get(board.id));
+				provider.set.machine({
+					id: "foreign-machine",
+					name: "foreign-machine",
+					state: "started",
+					region: deployment.region,
+					instance_id: "foreign-version",
+					config: {
+						...machineConfig(deployment),
+						metadata: { "chirp.deployment_id": "foreign", "chirp.controller_schema": "1" },
+					},
+					checks: [{ status: "passing" }],
+				});
+				const second = yield* nextClaim("worker-2");
+				expect(yield* provisioner.run(second, "worker-2")).toBe("blocked");
+				expect(provider.calls.createMachine).toBe(1);
 			}).pipe(Effect.provide(provisionerFor(provider))),
 		);
 	});

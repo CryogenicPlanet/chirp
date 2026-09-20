@@ -12,11 +12,12 @@ export class BackupObservationError extends Data.TaggedError("BackupObservationE
 
 const verified = (snapshot: FlyVolumeSnapshot): VerifiedSnapshot | undefined => {
 	if (
-		snapshot.status !== "created" ||
+		(snapshot.status !== undefined && snapshot.status !== null && snapshot.status !== "created") ||
 		!snapshot.id ||
 		!snapshot.created_at ||
 		!snapshot.digest ||
-		snapshot.retention_days === undefined
+		snapshot.retention_days == null ||
+		snapshot.retention_days < 0
 	)
 		return undefined;
 	const createdAt = DateTime.make(snapshot.created_at);

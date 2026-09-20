@@ -64,26 +64,37 @@ export const makeFakeProvider = () => {
 	const machines: FlyMachine[] = [];
 	let hideAppReads = 0;
 	let rejectAppRead = false;
+	let decodeAppRead = false;
 	let hideVolumes = false;
 	let failListVolumes = false;
 	let failGetVolume = false;
 	let failListMachines = false;
 	let failGetMachine = false;
 	let failCreateApp = false;
+	let failCreateAppBeforeMutation = false;
 	let rejectCreateApp = false;
 	let failCreateVolume = false;
+	let failListVolumesAfterCreate = false;
+	let failCreateVolumeBeforeMutation = false;
 	let failCreateMachine = false;
+	let failCreateMachineBeforeMutation = false;
+	let failStartMachineBeforeMutation = false;
 	let failHealth = false;
 	let failChildRoute = false;
 	const calls = {
 		createApp: 0,
 		createVolume: 0,
 		createMachine: 0,
+		startMachine: 0,
 	};
 	const fake = {
 		...networking.fly,
 		getApp: (name: string) =>
 			Effect.gen(function* () {
+				if (decodeAppRead) {
+					decodeAppRead = false;
+					return yield* new FlyApiError({ operation: "get_app", reason: "decode", status: 200 });
+				}
 				if (rejectAppRead) {
 					rejectAppRead = false;
 					return yield* new FlyApiError({ operation: "get_app", reason: "status", status: 401 });
@@ -98,6 +109,10 @@ export const makeFakeProvider = () => {
 		createApp: (input: { readonly name: string; readonly organization: string; readonly network: string }) =>
 			Effect.gen(function* () {
 				calls.createApp += 1;
+				if (failCreateAppBeforeMutation) {
+					failCreateAppBeforeMutation = false;
+					return yield* new FlyApiError({ operation: "create_app", reason: "transport", status: null });
+				}
 				if (rejectCreateApp) {
 					rejectCreateApp = false;
 					return yield* new FlyApiError({ operation: "create_app", reason: "status", status: 400 });
@@ -132,8 +147,16 @@ export const makeFakeProvider = () => {
 		}) =>
 			Effect.gen(function* () {
 				calls.createVolume += 1;
+				if (failCreateVolumeBeforeMutation) {
+					failCreateVolumeBeforeMutation = false;
+					return yield* Effect.fail(flyUnavailable("create_volume"));
+				}
 				const volume = { ...volumeFor(input.name.replace(/^chirp_data_/, "")), name: input.name };
 				volumes.push(volume);
+				if (failListVolumesAfterCreate) {
+					failListVolumesAfterCreate = false;
+					failListVolumes = true;
+				}
 				if (failCreateVolume) {
 					failCreateVolume = false;
 					return yield* Effect.fail(flyUnavailable("create_volume"));
@@ -164,6 +187,10 @@ export const makeFakeProvider = () => {
 		}) =>
 			Effect.gen(function* () {
 				calls.createMachine += 1;
+				if (failCreateMachineBeforeMutation) {
+					failCreateMachineBeforeMutation = false;
+					return yield* Effect.fail(flyUnavailable("create_machine"));
+				}
 				const machine: FlyMachine = {
 					id: "machine-id",
 					name: input.name,
@@ -183,7 +210,12 @@ export const makeFakeProvider = () => {
 				return machine;
 			}),
 		startMachine: (_name: string, id: string) =>
-			Effect.sync(() => {
+			Effect.gen(function* () {
+				calls.startMachine += 1;
+				if (failStartMachineBeforeMutation) {
+					failStartMachineBeforeMutation = false;
+					return yield* Effect.fail(flyUnavailable("start_machine"));
+				}
 				const index = machines.findIndex((machine) => machine.id === id);
 				if (index >= 0) machines[index] = { ...machines[index]!, state: "started", checks: [{ status: "passing" }] };
 			}),
@@ -213,6 +245,9 @@ export const makeFakeProvider = () => {
 		networking,
 		calls,
 		set: {
+			decodeAppRead: () => {
+				decodeAppRead = true;
+			},
 			rejectAppRead: () => {
 				rejectAppRead = true;
 			},
@@ -240,14 +275,30 @@ export const makeFakeProvider = () => {
 			failCreateApp: () => {
 				failCreateApp = true;
 			},
+			failCreateAppBeforeMutation: () => {
+				failCreateAppBeforeMutation = true;
+			},
 			rejectCreateApp: () => {
 				rejectCreateApp = true;
 			},
 			failCreateVolume: () => {
 				failCreateVolume = true;
 			},
+			failCreateVolumeAndReadback: () => {
+				failCreateVolume = true;
+				failListVolumesAfterCreate = true;
+			},
+			failCreateVolumeBeforeMutation: () => {
+				failCreateVolumeBeforeMutation = true;
+			},
 			failCreateMachine: () => {
 				failCreateMachine = true;
+			},
+			failCreateMachineBeforeMutation: () => {
+				failCreateMachineBeforeMutation = true;
+			},
+			failStartMachineBeforeMutation: () => {
+				failStartMachineBeforeMutation = true;
 			},
 			failHealth: () => {
 				failHealth = true;
@@ -266,6 +317,10 @@ export const makeFakeProvider = () => {
 				const volumeIndex = volumes.findIndex((volume) => volume.id === value.config.mounts[0]?.volume);
 				if (volumeIndex >= 0) volumes[volumeIndex] = { ...volumes[volumeIndex]!, attached_machine_id: value.id };
 				machines.push(value);
+			},
+			stopMachines: () => {
+				for (const [index, machine] of machines.entries())
+					machines[index] = { ...machine, state: "stopped", checks: [] };
 			},
 		},
 		resources: () => ({ apps: app ? 1 : 0, volumes: volumes.length, machines: machines.length }),

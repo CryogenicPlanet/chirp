@@ -28,6 +28,7 @@ const legacy = Effect.gen(function* () {
 			compatible_schema_versions: [...migration.compatibleSchemaVersions],
 		});
 	}
+	yield* sql`ALTER TABLE board_operations ADD COLUMN ambiguous_mutations TEXT[] NOT NULL DEFAULT '{}'::text[]`;
 	return sql;
 });
 
@@ -45,12 +46,14 @@ describe("provisioning recovery migration", () => {
 					${board.slug}, ${board.slug}, ${board.slug}, ${board.slug}, 1, 'app-id', ${board.slug},
 					'snapshot-id', 'snapshot-digest', '2026-09-20T12:00:00Z', 5)`;
 					yield* sql`UPDATE board_operations SET checkpoint = 'runtime_secrets_written', attempt = 3,
+					last_error_code = ${state === "blocked" ? "retry_exhausted" : "provider_unavailable"},
 					state = ${state === "blocked" ? "failed" : "queued"},
 					finished_at = ${state === "blocked" ? DateTime.toDateUtc(DateTime.makeUnsafe("2026-09-20T12:00:00Z")) : null}
 					WHERE board_id = ${board.id}`;
 				}
 				const before = yield* sql`SELECT board_id, app_id, volume_id, last_snapshot_id, last_snapshot_digest,
 				last_snapshot_created_at::text, last_snapshot_retention_days FROM board_deployments ORDER BY board_id`;
+				yield* sql`ALTER TABLE board_operations DROP COLUMN ambiguous_mutations`;
 				yield* migrateCloudDatabase;
 				yield* migrateCloudDatabase;
 				expect(
@@ -61,9 +64,11 @@ describe("provisioning recovery migration", () => {
 					{ state: "blocked" },
 					{ state: "volume_created" },
 				]);
-				expect(yield* sql`SELECT checkpoint, attempt, state FROM board_operations ORDER BY state`).toEqual([
-					{ checkpoint: "volume_created", attempt: 3, state: "failed" },
-					{ checkpoint: "volume_created", attempt: 3, state: "queued" },
+				expect(
+					yield* sql`SELECT checkpoint, attempt, state, ambiguous_mutations FROM board_operations ORDER BY state`,
+				).toEqual([
+					{ checkpoint: "volume_created", attempt: 3, state: "failed", ambiguous_mutations: ["machine_create"] },
+					{ checkpoint: "volume_created", attempt: 3, state: "queued", ambiguous_mutations: ["machine_create"] },
 				]);
 				expect(
 					yield* sql`SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema()
@@ -76,12 +81,69 @@ describe("provisioning recovery migration", () => {
 		);
 	});
 
+	test("conservatively marks a legacy running edge checkpoint with no recorded error", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				const sql = yield* legacy;
+				const board = yield* (yield* Boards).request({ ...request, idempotency_key: "legacy-running" });
+				yield* sql`INSERT INTO board_deployments (board_id, state, hostname, storage_engine, region, image_ref,
+					app_name, network_name, volume_name, machine_name, volume_size_gb, app_id, volume_id, machine_id)
+					VALUES (${board.id}, 'machine_started', ${board.slug}, 'sqlite', 'sjc', ${settings.imageRef},
+					${board.slug}, ${board.slug}, ${board.slug}, ${board.slug}, 1, 'app-id', 'volume-id', 'machine-id')`;
+				yield* sql`UPDATE board_operations SET checkpoint = 'machine_started', state = 'running',
+					lease_token = '00000000-0000-4000-8000-000000000001', lease_owner = 'stopped-old-worker',
+					lease_expires_at = clock_timestamp() - interval '1 second'
+					WHERE board_id = ${board.id}`;
+				yield* sql`ALTER TABLE board_operations DROP COLUMN ambiguous_mutations`;
+				yield* migrateCloudDatabase;
+				expect(yield* sql`SELECT ambiguous_mutations FROM board_operations WHERE board_id = ${board.id}`).toEqual([
+					{
+						ambiguous_mutations: ["machine_start", "edge_ip", "edge_certificate", "edge_a_record", "edge_txt_record"],
+					},
+				]);
+			}),
+		);
+	});
+
+	test("copies legacy ambiguity into an already queued operator retry", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				const sql = yield* legacy;
+				const board = yield* (yield* Boards).request({ ...request, idempotency_key: "legacy-retry" });
+				yield* sql`INSERT INTO board_deployments (board_id, state, hostname, storage_engine, region, image_ref,
+					app_name, network_name, volume_name, machine_name, volume_size_gb, app_id, volume_id)
+					VALUES (${board.id}, 'blocked', ${board.slug}, 'sqlite', 'sjc', ${settings.imageRef},
+					${board.slug}, ${board.slug}, ${board.slug}, ${board.slug}, 1, 'app-id', 'volume-id')`;
+				yield* sql`UPDATE board_operations SET checkpoint = 'runtime_secrets_written', state = 'failed',
+					last_error_code = 'provider_rejected', last_error_message = 'legacy readback rejected',
+					finished_at = clock_timestamp()
+					WHERE board_id = ${board.id}`;
+				yield* sql`INSERT INTO board_operations (
+					id, board_id, kind, state, checkpoint, requested_by, idempotency_key, request_hash
+				)
+				SELECT '00000000-0000-4000-8000-000000000002', board_id, kind, 'queued', checkpoint,
+					'operator:deployment-retry', id::text, request_hash
+				FROM board_operations WHERE board_id = ${board.id}`;
+				yield* sql`ALTER TABLE board_operations DROP COLUMN ambiguous_mutations`;
+				yield* migrateCloudDatabase;
+				expect(
+					yield* sql`SELECT requested_by, ambiguous_mutations FROM board_operations
+						WHERE board_id = ${board.id} ORDER BY requested_by`,
+				).toEqual([
+					{ requested_by: "operator:deployment-retry", ambiguous_mutations: ["machine_create"] },
+					{ requested_by: "user-1", ambiguous_mutations: ["machine_create"] },
+				]);
+			}),
+		);
+	});
+
 	test("rolls back checkpoint rewrites when a later migration statement fails", async () => {
 		await runFresh(
 			Effect.gen(function* () {
 				const sql = yield* legacy;
 				yield* (yield* Boards).request(request);
 				yield* sql`UPDATE board_operations SET checkpoint = 'runtime_secrets_written'`;
+				yield* sql`ALTER TABLE board_operations DROP COLUMN ambiguous_mutations`;
 				yield* sql`ALTER TABLE board_deployments RENAME CONSTRAINT board_deployments_state_check TO unexpected_state_check`;
 				expect(Exit.isFailure(yield* Effect.exit(migrateCloudDatabase))).toBe(true);
 				expect(yield* sql`SELECT checkpoint FROM board_operations`).toEqual([

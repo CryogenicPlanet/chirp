@@ -10,6 +10,7 @@ import {
 	LeaseLost,
 	OperationAlreadyActive,
 	type OperationKind,
+	type ProviderMutation,
 } from "./operation.ts";
 import { boardOperations, boards } from "./schema.ts";
 
@@ -218,6 +219,66 @@ const make = Effect.gen(function* () {
 					),
 				),
 			),
+		markAmbiguousMutation: (input: {
+			readonly id: string;
+			readonly leaseToken: string;
+			readonly workerId: string;
+			readonly mutation: ProviderMutation;
+		}) =>
+			withLease(
+				input,
+				leased(
+					db
+						.update(boardOperations)
+						.set({
+							ambiguous_mutations: sql`CASE
+								WHEN ${input.mutation} = ANY(${boardOperations.ambiguous_mutations})
+								THEN ${boardOperations.ambiguous_mutations}
+								ELSE array_append(${boardOperations.ambiguous_mutations}, ${input.mutation})
+							END`,
+							updated_at: now,
+						})
+						.where(
+							and(
+								eq(boardOperations.id, input.id),
+								eq(boardOperations.state, "running"),
+								eq(boardOperations.lease_token, input.leaseToken),
+								eq(boardOperations.lease_owner, input.workerId),
+								gt(boardOperations.lease_expires_at, now),
+							),
+						)
+						.returning(),
+					input.id,
+				),
+			),
+		clearAmbiguousMutation: (input: {
+			readonly id: string;
+			readonly leaseToken: string;
+			readonly workerId: string;
+			readonly mutation: ProviderMutation;
+		}) =>
+			withLease(
+				input,
+				leased(
+					db
+						.update(boardOperations)
+						.set({
+							ambiguous_mutations: sql`array_remove(${boardOperations.ambiguous_mutations}, ${input.mutation})`,
+							updated_at: now,
+						})
+						.where(
+							and(
+								eq(boardOperations.id, input.id),
+								eq(boardOperations.state, "running"),
+								eq(boardOperations.lease_token, input.leaseToken),
+								eq(boardOperations.lease_owner, input.workerId),
+								gt(boardOperations.lease_expires_at, now),
+							),
+						)
+						.returning(),
+					input.id,
+				),
+			),
 		checkpoint: (input: {
 			readonly id: string;
 			readonly leaseToken: string;
@@ -304,6 +365,7 @@ const make = Effect.gen(function* () {
 								eq(boardOperations.lease_token, leaseToken),
 								eq(boardOperations.lease_owner, workerId),
 								gt(boardOperations.lease_expires_at, now),
+								sql`cardinality(${boardOperations.ambiguous_mutations}) = 0`,
 							),
 						)
 						.returning(),

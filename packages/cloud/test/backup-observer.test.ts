@@ -111,7 +111,6 @@ describe("BackupObserver", () => {
 						{ id: "pending", status: "pending", created_at: "2026-09-20T12:00:00.000Z" },
 						{
 							id: "newest",
-							status: "created",
 							created_at: "2026-09-20T11:00:00.000Z",
 							digest: "sha256:newest",
 							retention_days: 5,
@@ -170,6 +169,42 @@ describe("BackupObserver", () => {
 						kind: "backup",
 						requested_by: board.owner_id,
 						idempotency_key: "backup-after-backup-observation",
+					})).state,
+				).toBe("queued");
+			}),
+		);
+	});
+
+	test("rejects invalid retention metadata and releases the board slot", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				const { backup, board } = yield* prepare;
+				const outcome = yield* runObserver(
+					[
+						{
+							id: "invalid",
+							created_at: "2026-09-20T11:00:00.000Z",
+							digest: "sha256:invalid",
+							retention_days: -1,
+						},
+					],
+					BackupObserver.use((observer) => observer.run(backup, "backup-observer")),
+				);
+				expect(outcome).toBe("failed");
+				const db = yield* Database;
+				expect(
+					yield* db
+						.select({ state: boardOperations.state, last_error_code: boardOperations.last_error_code })
+						.from(boardOperations)
+						.where(eq(boardOperations.id, backup.id)),
+				).toEqual([{ state: "failed", last_error_code: "snapshot_pending" }]);
+				expect(
+					(yield* (yield* Operations).enqueue({
+						board_id: board.id,
+						owner_id: board.owner_id,
+						kind: "backup",
+						requested_by: board.owner_id,
+						idempotency_key: "backup-after-invalid-metadata",
 					})).state,
 				).toBe("queued");
 			}),

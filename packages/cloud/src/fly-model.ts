@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 
 const StringMap = Schema.Record(Schema.String, Schema.String);
 
@@ -58,59 +58,88 @@ export const FlyVolume = Schema.Struct({
 	size_gb: Schema.Int,
 	auto_backup_enabled: Schema.Boolean,
 	fstype: Schema.String,
-	attached_machine_id: Schema.optionalKey(Schema.String),
-	snapshot_retention: Schema.optionalKey(Schema.Int),
+	attached_machine_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	snapshot_retention: Schema.optionalKey(Schema.NullOr(Schema.Int)),
 });
 export type FlyVolume = typeof FlyVolume.Type;
 
-const FlyMachineMount = Schema.Struct({ volume: Schema.String, path: Schema.String });
+const FlyMachineMount = Schema.StructWithRest(Schema.Struct({ volume: Schema.String, path: Schema.String }), [
+	Schema.Record(Schema.String, Schema.Json),
+]);
 
 const FlyMachineCheck = Schema.Struct({
-	name: Schema.optionalKey(Schema.String),
-	status: Schema.optionalKey(Schema.String),
+	name: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	status: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 
-const FlyMachinePort = Schema.Struct({
-	port: Schema.Int,
-	handlers: Schema.Array(Schema.String),
-	force_https: Schema.optionalKey(Schema.Boolean),
-});
+const FlyMachinePort = Schema.StructWithRest(
+	Schema.Struct({
+		port: Schema.Int,
+		handlers: Schema.Array(Schema.String),
+		force_https: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
+	}),
+	[Schema.Record(Schema.String, Schema.Json)],
+);
 
-const FlyMachineServiceCheck = Schema.Struct({
-	type: Schema.String,
-	port: Schema.Int,
-	method: Schema.String,
-	path: Schema.String,
-	interval: Schema.String,
-	timeout: Schema.String,
-	grace_period: Schema.String,
-});
+const FlyMachineServiceCheck = Schema.StructWithRest(
+	Schema.Struct({
+		type: Schema.String,
+		port: Schema.Int,
+		method: Schema.String,
+		path: Schema.String,
+		interval: Schema.String,
+		timeout: Schema.String,
+		grace_period: Schema.String,
+	}),
+	[Schema.Record(Schema.String, Schema.Json)],
+);
 
-const FlyMachineService = Schema.Struct({
-	protocol: Schema.String,
-	internal_port: Schema.Int,
-	autostart: Schema.Boolean,
-	autostop: Schema.String,
-	min_machines_running: Schema.Int,
-	ports: Schema.Array(FlyMachinePort),
-	checks: Schema.Array(FlyMachineServiceCheck),
-});
+const FlyMachineService = Schema.StructWithRest(
+	Schema.Struct({
+		protocol: Schema.String,
+		internal_port: Schema.Int,
+		autostart: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
+		autostop: Schema.Union([Schema.String, Schema.Boolean]).pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
+		min_machines_running: Schema.NullOr(Schema.Int).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+		force_instance_key: Schema.optionalKey(Schema.NullOr(Schema.String)),
+		ports: Schema.Array(FlyMachinePort),
+		checks: Schema.Array(FlyMachineServiceCheck).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
+	}),
+	[Schema.Record(Schema.String, Schema.Json)],
+);
 
-const FlyMachineGuest = Schema.Struct({
-	cpu_kind: Schema.String,
-	cpus: Schema.Int,
-	memory_mb: Schema.Int,
-});
+const FlyMachineGuest = Schema.StructWithRest(
+	Schema.Struct({
+		cpu_kind: Schema.String,
+		cpus: Schema.Int,
+		memory_mb: Schema.Int,
+	}),
+	[Schema.Record(Schema.String, Schema.Json)],
+);
 
-export const FlyMachineConfig = Schema.Struct({
-	image: Schema.String,
-	env: StringMap,
-	metadata: StringMap,
-	mounts: Schema.Array(FlyMachineMount),
-	guest: FlyMachineGuest,
-	services: Schema.Array(FlyMachineService),
-	stop_config: Schema.Struct({ signal: Schema.String, timeout: Schema.String }),
-});
+const FlyMachineRestart = Schema.StructWithRest(
+	Schema.Struct({ policy: Schema.String, max_retries: Schema.optionalKey(Schema.Int) }),
+	[Schema.Record(Schema.String, Schema.Json)],
+);
+
+const UnknownMap = Schema.Record(Schema.String, Schema.Json);
+
+export const FlyMachineConfig = Schema.StructWithRest(
+	Schema.Struct({
+		image: Schema.String,
+		env: StringMap,
+		metadata: StringMap,
+		mounts: Schema.Array(FlyMachineMount),
+		guest: FlyMachineGuest,
+		services: Schema.Array(FlyMachineService),
+		stop_config: Schema.StructWithRest(Schema.Struct({ signal: Schema.String, timeout: Schema.String }), [UnknownMap]),
+		auto_destroy: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
+		init: Schema.optionalKey(Schema.NullOr(UnknownMap)),
+		restart: Schema.optionalKey(Schema.NullOr(FlyMachineRestart)),
+		dns: Schema.optionalKey(Schema.NullOr(UnknownMap)),
+	}),
+	[UnknownMap],
+);
 export type FlyMachineConfig = typeof FlyMachineConfig.Type;
 
 export const FlyMachine = Schema.Struct({
@@ -120,16 +149,16 @@ export const FlyMachine = Schema.Struct({
 	region: Schema.String,
 	instance_id: Schema.String,
 	config: FlyMachineConfig,
-	checks: Schema.optionalKey(Schema.Array(FlyMachineCheck)),
+	checks: Schema.optionalKey(Schema.NullOr(Schema.Array(FlyMachineCheck))),
 });
 export type FlyMachine = typeof FlyMachine.Type;
 
 export const FlyVolumeSnapshot = Schema.Struct({
-	id: Schema.optionalKey(Schema.String),
-	status: Schema.optionalKey(Schema.String),
-	created_at: Schema.optionalKey(Schema.String),
-	digest: Schema.optionalKey(Schema.String),
-	retention_days: Schema.optionalKey(Schema.Int),
+	id: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	status: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	created_at: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	digest: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	retention_days: Schema.optionalKey(Schema.NullOr(Schema.Int)),
 });
 export type FlyVolumeSnapshot = typeof FlyVolumeSnapshot.Type;
 

@@ -121,6 +121,54 @@ describe("Operations", () => {
 		);
 	});
 
+	test("persists independent provider mutation markers across lease recovery", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				yield* (yield* Boards).request(boardRequest);
+				const operations = yield* Operations;
+				const first = Option.getOrThrow(yield* operations.claim("worker-1", 30_000));
+				if (!first.lease_token) return yield* Effect.die("Claim returned no lease token");
+				yield* operations.markAmbiguousMutation({
+					id: first.id,
+					leaseToken: first.lease_token,
+					workerId: "worker-1",
+					mutation: "edge_a_record",
+				});
+				yield* operations.markAmbiguousMutation({
+					id: first.id,
+					leaseToken: first.lease_token,
+					workerId: "worker-1",
+					mutation: "machine_start",
+				});
+				yield* operations.requeue({
+					id: first.id,
+					leaseToken: first.lease_token,
+					workerId: "worker-1",
+					availableAt: yield* DateTime.nowAsDate,
+					errorCode: "provider_unavailable",
+					errorMessage: "Observe before retry",
+				});
+				const recovered = Option.getOrThrow(yield* operations.claim("worker-2", 30_000));
+				expect(new Set(recovered.ambiguous_mutations)).toEqual(new Set(["edge_a_record", "machine_start"]));
+				if (!recovered.lease_token) return yield* Effect.die("Claim returned no lease token");
+				yield* operations.clearAmbiguousMutation({
+					id: recovered.id,
+					leaseToken: recovered.lease_token,
+					workerId: "worker-2",
+					mutation: "machine_start",
+				});
+				const database = yield* Database;
+				expect(
+					(yield* database
+						.select({ markers: boardOperations.ambiguous_mutations })
+						.from(boardOperations)
+						.where(eq(boardOperations.id, first.id)))[0]?.markers,
+				).toEqual(["edge_a_record"]);
+			}),
+		);
+	});
+
 	test("serializes board mutations and releases the board after success", async () => {
 		await runFresh(
 			Effect.gen(function* () {
@@ -230,9 +278,9 @@ describe("Operations", () => {
 				} as const;
 				const first = yield* operations.enqueue(input);
 				expect((yield* operations.enqueue(input)).id).toBe(first.id);
-				expect(
-					Exit.isFailure(yield* Effect.exit(operations.enqueue({ ...input, board_id: otherBoard.id }))),
-				).toBe(true);
+				expect(Exit.isFailure(yield* Effect.exit(operations.enqueue({ ...input, board_id: otherBoard.id })))).toBe(
+					true,
+				);
 			}),
 		);
 	});

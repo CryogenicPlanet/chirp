@@ -18,6 +18,8 @@ const volume = {
 	size_gb: 1,
 	auto_backup_enabled: true,
 	fstype: "ext4",
+	attached_machine_id: null,
+	snapshot_retention: null,
 };
 const config: FlyMachineConfig = {
 	image: `registry.example/chirp@sha256:${"a".repeat(64)}`,
@@ -55,6 +57,21 @@ const machine = {
 	region: "sjc",
 	instance_id: "version-1",
 	config,
+};
+const observedMachine = {
+	...machine,
+	config: {
+		...config,
+		init: {},
+		dns: {},
+		services: config.services.map((service) => ({
+			...service,
+			autostop: true,
+			min_machines_running: null,
+			force_instance_key: null,
+			ports: service.ports.map((port) => ({ ...port, handlers: [...port.handlers].reverse() })),
+		})),
+	},
 };
 
 const jsonBody = (request: { readonly body: { readonly _tag: string } }) => {
@@ -295,14 +312,14 @@ describe("FlyBoardApi", () => {
 				const api = yield* FlyBoardApi;
 				expect(Option.getOrThrow(yield* api.getApp("chirp-board"))).toEqual(app);
 				expect(yield* api.listVolumes("chirp-board")).toEqual([volume]);
-				expect(yield* api.listMachines("chirp-board")).toEqual([machine]);
+				expect(yield* api.listMachines("chirp-board")).toEqual([observedMachine]);
 			}),
 			(request) => {
 				urls.push(request.url);
 				const value = request.url.endsWith("/volumes")
 					? [volume]
 					: request.url.endsWith("/machines")
-						? [machine]
+						? [observedMachine]
 						: request.url.includes("?org_slug=")
 							? appList
 							: appDetails;
@@ -340,7 +357,6 @@ describe("FlyBoardApi", () => {
 		const snapshots = [
 			{
 				id: "snapshot-id",
-				status: "created",
 				created_at: "2026-09-20T12:00:00.000Z",
 				digest: "sha256:snapshot",
 				retention_days: 5,
