@@ -249,11 +249,11 @@ describe.skipIf(!realPostgres)("CloudAuth", () => {
 				await handle(
 					new Request("https://cloud.test/api/auth/sign-in/social", {
 						method: "POST",
-					headers: {
-						"content-type": "application/json",
-						origin: "https://cloud.test",
-						"fly-client-ip": "192.0.2.1",
-					},
+						headers: {
+							"content-type": "application/json",
+							origin: "https://cloud.test",
+							"fly-client-ip": "192.0.2.1",
+						},
 						body: json({ provider: "github", callbackURL: "/" }),
 					}),
 				),

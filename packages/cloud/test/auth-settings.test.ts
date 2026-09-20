@@ -43,8 +43,8 @@ describe("cloud auth settings", () => {
 	});
 
 	test("rejects an invalid authoritative client IP header", async () => {
-		expect(Exit.isFailure(await load({ ...environment, CLOUD_CLIENT_IP_HEADER: "fly-client-ip, x-forwarded-for" }))).toBe(
-			true,
-		);
+		expect(
+			Exit.isFailure(await load({ ...environment, CLOUD_CLIENT_IP_HEADER: "fly-client-ip, x-forwarded-for" })),
+		).toBe(true);
 	});
 });
