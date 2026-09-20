@@ -20,7 +20,7 @@ The Next.js process owns bounded authentication and dashboard request runtimes, 
 
 Each owner can create at most five boards, including queued and blocked boards. Board creation serializes per owner inside the database transaction before checking the quota and inserting the board and its provision operation. Idempotent retries still return their original board at the limit; new requests return `403 board_quota_exceeded`. There is no board deletion workflow to free a slot in this release.
 
-The dashboard lists the newest five owned boards in one bounded query, matching the creation quota. No cursor is exposed for this first-release limit. Board detail reads validate UUID identifiers and return the same 404 for malformed, missing, and foreign IDs. Creation checks the browser Origin against the configured `BETTER_AUTH_URL`, not proxy-derived request URLs.
+The dashboard lists up to the newest 100 owned boards in one bounded query, independently of the five-board creation quota. It reads one extra row to report truncation explicitly rather than silently hiding older running infrastructure; no cursor is exposed in this release. Board detail reads validate UUID identifiers and return the same 404 for malformed, missing, and foreign IDs. Creation checks the browser Origin against the configured `BETTER_AUTH_URL`, not proxy-derived request URLs.
 
 Managed SQLite needs no provider runtime secret. Once its Volume is ready, provisioning creates the Machine directly. External PostgreSQL and MySQL provisioning remains blocked until the deployment contract can be verified and its two database URLs can be passed directly from a secret manager to Fly without control-plane persistence.
 
