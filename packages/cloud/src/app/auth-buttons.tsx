@@ -42,7 +42,9 @@ export function AuthButtons({ invitation, user }: AuthButtonsProps) {
 		setNotice(undefined);
 		Effect.tryPromise(() => auth.signIn.passkey()).pipe(
 			Effect.tap((result) =>
-				result?.error ? Effect.sync(() => setError(result.error.message ?? "Passkey sign-in failed")) : Effect.void,
+				result?.error
+					? Effect.sync(() => setError(result.error.message ?? "Passkey sign-in failed"))
+					: Effect.sync(() => window.location.assign("/")),
 			),
 			Effect.catch(() => Effect.sync(() => setError("Passkey sign-in is temporarily unavailable"))),
 			Effect.ensuring(Effect.sync(() => setPending(false))),
