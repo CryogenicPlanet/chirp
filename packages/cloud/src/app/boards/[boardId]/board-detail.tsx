@@ -1,9 +1,9 @@
 "use client";
 
-import { Schema } from "effect";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { DashboardBoardResponse, type DashboardBoard } from "../../../dashboard-contract.ts";
+import { dashboardErrorMessage, readDashboardResponse } from "../../dashboard-response.ts";
 import { type CloudClientUser, DashboardShell } from "../../dashboard-shell.tsx";
 import { pollDashboardBoard } from "../../poll-dashboard-board.ts";
 import { StatusBadge } from "../../status-badge.tsx";
@@ -13,7 +13,6 @@ const checkpointLabels: Readonly<Record<string, string>> = {
 	storage_configuration_verified: "Storage configuration verified",
 	app_created: "Fly application created",
 	volume_created: "Persistent volume created",
-	runtime_secrets_written: "Runtime secrets configured",
 	machine_created: "Board machine created",
 	machine_started: "Board machine started",
 	edge_reachable: "Fly edge is reachable",
@@ -27,9 +26,11 @@ const formatDate = (value: string) =>
 	new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 
 export function BoardDetail({
+	authUnavailable,
 	boardId,
 	sessionUser,
 }: {
+	readonly authUnavailable: boolean;
 	readonly boardId: string;
 	readonly sessionUser: CloudClientUser | null;
 }) {
@@ -43,12 +44,7 @@ export function BoardDetail({
 				cache: "no-store",
 				signal: signal ?? null,
 			});
-			if (!response.ok) {
-				if (response.status === 401) throw new Error("Your session expired. Sign in again to continue.");
-				if (response.status === 404) throw new Error("This board was not found.");
-				throw new Error("Chirp Cloud is temporarily unavailable.");
-			}
-			return Schema.decodeUnknownSync(DashboardBoardResponse)(await response.json()).board;
+			return (await readDashboardResponse(response, DashboardBoardResponse)).board;
 		},
 		[boardId],
 	);
@@ -61,7 +57,7 @@ export function BoardDetail({
 			signal: controller.signal,
 			load,
 			onBoard: setBoard,
-			onError: (cause) => setError(cause instanceof Error ? cause.message : "Chirp Cloud is temporarily unavailable."),
+			onError: (cause) => setError(dashboardErrorMessage(cause)),
 		});
 		return () => controller.abort();
 	}, [load, pollVersion, sessionUser]);
@@ -76,19 +72,21 @@ export function BoardDetail({
 			<main className="grid min-h-svh place-items-center p-6 max-[460px]:p-4">
 				<section className="w-full max-w-[430px] rounded-md border border-border bg-card p-8 shadow-card max-[460px]:px-5 max-[460px]:py-6">
 					<p className="m-0 font-mono text-[11px] font-medium tracking-[0.08em] text-subtle uppercase">
-						Session required
+						{authUnavailable ? "Authentication unavailable" : "Session required"}
 					</p>
 					<h1 className="mt-3 mb-0 text-[clamp(28px,7vw,36px)] leading-[1.05] font-normal tracking-[-0.035em] text-balance">
-						Sign in to view this board.
+						{authUnavailable ? "Your session could not be checked." : "Sign in to view this board."}
 					</h1>
 					<p className="mt-4 mb-6 text-[15px] leading-[1.55] text-muted-foreground">
-						Cloud access and board access use separate credentials.
+						{authUnavailable
+							? "Authentication is temporarily unavailable. Try again shortly."
+							: "Cloud access and board access use separate credentials."}
 					</p>
 					<Link
 						className="inline-flex min-h-9 items-center justify-center whitespace-nowrap rounded-md border border-transparent bg-primary px-3.5 py-2 text-[13px] font-medium leading-none text-primary-foreground no-underline hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
 						href="/"
 					>
-						Go to sign in
+						{authUnavailable ? "Return to dashboard" : "Go to sign in"}
 					</Link>
 				</section>
 			</main>
@@ -108,7 +106,7 @@ export function BoardDetail({
 					</button>
 				</div>
 			) : null}
-			{!board ? (
+			{!board && error ? null : !board ? (
 				<div aria-label="Loading board" className="pt-[3px]">
 					<div className="h-[11px] w-[92px] animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
 					<div className="mt-3.5 h-[34px] w-full max-w-80 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />

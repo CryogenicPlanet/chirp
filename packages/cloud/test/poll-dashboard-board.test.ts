@@ -28,12 +28,14 @@ describe("pollDashboardBoard", () => {
 			.mockImplementationOnce(async () => {
 				active += 1;
 				maximumActive = Math.max(maximumActive, active);
+				await new Promise((resolve) => setTimeout(resolve, 3_000));
 				active -= 1;
 				return board("provisioning");
 			})
 			.mockImplementationOnce(async () => {
 				active += 1;
 				maximumActive = Math.max(maximumActive, active);
+				await new Promise((resolve) => setTimeout(resolve, 3_000));
 				active -= 1;
 				return board("ready");
 			});
@@ -44,7 +46,11 @@ describe("pollDashboardBoard", () => {
 			onBoard: (value) => seen.push(value),
 			onError: vi.fn(),
 		});
-		await vi.advanceTimersByTimeAsync(2_000);
+		await vi.advanceTimersByTimeAsync(2_500);
+		expect(active).toBe(1);
+		expect(load).toHaveBeenCalledTimes(1);
+		expect(seen).toEqual([]);
+		await vi.advanceTimersByTimeAsync(5_500);
 		await polling;
 		expect(load).toHaveBeenCalledTimes(2);
 		expect(maximumActive).toBe(1);

@@ -6,8 +6,8 @@ export default async function BoardPage({ params }: { readonly params: Promise<{
 	const { boardId } = await params;
 	try {
 		const session = await getAuthSession(new Headers(await headers()));
-		return <BoardDetail boardId={boardId} sessionUser={session?.user ?? null} />;
+		return <BoardDetail authUnavailable={false} boardId={boardId} sessionUser={session?.user ?? null} />;
 	} catch {
-		return <BoardDetail boardId={boardId} sessionUser={null} />;
+		return <BoardDetail authUnavailable boardId={boardId} sessionUser={null} />;
 	}
 }

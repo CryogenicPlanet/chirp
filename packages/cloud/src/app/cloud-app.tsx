@@ -1,19 +1,13 @@
 "use client";
 
-import { Schema } from "effect";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { DashboardBoardResponse, DashboardBoardsResponse, type DashboardBoard } from "../dashboard-contract.ts";
 import { AuthButtons } from "./auth-buttons.tsx";
+import { dashboardErrorMessage, readDashboardResponse } from "./dashboard-response.ts";
 import { type CloudClientUser, DashboardShell } from "./dashboard-shell.tsx";
 import { StatusBadge } from "./status-badge.tsx";
-
-const responseError = (status: number) => {
-	if (status === 401) return "Your session expired. Sign in again to continue.";
-	if (status === 409) return "That request key was already used for different board details.";
-	return status >= 500 ? "Chirp Cloud is temporarily unavailable." : "Check the board name and try again.";
-};
 
 const storageLabels = { sqlite: "SQLite", postgres: "PostgreSQL", mysql: "MySQL" } as const;
 
@@ -34,14 +28,12 @@ export function CloudApp({
 	const load = useCallback((signal?: AbortSignal) => {
 		setLoadError(undefined);
 		fetch("/api/boards", { cache: "no-store", signal: signal ?? null })
-			.then(async (response) => {
-				if (!response.ok) throw new Error(responseError(response.status));
-				return Schema.decodeUnknownSync(DashboardBoardsResponse)(await response.json()).boards;
-			})
+			.then((response) => readDashboardResponse(response, DashboardBoardsResponse))
+			.then(({ boards }) => boards)
 			.then(setBoards)
 			.catch((error: unknown) => {
 				if (error instanceof DOMException && error.name === "AbortError") return;
-				setLoadError(error instanceof Error ? error.message : "Chirp Cloud is temporarily unavailable.");
+				setLoadError(dashboardErrorMessage(error));
 			});
 	}, []);
 
@@ -65,17 +57,12 @@ export function CloudApp({
 			headers: { "content-type": "application/json", "idempotency-key": pendingCreate.current.key },
 			body: JSON.stringify({ name }),
 		})
-			.then(async (response) => {
-				if (!response.ok) throw new Error(responseError(response.status));
-				return Schema.decodeUnknownSync(DashboardBoardResponse)(await response.json()).board;
-			})
-			.then((board) => {
+			.then((response) => readDashboardResponse(response, DashboardBoardResponse))
+			.then(({ board }) => {
 				pendingCreate.current = undefined;
 				router.push(`/boards/${encodeURIComponent(board.id)}`);
 			})
-			.catch((error: unknown) =>
-				setCreateError(error instanceof Error ? error.message : "The board could not be created."),
-			)
+			.catch((error: unknown) => setCreateError(dashboardErrorMessage(error)))
 			.finally(() => setCreating(false));
 	};
 
@@ -178,7 +165,7 @@ export function CloudApp({
 						</button>
 					</div>
 				) : null}
-				{!boards ? (
+				{!boards && loadError ? null : !boards ? (
 					<div aria-label="Loading boards" className="grid gap-3 min-[761px]:grid-cols-2">
 						<div className="min-h-[170px] animate-pulse rounded-md border border-border bg-card shadow-card motion-reduce:animate-none" />
 						<div className="min-h-[170px] animate-pulse rounded-md border border-border bg-card shadow-card motion-reduce:animate-none" />

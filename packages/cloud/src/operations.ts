@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, inArray, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lte, or, sql } from "drizzle-orm";
 import { Context, Crypto, Effect, Layer, Option, Schema } from "effect";
 import { Database } from "./database.ts";
 import {
@@ -85,9 +85,13 @@ const make = Effect.gen(function* () {
 			: Effect.fail(new InvalidLeaseDuration({ milliseconds }));
 	return {
 		latest: (boardId: string, kind: OperationKind) =>
-			decodeOne(sql`SELECT ${columns} FROM board_operations
-				WHERE board_id = ${boardId} AND kind = ${kind}
-				ORDER BY created_at DESC, id DESC LIMIT 1`),
+			db
+				.select()
+				.from(boardOperations)
+				.where(and(eq(boardOperations.board_id, boardId), eq(boardOperations.kind, kind)))
+				.orderBy(desc(boardOperations.created_at), desc(boardOperations.id))
+				.limit(1)
+				.pipe(Effect.map((rows) => Option.fromNullishOr(rows[0]))),
 		enqueue: (input: EnqueueOperation) =>
 			Effect.gen(function* () {
 				if (!(yield* ownedBoard(input.board_id, input.owner_id)))

@@ -1,23 +1,25 @@
-import { Schema } from "effect";
-import { getAuthSession } from "./auth-runtime.ts";
+import { Effect, Schema } from "effect";
+import { dashboardRequestRuntime, getAuthPublicOrigin, getAuthSession } from "./auth-runtime.ts";
 import { DashboardCreateRequest, type DashboardBoard } from "./dashboard-contract.ts";
-import { createDashboardBoard, getDashboardBoard, listDashboardBoards } from "./dashboard-runtime.ts";
 
 interface DashboardHttpDependencies {
 	readonly getSession: typeof getAuthSession;
-	readonly list: typeof listDashboardBoards;
-	readonly get: typeof getDashboardBoard;
-	readonly create: typeof createDashboardBoard;
+	readonly getPublicOrigin: typeof getAuthPublicOrigin;
+	readonly list: typeof dashboardRequestRuntime.list;
+	readonly get: typeof dashboardRequestRuntime.get;
+	readonly create: typeof dashboardRequestRuntime.create;
 }
 
 const noStore = { "cache-control": "no-store" };
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+const isBoardId = Schema.is(Schema.String.check(Schema.isUUID()));
 const error = (status: number, code: string) => Response.json({ error: { code } }, { status, headers: noStore });
 
 const sessionOwner = async (request: Request, dependencies: DashboardHttpDependencies) => {
 	try {
 		return (await dependencies.getSession(request.headers))?.user.id ?? null;
-	} catch {
+	} catch (cause) {
+		await Effect.runPromise(Effect.logError("Chirp Cloud dashboard session lookup failed", cause));
 		return undefined;
 	}
 };
@@ -62,7 +64,8 @@ export const makeDashboardHttp = (dependencies: DashboardHttpDependencies) => ({
 		if (ownerId === undefined) return error(503, "authentication_unavailable");
 		try {
 			return Response.json({ boards: await dependencies.list(ownerId) }, { headers: noStore });
-		} catch {
+		} catch (cause) {
+			await Effect.runPromise(Effect.logError("Chirp Cloud dashboard list failed", cause));
 			return error(503, "dashboard_unavailable");
 		}
 	},
@@ -70,7 +73,13 @@ export const makeDashboardHttp = (dependencies: DashboardHttpDependencies) => ({
 		const ownerId = await sessionOwner(request, dependencies);
 		if (ownerId === null) return error(401, "unauthorized");
 		if (ownerId === undefined) return error(503, "authentication_unavailable");
-		if (request.headers.get("origin") !== new URL(request.url).origin) return error(403, "origin_rejected");
+		try {
+			if (request.headers.get("origin") !== (await dependencies.getPublicOrigin()))
+				return error(403, "origin_rejected");
+		} catch (cause) {
+			await Effect.runPromise(Effect.logError("Chirp Cloud dashboard origin lookup failed", cause));
+			return error(503, "authentication_unavailable");
+		}
 		if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json"))
 			return error(400, "invalid_request");
 		const idempotencyKey = request.headers.get("idempotency-key")?.trim();
@@ -84,7 +93,7 @@ export const makeDashboardHttp = (dependencies: DashboardHttpDependencies) => ({
 			});
 			if (!result.ok)
 				return error(
-					result.code === "idempotency_conflict" ? 409 : result.code === "invalid_request" ? 400 : 503,
+					result.code === "idempotency_conflict" ? 409 : result.code === "board_quota_exceeded" ? 403 : 400,
 					result.code,
 				);
 			return Response.json(
@@ -94,7 +103,8 @@ export const makeDashboardHttp = (dependencies: DashboardHttpDependencies) => ({
 					headers: { ...noStore, location: `/boards/${encodeURIComponent(result.board.id)}` },
 				},
 			);
-		} catch {
+		} catch (cause) {
+			await Effect.runPromise(Effect.logError("Chirp Cloud dashboard create failed", cause));
 			return error(503, "dashboard_unavailable");
 		}
 	},
@@ -102,12 +112,14 @@ export const makeDashboardHttp = (dependencies: DashboardHttpDependencies) => ({
 		const ownerId = await sessionOwner(request, dependencies);
 		if (ownerId === null) return error(401, "unauthorized");
 		if (ownerId === undefined) return error(503, "authentication_unavailable");
+		if (!isBoardId(boardId)) return error(404, "not_found");
 		try {
 			const board = await dependencies.get(ownerId, boardId);
 			return board._tag === "None"
 				? error(404, "not_found")
 				: Response.json({ board: board.value satisfies DashboardBoard }, { headers: noStore });
-		} catch {
+		} catch (cause) {
+			await Effect.runPromise(Effect.logError("Chirp Cloud dashboard detail failed", cause));
 			return error(503, "dashboard_unavailable");
 		}
 	},
@@ -115,7 +127,8 @@ export const makeDashboardHttp = (dependencies: DashboardHttpDependencies) => ({
 
 export const dashboardHttp = makeDashboardHttp({
 	getSession: getAuthSession,
-	list: listDashboardBoards,
-	get: getDashboardBoard,
-	create: createDashboardBoard,
+	getPublicOrigin: getAuthPublicOrigin,
+	list: dashboardRequestRuntime.list,
+	get: dashboardRequestRuntime.get,
+	create: dashboardRequestRuntime.create,
 });

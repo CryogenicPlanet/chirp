@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { Config, Effect } from "effect";
 import next from "next";
-import { disposeAuthRequestRuntime } from "./auth-runtime.ts";
+import { disposeCloudRequestRuntime } from "./auth-runtime.ts";
 import { isIpv4BindAddress, isProxyTransport } from "./client-ip-boundary.ts";
 import { databaseLayer } from "./database.ts";
 import { migrateCloudDatabase } from "./migrations.ts";
@@ -64,7 +64,7 @@ const shutdown = (signal: "SIGINT" | "SIGTERM") => {
 		});
 		yield* Effect.promise(() => app.close());
 		yield* Effect.promise(() => workerRuntime.dispose());
-		yield* Effect.promise(disposeAuthRequestRuntime);
+		yield* Effect.promise(disposeCloudRequestRuntime);
 		process.stdout.write("Chirp Cloud stopped cleanly\n");
 		process.exitCode = signal === "SIGINT" ? 130 : 143;
 	}).pipe(

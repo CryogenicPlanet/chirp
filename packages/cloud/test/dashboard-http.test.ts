@@ -20,12 +20,13 @@ const board: DashboardBoard = {
 const session = { user: { id: "user-1", name: "Owner", email: "owner@example.com" } };
 const dependencies = () => ({
 	getSession: vi.fn(async (): Promise<typeof session | null> => session),
+	getPublicOrigin: vi.fn(async () => "https://cloud.chirp.wiki"),
 	list: vi.fn(async () => [board]),
 	get: vi.fn(async () => Option.some(board)),
 	create: vi.fn(
 		async (): Promise<
 			| { readonly ok: true; readonly board: DashboardBoard }
-			| { readonly ok: false; readonly code: "idempotency_conflict" | "invalid_request" | "unavailable" }
+			| { readonly ok: false; readonly code: "idempotency_conflict" | "invalid_request" | "board_quota_exceeded" }
 		> => ({ ok: true, board }),
 	),
 });
@@ -52,12 +53,25 @@ describe("dashboard HTTP", () => {
 	});
 
 	test("returns the same 404 for missing and foreign board identifiers", async () => {
-		const deps = dependencies();
-		deps.get.mockResolvedValueOnce(Option.none());
-		const response = await makeDashboardHttp(deps).detail(request("/api/boards/foreign"), "foreign");
-		expect(response.status).toBe(404);
-		expect(await response.json()).toEqual({ error: { code: "not_found" } });
-		expect(deps.get).toHaveBeenCalledWith("user-1", "foreign");
+		for (const id of ["01956d31-c55b-7a01-9088-927182bece80", "01956d31-c55b-7a01-9088-927182bece81"]) {
+			const deps = dependencies();
+			deps.get.mockResolvedValueOnce(Option.none());
+			const response = await makeDashboardHttp(deps).detail(request(`/api/boards/${id}`), id);
+			expect(response.status).toBe(404);
+			expect(await response.json()).toEqual({ error: { code: "not_found" } });
+			expect(deps.get).toHaveBeenCalledWith("user-1", id);
+		}
+	});
+
+	test("rejects malformed board identifiers as the same uncached 404 without database access", async () => {
+		for (const id of ["not-a-uuid", "", "01956d31-c55b", "x".repeat(500)]) {
+			const deps = dependencies();
+			const response = await makeDashboardHttp(deps).detail(request(), id);
+			expect(response.status).toBe(404);
+			expect(response.headers.get("cache-control")).toBe("no-store");
+			expect(await response.json()).toEqual({ error: { code: "not_found" } });
+			expect(deps.get).not.toHaveBeenCalled();
+		}
 	});
 
 	test("requires same-origin JSON and a bounded idempotency key for creation", async () => {
@@ -91,11 +105,30 @@ describe("dashboard HTTP", () => {
 				body: JSON.stringify({ name: "Board", storage_engine: "postgres" }),
 			}),
 		];
-		for (const invalid of invalidRequests) {
+		for (const [index, invalid] of invalidRequests.entries()) {
 			const deps = dependencies();
 			const response = await makeDashboardHttp(deps).create(invalid);
-			expect([400, 403]).toContain(response.status);
+			expect(response.status).toBe(index === 0 ? 403 : 400);
 			expect(deps.create).not.toHaveBeenCalled();
+		}
+	});
+
+	test("uses the configured public origin behind a proxy and rejects request-derived origins", async () => {
+		for (const [origin, status] of [
+			["https://cloud.chirp.wiki", 201],
+			["http://127.0.0.1:3000", 403],
+			["null", 403],
+		] as const) {
+			const deps = dependencies();
+			const response = await makeDashboardHttp(deps).create(
+				new Request("http://127.0.0.1:3000/api/boards", {
+					method: "POST",
+					headers: { origin, "content-type": "application/json", "idempotency-key": "key" },
+					body: JSON.stringify({ name: "Board" }),
+				}),
+			);
+			expect(response.status).toBe(status);
+			expect(deps.create).toHaveBeenCalledTimes(status === 201 ? 1 : 0);
 		}
 	});
 
@@ -153,6 +186,13 @@ describe("dashboard HTTP", () => {
 		const conflictResponse = await makeDashboardHttp(conflict).create(request("/api/boards", init));
 		expect(conflictResponse.status).toBe(409);
 		expect(await conflictResponse.json()).toEqual({ error: { code: "idempotency_conflict" } });
+
+		const quota = dependencies();
+		quota.create.mockResolvedValueOnce({ ok: false, code: "board_quota_exceeded" });
+		const quotaResponse = await makeDashboardHttp(quota).create(request("/api/boards", init));
+		expect(quotaResponse.status).toBe(403);
+		expect(quotaResponse.headers.get("cache-control")).toBe("no-store");
+		expect(await quotaResponse.json()).toEqual({ error: { code: "board_quota_exceeded" } });
 
 		const unavailable = dependencies();
 		unavailable.list.mockRejectedValueOnce(new Error("secret database detail"));

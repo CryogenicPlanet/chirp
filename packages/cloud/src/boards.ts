@@ -1,9 +1,12 @@
-import { and, desc, eq, getTableColumns } from "drizzle-orm";
-import { Context, Crypto, Effect, Layer, Option, Schema } from "effect";
+import { and, desc, eq, getTableColumns, sql } from "drizzle-orm";
+import { Context, Crypto, Data, Effect, Layer, Option, Schema } from "effect";
 import type { Board, RequestBoard } from "./board.ts";
-import { Database } from "./database.ts";
+import { Database, type DatabaseClient } from "./database.ts";
 import { IdempotencyConflict } from "./operation.ts";
 import { boardOperations, boards } from "./schema.ts";
+
+export const maxBoardsPerOwner = 5;
+export class BoardQuotaExceeded extends Data.TaggedError("BoardQuotaExceeded")<{}> {}
 
 const encodeRequestHash = Schema.encodeSync(
 	Schema.fromJsonString(Schema.Struct({ owner_id: Schema.String, name: Schema.String, storage_engine: Schema.String })),
@@ -18,16 +21,16 @@ const hex = (bytes: Uint8Array) => {
 const make = Effect.gen(function* () {
 	const database = yield* Database;
 	const crypto = yield* Crypto.Crypto;
-	const findRequest = (requestedBy: string, idempotencyKey: string) =>
-		database
+	const findRequest = (client: DatabaseClient, requestedBy: string, idempotencyKey: string) =>
+		client
 			.select({ ...getTableColumns(boards), request_hash: boardOperations.request_hash })
 			.from(boardOperations)
 			.innerJoin(boards, eq(boards.id, boardOperations.board_id))
 			.where(and(eq(boardOperations.requested_by, requestedBy), eq(boardOperations.idempotency_key, idempotencyKey)))
 			.limit(1)
 			.pipe(Effect.map((found) => Option.fromNullishOr(found[0])));
-	const resolveRequest = (input: RequestBoard, requestHash: string) =>
-		findRequest(input.requested_by, input.idempotency_key).pipe(
+	const resolveRequest = (client: DatabaseClient, input: RequestBoard, requestHash: string) =>
+		findRequest(client, input.requested_by, input.idempotency_key).pipe(
 			Effect.flatMap(
 				Option.match({
 					onNone: () => Effect.succeed(Option.none<Board>()),
@@ -58,7 +61,7 @@ const make = Effect.gen(function* () {
 						),
 					),
 				);
-				const existing = yield* resolveRequest(input, requestHash);
+				const existing = yield* resolveRequest(database, input, requestHash);
 				if (Option.isSome(existing)) return existing.value;
 				const [id, operationId, slugBytes] = yield* Effect.all([
 					crypto.randomUUIDv7,
@@ -67,6 +70,17 @@ const make = Effect.gen(function* () {
 				]);
 				const create = database.transaction((transaction) =>
 					Effect.gen(function* () {
+						yield* transaction.execute(
+							sql`SELECT pg_advisory_xact_lock(hashtextextended(${`chirp-cloud-board-quota:${input.owner_id}`}, 0))`,
+						);
+						const replay = yield* resolveRequest(transaction, input, requestHash);
+						if (Option.isSome(replay)) return replay.value;
+						const owned = yield* transaction
+							.select({ id: boards.id })
+							.from(boards)
+							.where(eq(boards.owner_id, input.owner_id))
+							.limit(maxBoardsPerOwner);
+						if (owned.length >= maxBoardsPerOwner) return yield* new BoardQuotaExceeded();
 						const created = yield* transaction
 							.insert(boards)
 							.values({
@@ -94,7 +108,7 @@ const make = Effect.gen(function* () {
 				);
 				return yield* create.pipe(
 					Effect.catchTag("EffectDrizzleQueryError", (error) =>
-						resolveRequest(input, requestHash).pipe(
+						resolveRequest(database, input, requestHash).pipe(
 							Effect.flatMap(Option.match({ onNone: () => Effect.fail(error), onSome: Effect.succeed })),
 						),
 					),
@@ -119,7 +133,8 @@ const make = Effect.gen(function* () {
 				.select()
 				.from(boards)
 				.where(eq(boards.owner_id, ownerId))
-				.orderBy(desc(boards.created_at), desc(boards.id)),
+				.orderBy(desc(boards.created_at), desc(boards.id))
+				.limit(maxBoardsPerOwner),
 	};
 });
 

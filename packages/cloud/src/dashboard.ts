@@ -1,22 +1,31 @@
+import { desc, eq, getTableColumns } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import type { Board } from "./board.ts";
-import { Boards } from "./boards.ts";
+import { Boards, maxBoardsPerOwner } from "./boards.ts";
+import { Database } from "./database.ts";
 import type { CreateDashboardBoard, DashboardBoard, DashboardPhase } from "./dashboard-contract.ts";
 import type { Deployment } from "./deployment.ts";
 import { Deployments } from "./deployments.ts";
 import type { Operation } from "./operation.ts";
 import { Operations } from "./operations.ts";
+import { boardDeployments, boardOperations, boards as boardTable } from "./schema.ts";
 
 export class InvalidBoardName extends Data.TaggedError("InvalidBoardName")<{}> {}
 
-const phase = (deployment: Deployment | undefined, operation: Operation | undefined): DashboardPhase => {
+type DashboardOperation = Pick<Operation, "checkpoint" | "last_error_code" | "last_error_message" | "state">;
+
+const phase = (deployment: Deployment | undefined, operation: DashboardOperation | undefined): DashboardPhase => {
 	if (operation?.state === "failed") return "blocked";
 	if (!deployment) return operation?.state === "running" ? "provisioning" : "queued";
 	if (deployment.state === "blocked") return "blocked";
 	return deployment.state === "provisioned" ? "ready" : "provisioning";
 };
 
-const view = (board: Board, deployment: Deployment | undefined, operation: Operation | undefined): DashboardBoard => ({
+const view = (
+	board: Board,
+	deployment: Deployment | undefined,
+	operation: DashboardOperation | undefined,
+): DashboardBoard => ({
 	id: board.id,
 	name: board.name,
 	hostname: deployment?.state === "provisioned" ? deployment.hostname : null,
@@ -52,6 +61,19 @@ const make = Effect.gen(function* () {
 	const boards = yield* Boards;
 	const deployments = yield* Deployments;
 	const operations = yield* Operations;
+	const database = yield* Database;
+	const latestProvision = database
+		.selectDistinctOn([boardOperations.board_id], {
+			board_id: boardOperations.board_id,
+			state: boardOperations.state,
+			checkpoint: boardOperations.checkpoint,
+			last_error_code: boardOperations.last_error_code,
+			last_error_message: boardOperations.last_error_message,
+		})
+		.from(boardOperations)
+		.where(eq(boardOperations.kind, "provision"))
+		.orderBy(boardOperations.board_id, desc(boardOperations.created_at), desc(boardOperations.id))
+		.as("latest_provision");
 	const decorate = (board: Board) =>
 		Effect.all([deployments.get(board.id), operations.latest(board.id, "provision")]).pipe(
 			Effect.map(([deployment, operation]) =>
@@ -59,7 +81,31 @@ const make = Effect.gen(function* () {
 			),
 		);
 	return {
-		list: (ownerId: string) => boards.list(ownerId).pipe(Effect.flatMap((owned) => Effect.forEach(owned, decorate))),
+		list: (ownerId: string) =>
+			database
+				.select({
+					board: getTableColumns(boardTable),
+					deployment: getTableColumns(boardDeployments),
+					operation: {
+						state: latestProvision.state,
+						checkpoint: latestProvision.checkpoint,
+						last_error_code: latestProvision.last_error_code,
+						last_error_message: latestProvision.last_error_message,
+					},
+				})
+				.from(boardTable)
+				.leftJoin(boardDeployments, eq(boardDeployments.board_id, boardTable.id))
+				.leftJoin(latestProvision, eq(latestProvision.board_id, boardTable.id))
+				.where(eq(boardTable.owner_id, ownerId))
+				.orderBy(desc(boardTable.created_at), desc(boardTable.id))
+				.limit(maxBoardsPerOwner)
+				.pipe(
+					Effect.map((rows) =>
+						rows.map(({ board, deployment, operation }) =>
+							view(board, deployment ?? undefined, operation ?? undefined),
+						),
+					),
+				),
 		get: (ownerId: string, boardId: string) =>
 			boards.get(ownerId, boardId).pipe(
 				Effect.flatMap(

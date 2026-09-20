@@ -156,6 +156,7 @@ const make = (settings: CloudAuthSettings) =>
 			],
 		});
 		return {
+			publicOrigin: settings.publicOrigin,
 			handle: (request: Request) =>
 				hasAuthoritativeClientIp(request.headers, settings.clientIpHeader)
 					? Effect.tryPromise({

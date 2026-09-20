@@ -66,6 +66,52 @@ describe("Boards", () => {
 		);
 	});
 
+	test("enforces a five-board owner quota atomically while preserving replay", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				const boards = yield* Boards;
+				const database = yield* Database;
+				const first = yield* boards.request(request);
+				const results = yield* Effect.forEach(
+					Array.from({ length: 12 }, (_, index) => index),
+					(index) =>
+						boards
+							.request({ ...request, idempotency_key: `quota-${index}` })
+							.pipe(Effect.match({ onSuccess: () => "created", onFailure: (error) => error._tag })),
+					{ concurrency: "unbounded" },
+				);
+				expect(results.filter((result) => result === "created")).toHaveLength(4);
+				expect(results.filter((result) => result === "BoardQuotaExceeded")).toHaveLength(8);
+				expect(yield* boards.list(request.owner_id)).toHaveLength(5);
+				expect(yield* database.select({ id: boardOperations.id }).from(boardOperations)).toHaveLength(5);
+				expect((yield* boards.request(request)).id).toBe(first.id);
+				const conflict = yield* boards
+					.request({ ...request, name: "Changed" })
+					.pipe(Effect.match({ onSuccess: () => "created", onFailure: (error) => error._tag }));
+				expect(conflict).toBe("IdempotencyConflict");
+				const other = yield* boards.request({ ...request, owner_id: "user-2", requested_by: "user-2" });
+				expect(other.owner_id).toBe("user-2");
+			}),
+		);
+	});
+
+	test("replays concurrent retries for the final quota slot", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				const boards = yield* Boards;
+				for (let index = 0; index < 4; index += 1)
+					yield* boards.request({ ...request, idempotency_key: `prefill-${index}` });
+				const created = yield* Effect.forEach(Array.from({ length: 12 }), () => boards.request(request), {
+					concurrency: "unbounded",
+				});
+				expect(new Set(created.map(({ id }) => id)).size).toBe(1);
+				expect(yield* boards.list(request.owner_id)).toHaveLength(5);
+			}),
+		);
+	});
+
 	test("generates a unique opaque slug for each board", async () => {
 		await runFresh(
 			Effect.gen(function* () {
@@ -73,7 +119,13 @@ describe("Boards", () => {
 				const boards = yield* Boards;
 				const created = yield* Effect.forEach(
 					Array.from({ length: 24 }, (_, index) => index),
-					(index) => boards.request({ ...request, name: `Board ${index}`, idempotency_key: `request-${index}` }),
+					(index) =>
+						boards.request({
+							...request,
+							owner_id: `owner-${index}`,
+							name: `Board ${index}`,
+							idempotency_key: `request-${index}`,
+						}),
 				);
 				expect(new Set(created.map(({ slug }) => slug)).size).toBe(created.length);
 			}),

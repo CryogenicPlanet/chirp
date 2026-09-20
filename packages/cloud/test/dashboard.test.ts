@@ -1,6 +1,6 @@
 import { DateTime, Effect, Exit, Option } from "effect";
 import { SqlClient } from "effect/unstable/sql";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { Dashboard } from "../src/dashboard.ts";
 import { Boards } from "../src/boards.ts";
 import { Deployments } from "../src/deployments.ts";
@@ -68,6 +68,27 @@ describe("Dashboard", () => {
 		);
 	});
 
+	test("bounds the listing to the quota without per-board decoration queries", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				const sql = yield* SqlClient.SqlClient;
+				yield* sql`INSERT INTO boards (id, owner_id, name, slug, storage_engine)
+				SELECT ('01956d31-c55b-7a01-9088-' || lpad(i::text, 12, '0'))::uuid,
+					'user-1', 'Board ' || i::text, lpad(i::text, 32, '0'), 'sqlite'
+				FROM generate_series(1, 9) i`;
+				const deployments = yield* Deployments;
+				const operations = yield* Operations;
+				const get = vi.spyOn(deployments, "get");
+				const latest = vi.spyOn(operations, "latest");
+				const listed = yield* (yield* Dashboard).list("user-1");
+				expect(listed.map(({ name }) => name)).toEqual(["Board 9", "Board 8", "Board 7", "Board 6", "Board 5"]);
+				expect(get).not.toHaveBeenCalled();
+				expect(latest).not.toHaveBeenCalled();
+			}),
+		);
+	});
+
 	test("projects persisted operation errors without leaking operation internals", async () => {
 		await runFresh(
 			Effect.gen(function* () {
@@ -83,6 +104,13 @@ describe("Dashboard", () => {
 					errorCode: "provider_denied",
 					errorMessage: "Fly rejected the request",
 				});
+				yield* (yield* Operations).enqueue({
+					board_id: board.id,
+					owner_id: "user-1",
+					requested_by: "user-1",
+					kind: "backup",
+					idempotency_key: "later-backup",
+				});
 				const failed = Option.getOrThrow(yield* dashboard.get("user-1", board.id));
 				expect(failed).toMatchObject({
 					phase: "blocked",
@@ -90,6 +118,7 @@ describe("Dashboard", () => {
 				});
 				expect(Object.keys(failed)).not.toContain("lease_token");
 				expect(Object.keys(failed)).not.toContain("request_hash");
+				expect(yield* dashboard.list("user-1")).toEqual([failed]);
 			}),
 		);
 	});
@@ -188,6 +217,7 @@ describe("Dashboard", () => {
 						retention_days: 7,
 					},
 				});
+				expect(yield* dashboard.list("user-1")).toEqual([ready]);
 			}),
 		);
 	});

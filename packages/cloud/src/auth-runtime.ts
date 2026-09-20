@@ -3,8 +3,11 @@ import { Effect, Layer, ManagedRuntime } from "effect";
 import type { CloudAuthSettings } from "./auth-settings.ts";
 import { cloudAuthSettings } from "./auth-settings.ts";
 import { CloudAuth, cloudAuthLayer } from "./cloud-auth.ts";
+import { makeDashboardRequestRuntime } from "./dashboard-runtime.ts";
 
 export interface AuthRequestRuntime {
+	readonly dashboard: ReturnType<typeof makeDashboardRequestRuntime>;
+	readonly getPublicOrigin: () => Promise<string>;
 	readonly handle: (request: Request) => Promise<Response>;
 	readonly getSession: (headers: Headers) => Promise<{
 		readonly user: { readonly id: string; readonly name: string; readonly email: string };
@@ -13,10 +16,13 @@ export interface AuthRequestRuntime {
 }
 
 export const makeAuthRequestRuntime = <E>(settings: Effect.Effect<CloudAuthSettings, E>): AuthRequestRuntime => {
+	const dashboard = makeDashboardRequestRuntime();
 	const runtime = ManagedRuntime.make(
 		Layer.unwrap(settings.pipe(Effect.map(cloudAuthLayer))).pipe(Layer.provideMerge(NodeServices.layer)),
 	);
 	return {
+		dashboard,
+		getPublicOrigin: () => runtime.runPromise(CloudAuth.use((auth) => Effect.succeed(auth.publicOrigin))),
 		handle: (request: Request) =>
 			runtime
 				.runPromise(CloudAuth.use((auth) => auth.handle(request)))
@@ -29,7 +35,7 @@ export const makeAuthRequestRuntime = <E>(settings: Effect.Effect<CloudAuthSetti
 					),
 				),
 			),
-		dispose: () => runtime.dispose(),
+		dispose: () => Promise.all([dashboard.dispose(), runtime.dispose()]).then(() => undefined),
 	};
 };
 
@@ -41,7 +47,9 @@ const live = (globalThis.chirpCloudAuthRuntime ??= makeAuthRequestRuntime(cloudA
 
 export const handleAuthRequest = live.handle;
 export const getAuthSession = live.getSession;
-export const disposeAuthRequestRuntime = async () => {
+export const getAuthPublicOrigin = live.getPublicOrigin;
+export const dashboardRequestRuntime = live.dashboard;
+export const disposeCloudRequestRuntime = async () => {
 	if (globalThis.chirpCloudAuthRuntime === live) globalThis.chirpCloudAuthRuntime = undefined;
 	await live.dispose();
 };
