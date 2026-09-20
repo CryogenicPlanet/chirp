@@ -81,13 +81,17 @@ export function CloudApp({
 
 	if (!sessionUser)
 		return (
-			<main className="auth-main">
-				<section className="auth-card">
-					<p className="eyebrow">Chirp Cloud</p>
-					<h1>Private boards, managed quietly.</h1>
-					<p className="lede">Create and provision a managed Chirp board from one secure account.</p>
+			<main className="grid min-h-svh place-items-center p-6 max-[460px]:p-4">
+				<section className="w-full max-w-[430px] rounded-md border border-border bg-card p-8 shadow-card max-[460px]:px-5 max-[460px]:py-6">
+					<p className="m-0 font-mono text-[11px] font-medium tracking-[0.08em] text-subtle uppercase">Chirp Cloud</p>
+					<h1 className="mt-3 mb-0 text-[clamp(28px,7vw,36px)] leading-[1.05] font-normal tracking-[-0.035em] text-balance">
+						Private boards, managed quietly.
+					</h1>
+					<p className="mt-4 mb-6 text-[15px] leading-[1.55] text-muted-foreground">
+						Create and provision a managed Chirp board from one secure account.
+					</p>
 					{authUnavailable ? (
-						<p className="alert alert-error auth-alert">
+						<p className="mt-[-8px] mb-3 rounded-md border border-destructive-border bg-destructive-surface px-4 py-3.5 text-xs leading-[1.55] text-destructive">
 							Your current session could not be checked. Authentication is temporarily unavailable.
 						</p>
 					) : null}
@@ -98,79 +102,129 @@ export function CloudApp({
 
 	return (
 		<DashboardShell user={sessionUser}>
-			<header className="page-header">
-				<p className="breadcrumb">Cloud / boards</p>
-				<h1>Your boards</h1>
-				<p>Private managed boards owned by {sessionUser.email}.</p>
+			<header className="mb-7">
+				<p className="mt-0 mb-2 font-mono text-[11px] tracking-[0.03em] text-subtle">Cloud / boards</p>
+				<h1 className="m-0 text-3xl font-normal tracking-[-0.035em] text-balance max-[760px]:text-2xl">Your boards</h1>
+				<p className="mt-2 mb-0 leading-normal text-muted-foreground [overflow-wrap:anywhere]">
+					Private managed boards owned by {sessionUser.email}.
+				</p>
 			</header>
-			<section aria-labelledby="create-board" className="card create-card">
+			<section
+				aria-labelledby="create-board"
+				className="grid items-end gap-5 rounded-md border border-border bg-card p-5 shadow-card min-[901px]:grid-cols-[minmax(180px,0.65fr)_minmax(300px,1fr)] min-[901px]:gap-7"
+			>
 				<div>
-					<p className="section-heading">New board</p>
-					<h2 id="create-board">Name and deploy</h2>
-					<p className="muted">A managed SQLite board in the default region.</p>
+					<p className="m-0 font-mono text-[11px] font-medium tracking-[0.08em] text-subtle uppercase">New board</p>
+					<h2 className="mt-[7px] mb-0 text-lg leading-tight font-normal text-balance" id="create-board">
+						Name and deploy
+					</h2>
+					<p className="mt-1.5 mb-0 leading-normal text-muted-foreground">
+						A managed SQLite board in the default region.
+					</p>
 				</div>
-				<form className="create-form" onSubmit={create}>
-					<label htmlFor="board-name">Private board name</label>
-					<div className="form-row">
-						<input id="board-name" maxLength={80} name="name" placeholder="Research notes" required />
-						<button disabled={creating} type="submit">
+				<form className="grid gap-[7px]" onSubmit={create}>
+					<label className="grid text-xs font-medium" htmlFor="board-name">
+						Private board name
+					</label>
+					<div className="flex gap-2 max-[460px]:grid">
+						<input
+							className="min-h-9 w-full min-w-0 rounded-md border border-input bg-background px-2.5 py-2 text-[13px] text-foreground placeholder:text-placeholder focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+							id="board-name"
+							maxLength={80}
+							name="name"
+							placeholder="Research notes"
+							required
+						/>
+						<button
+							className="inline-flex min-h-9 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-transparent bg-primary px-3.5 py-2 text-[13px] font-medium leading-none text-primary-foreground hover:not-disabled:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-wait disabled:opacity-55"
+							disabled={creating}
+							type="submit"
+						>
 							{creating ? "Queuing…" : "Create board"}
 						</button>
 					</div>
 					{createError ? (
-						<p aria-live="polite" className="alert alert-error">
+						<p
+							aria-live="polite"
+							className="mt-[5px] rounded-md border border-destructive-border bg-destructive-surface px-4 py-3.5 text-xs leading-[1.55] text-destructive"
+						>
 							{createError}
 						</p>
 					) : null}
 				</form>
 			</section>
-			<section aria-labelledby="board-list" className="board-section">
-				<div className="section-row">
-					<h2 className="section-heading" id="board-list">
+			<section aria-labelledby="board-list" className="mt-8">
+				<div className="mb-3 flex items-center justify-between">
+					<h2 className="m-0 font-mono text-[11px] font-medium tracking-[0.08em] text-subtle uppercase" id="board-list">
 						Boards
 					</h2>
-					<button className="button-ghost compact" onClick={() => load()} type="button">
+					<button
+						className="inline-flex min-h-[30px] cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-transparent bg-transparent px-2.5 py-1.5 text-xs font-medium leading-none text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+						onClick={() => load()}
+						type="button"
+					>
 						Refresh
 					</button>
 				</div>
 				{loadError ? (
-					<div className="alert alert-error">
-						<p>{loadError}</p>
-						<button className="button-outline compact" onClick={() => load()} type="button">
+					<div className="rounded-md border border-destructive-border bg-destructive-surface px-4 py-3.5 text-xs leading-[1.55] text-destructive">
+						<p className="m-0">{loadError}</p>
+						<button
+							className="mt-2.5 inline-flex min-h-[30px] cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-input bg-card px-2.5 py-1.5 text-xs font-medium leading-none text-foreground hover:border-primary hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+							onClick={() => load()}
+							type="button"
+						>
 							Try again
 						</button>
 					</div>
 				) : null}
 				{!boards ? (
-					<div aria-label="Loading boards" className="board-grid">
-						<div className="card board-card skeleton-card" />
-						<div className="card board-card skeleton-card" />
+					<div aria-label="Loading boards" className="grid gap-3 min-[761px]:grid-cols-2">
+						<div className="min-h-[170px] animate-pulse rounded-md border border-border bg-card shadow-card motion-reduce:animate-none" />
+						<div className="min-h-[170px] animate-pulse rounded-md border border-border bg-card shadow-card motion-reduce:animate-none" />
 					</div>
 				) : boards.length === 0 ? (
-					<div className="empty-state">
-						<h2>No boards yet</h2>
-						<p>Name your first board above. Provisioning starts automatically.</p>
+					<div className="rounded-md border border-dashed border-input px-6 py-10 text-center">
+						<h2 className="mt-[7px] mb-0 text-lg leading-tight font-normal text-balance">No boards yet</h2>
+						<p className="mt-1.5 mb-0 leading-normal text-muted-foreground">
+							Name your first board above. Provisioning starts automatically.
+						</p>
 					</div>
 				) : (
-					<div className="board-grid">
+					<div className="grid gap-3 min-[761px]:grid-cols-2">
 						{boards.map((board) => (
-							<article className="card board-card" key={board.id}>
-								<div className="board-card-heading">
+							<article
+								className="grid min-h-[168px] gap-4 rounded-md border border-border bg-card p-[18px] shadow-card"
+								key={board.id}
+							>
+								<div className="flex items-start justify-between gap-3">
 									<div>
-										<h2>{board.name}</h2>
-										<p className="mono muted">
+										<h2 className="m-0 text-lg leading-tight font-normal text-balance [overflow-wrap:anywhere]">
+											{board.name}
+										</h2>
+										<p className="mt-1.5 mb-0 font-mono text-[10px] text-muted-foreground">
 											{storageLabels[board.storage_engine]} · {new Date(board.created_at).toLocaleDateString()}
 										</p>
 									</div>
 									<StatusBadge phase={board.phase} />
 								</div>
-								<p className="checkpoint">{board.checkpoint.replaceAll("_", " ")}</p>
-								<div className="card-actions">
-									<Link className="button-outline" href={`/boards/${encodeURIComponent(board.id)}`}>
+								<p className="m-0 text-[13px] text-muted-foreground capitalize">
+									{board.checkpoint.replaceAll("_", " ")}
+								</p>
+								<div className="flex flex-wrap items-center self-end gap-1.5">
+									<Link
+										className="inline-flex min-h-9 items-center justify-center whitespace-nowrap rounded-md border border-input bg-card px-3.5 py-2 text-[13px] font-medium leading-none text-foreground no-underline hover:border-primary hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+										href={`/boards/${encodeURIComponent(board.id)}`}
+									>
 										View details
 									</Link>
 									{board.hostname ? (
-										<a className="button-link" href={`https://${board.hostname}`} rel="noreferrer" target="_blank">
+										<a
+											className="inline-flex min-h-9 items-center justify-center whitespace-nowrap rounded-md border border-transparent bg-transparent px-3.5 py-2 text-[13px] font-medium leading-none text-muted-foreground no-underline hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+											href={`https://${board.hostname}`}
+											rel="noreferrer"
+											target="_blank"
+										>
 											Open board
 										</a>
 									) : null}

@@ -73,12 +73,21 @@ export function BoardDetail({
 
 	if (!sessionUser)
 		return (
-			<main className="auth-main">
-				<section className="auth-card">
-					<p className="eyebrow">Session required</p>
-					<h1>Sign in to view this board.</h1>
-					<p className="lede">Cloud access and board access use separate credentials.</p>
-					<Link className="button" href="/">
+			<main className="grid min-h-svh place-items-center p-6 max-[460px]:p-4">
+				<section className="w-full max-w-[430px] rounded-md border border-border bg-card p-8 shadow-card max-[460px]:px-5 max-[460px]:py-6">
+					<p className="m-0 font-mono text-[11px] font-medium tracking-[0.08em] text-subtle uppercase">
+						Session required
+					</p>
+					<h1 className="mt-3 mb-0 text-[clamp(28px,7vw,36px)] leading-[1.05] font-normal tracking-[-0.035em] text-balance">
+						Sign in to view this board.
+					</h1>
+					<p className="mt-4 mb-6 text-[15px] leading-[1.55] text-muted-foreground">
+						Cloud access and board access use separate credentials.
+					</p>
+					<Link
+						className="inline-flex min-h-9 items-center justify-center whitespace-nowrap rounded-md border border-transparent bg-primary px-3.5 py-2 text-[13px] font-medium leading-none text-primary-foreground no-underline hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+						href="/"
+					>
 						Go to sign in
 					</Link>
 				</section>
@@ -88,34 +97,53 @@ export function BoardDetail({
 	return (
 		<DashboardShell user={sessionUser}>
 			{error ? (
-				<div className="alert alert-error detail-error">
-					<p>{error}</p>
-					<button className="button-outline compact" onClick={refresh} type="button">
+				<div className="mb-3 rounded-md border border-destructive-border bg-destructive-surface px-4 py-3.5 text-xs leading-[1.55] text-destructive">
+					<p className="m-0">{error}</p>
+					<button
+						className="mt-2.5 inline-flex min-h-[30px] cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-input bg-card px-2.5 py-1.5 text-xs font-medium leading-none text-foreground hover:border-primary hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+						onClick={refresh}
+						type="button"
+					>
 						Try again
 					</button>
 				</div>
 			) : null}
 			{!board ? (
-				<div aria-label="Loading board" className="detail-skeleton">
-					<div className="skeleton skeleton-label" />
-					<div className="skeleton skeleton-title" />
-					<div className="card skeleton-detail" />
+				<div aria-label="Loading board" className="pt-[3px]">
+					<div className="h-[11px] w-[92px] animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
+					<div className="mt-3.5 h-[34px] w-full max-w-80 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
+					<div className="mt-8 min-h-[170px] animate-pulse rounded-md border border-border bg-card shadow-card motion-reduce:animate-none" />
 				</div>
 			) : (
 				<>
-					<header className="page-header board-page-header">
-						<p className="breadcrumb">
-							<Link href="/">Boards</Link> / {board.name}
+					<header className="mb-7">
+						<p className="mt-0 mb-2 font-mono text-[11px] tracking-[0.03em] text-subtle">
+							<Link
+								className="text-inherit underline decoration-input underline-offset-[3px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+								href="/"
+							>
+								Boards
+							</Link>{" "}
+							/ {board.name}
 						</p>
-						<div className="title-row">
+						<div className="grid items-start gap-4 min-[761px]:flex min-[761px]:justify-between min-[761px]:gap-6">
 							<div>
-								<h1>{board.name}</h1>
-								<p>{board.hostname ?? "A private hostname will appear after provisioning."}</p>
+								<h1 className="m-0 text-3xl font-normal tracking-[-0.035em] text-balance max-[760px]:text-2xl">
+									{board.name}
+								</h1>
+								<p className="mt-2 mb-0 leading-normal text-muted-foreground [overflow-wrap:anywhere]">
+									{board.hostname ?? "A private hostname will appear after provisioning."}
+								</p>
 							</div>
-							<div className="header-actions">
+							<div className="flex flex-wrap items-center justify-start gap-2 min-[761px]:justify-end">
 								<StatusBadge phase={board.phase} />
 								{board.hostname ? (
-									<a className="button" href={`https://${board.hostname}`} rel="noreferrer" target="_blank">
+									<a
+										className="inline-flex min-h-9 items-center justify-center whitespace-nowrap rounded-md border border-transparent bg-primary px-3.5 py-2 text-[13px] font-medium leading-none text-primary-foreground no-underline hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+										href={`https://${board.hostname}`}
+										rel="noreferrer"
+										target="_blank"
+									>
 										Open board
 									</a>
 								) : null}
@@ -123,69 +151,107 @@ export function BoardDetail({
 						</div>
 					</header>
 					{board.error ? (
-						<div className={`alert ${board.error.retrying ? "" : "alert-error"} provisioning-alert`}>
-							<p className="section-heading">{board.error.code.replaceAll("_", " ")}</p>
-							<p>{board.error.message}</p>
-							<p className="muted">
+						<div
+							className={`mb-3 rounded-md border px-4 py-3.5 text-xs leading-[1.55] ${board.error.retrying ? "border-warning-border bg-warning-surface text-warning" : "border-destructive-border bg-destructive-surface text-destructive"}`}
+						>
+							<p className="mt-0 mb-[5px] font-mono text-[11px] font-medium tracking-[0.08em] uppercase">
+								{board.error.code.replaceAll("_", " ")}
+							</p>
+							<p className="m-0">{board.error.message}</p>
+							<p className="mt-1.5 mb-0 text-muted-foreground">
 								{board.error.retrying
 									? "Provisioning will retry automatically."
 									: "Refresh after the underlying issue is resolved. No new operation will be created."}
 							</p>
 						</div>
 					) : null}
-					<div className="detail-grid">
-						<section aria-labelledby="provisioning" className="card detail-card">
-							<p className="section-heading">Provisioning</p>
-							<h2 id="provisioning">{checkpointLabels[board.checkpoint] ?? board.checkpoint.replaceAll("_", " ")}</h2>
-							<p className="muted">
+					<div className="grid gap-3 min-[901px]:grid-cols-2">
+						<section aria-labelledby="provisioning" className="rounded-md border border-border bg-card p-5 shadow-card">
+							<p className="m-0 font-mono text-[11px] font-medium tracking-[0.08em] text-subtle uppercase">
+								Provisioning
+							</p>
+							<h2 className="mt-[7px] mb-0 text-lg leading-tight font-normal text-balance" id="provisioning">
+								{checkpointLabels[board.checkpoint] ?? board.checkpoint.replaceAll("_", " ")}
+							</h2>
+							<p className="mt-1.5 mb-0 leading-normal text-muted-foreground">
 								{board.phase === "queued" || board.phase === "provisioning"
 									? "This page checks for progress every two seconds."
 									: board.phase === "ready"
 										? "The generated board route has been observed and published."
 										: "Provisioning stopped with a persisted error."}
 							</p>
-							<button className="button-outline compact" onClick={refresh} type="button">
+							<button
+								className="mt-[18px] inline-flex min-h-[30px] cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-input bg-card px-2.5 py-1.5 text-xs font-medium leading-none text-foreground hover:border-primary hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+								onClick={refresh}
+								type="button"
+							>
 								Refresh status
 							</button>
 						</section>
-						<section aria-labelledby="configuration" className="card detail-card">
-							<p className="section-heading">Configuration</p>
-							<h2 id="configuration">{storageLabels[board.storage_engine]}</h2>
-							<dl className="detail-list">
-								<div>
-									<dt>Region</dt>
-									<dd>{board.region ?? "Pending"}</dd>
+						<section
+							aria-labelledby="configuration"
+							className="rounded-md border border-border bg-card p-5 shadow-card"
+						>
+							<p className="m-0 font-mono text-[11px] font-medium tracking-[0.08em] text-subtle uppercase">
+								Configuration
+							</p>
+							<h2 className="mt-[7px] mb-0 text-lg leading-tight font-normal text-balance" id="configuration">
+								{storageLabels[board.storage_engine]}
+							</h2>
+							<dl className="mt-[18px] mb-0">
+								<div className="grid grid-cols-[minmax(120px,0.65fr)_minmax(0,1fr)] gap-5 border-t border-border py-2.5 max-[460px]:grid-cols-1 max-[460px]:gap-1">
+									<dt className="text-subtle">Region</dt>
+									<dd className="m-0 text-foreground [overflow-wrap:anywhere]">{board.region ?? "Pending"}</dd>
 								</div>
 								{board.storage_engine === "sqlite" ? (
-									<div>
-										<dt>Persistent volume</dt>
-										<dd>{board.volume_size_gb ? `${board.volume_size_gb} GB` : "Pending"}</dd>
+									<div className="grid grid-cols-[minmax(120px,0.65fr)_minmax(0,1fr)] gap-5 border-t border-border py-2.5 max-[460px]:grid-cols-1 max-[460px]:gap-1">
+										<dt className="text-subtle">Persistent volume</dt>
+										<dd className="m-0 text-foreground [overflow-wrap:anywhere]">
+											{board.volume_size_gb ? `${board.volume_size_gb} GB` : "Pending"}
+										</dd>
 									</div>
 								) : null}
 							</dl>
 						</section>
-						<section aria-labelledby="backup" className="card detail-card full-width-card">
-							<p className="section-heading">Data protection</p>
-							<h2 id="backup">Last verified backup</h2>
+						<section
+							aria-labelledby="backup"
+							className="rounded-md border border-border bg-card p-5 shadow-card min-[901px]:col-span-full"
+						>
+							<p className="m-0 font-mono text-[11px] font-medium tracking-[0.08em] text-subtle uppercase">
+								Data protection
+							</p>
+							<h2 className="mt-[7px] mb-0 text-lg leading-tight font-normal text-balance" id="backup">
+								Last verified backup
+							</h2>
 							{board.storage_engine !== "sqlite" ? (
-								<p className="muted">Backup verification is managed outside Chirp Cloud for this board.</p>
+								<p className="mt-1.5 mb-0 leading-normal text-muted-foreground">
+									Backup verification is managed outside Chirp Cloud for this board.
+								</p>
 							) : board.last_backup ? (
-								<dl className="detail-list backup-list">
-									<div>
-										<dt>Observed</dt>
-										<dd>{formatDate(board.last_backup.created_at)}</dd>
+								<dl className="mt-[18px] mb-0 grid min-[761px]:grid-cols-2 min-[761px]:gap-x-7">
+									<div className="grid grid-cols-[minmax(120px,0.65fr)_minmax(0,1fr)] gap-5 border-t border-border py-2.5 max-[460px]:grid-cols-1 max-[460px]:gap-1">
+										<dt className="text-subtle">Observed</dt>
+										<dd className="m-0 text-foreground [overflow-wrap:anywhere]">
+											{formatDate(board.last_backup.created_at)}
+										</dd>
 									</div>
-									<div>
-										<dt>Retention reported by provider</dt>
-										<dd>{board.last_backup.retention_days} days</dd>
+									<div className="grid grid-cols-[minmax(120px,0.65fr)_minmax(0,1fr)] gap-5 border-t border-border py-2.5 max-[460px]:grid-cols-1 max-[460px]:gap-1">
+										<dt className="text-subtle">Retention reported by provider</dt>
+										<dd className="m-0 text-foreground [overflow-wrap:anywhere]">
+											{board.last_backup.retention_days} days
+										</dd>
 									</div>
-									<div>
-										<dt>Digest</dt>
-										<dd className="mono digest">{board.last_backup.digest}</dd>
+									<div className="grid grid-cols-[minmax(120px,0.65fr)_minmax(0,1fr)] gap-5 border-t border-border py-2.5 max-[460px]:grid-cols-1 max-[460px]:gap-1 min-[761px]:col-span-full">
+										<dt className="text-subtle">Digest</dt>
+										<dd className="m-0 font-mono text-[11px] text-foreground [overflow-wrap:anywhere]">
+											{board.last_backup.digest}
+										</dd>
 									</div>
 								</dl>
 							) : (
-								<p className="muted">No completed snapshot has been observed yet.</p>
+								<p className="mt-1.5 mb-0 leading-normal text-muted-foreground">
+									No completed snapshot has been observed yet.
+								</p>
 							)}
 						</section>
 					</div>
