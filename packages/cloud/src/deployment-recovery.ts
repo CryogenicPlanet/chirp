@@ -26,7 +26,6 @@ export const retryBlockedDeployment = (input: {
 							state: boardOperations.state,
 							checkpoint: boardOperations.checkpoint,
 							request_hash: boardOperations.request_hash,
-							created_at: boardOperations.created_at,
 						})
 						.from(boardOperations)
 						.where(eq(boardOperations.id, input.failedOperationId))
@@ -72,7 +71,11 @@ export const retryBlockedDeployment = (input: {
 								inArray(boardOperations.state, ["queued", "running"]),
 								and(
 									eq(boardOperations.kind, "provision"),
-									sql`(${boardOperations.created_at}, ${boardOperations.id}) > (${failed.created_at}, ${failed.id})`,
+									sql`(${boardOperations.created_at}, ${boardOperations.id}) > (
+										SELECT baseline.created_at, baseline.id
+										FROM board_operations AS baseline
+										WHERE baseline.id = ${failed.id}
+									)`,
 								),
 							),
 						),
