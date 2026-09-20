@@ -53,10 +53,9 @@ await Effect.runPromise(
 );
 process.stdout.write(`Chirp Cloud listening on ${hostname}:${port}\n`);
 
-let closing = false;
 const shutdown = (signal: "SIGINT" | "SIGTERM") => {
-	if (closing) return;
-	closing = true;
+	process.removeListener("SIGINT", onInterrupt);
+	process.removeListener("SIGTERM", onTerminate);
 	Effect.gen(function* () {
 		yield* Effect.callback<void>((resume) => {
 			server.close((error) => resume(error ? Effect.die(error) : Effect.void));
@@ -73,5 +72,7 @@ const shutdown = (signal: "SIGINT" | "SIGTERM") => {
 	);
 };
 
-process.once("SIGINT", () => shutdown("SIGINT"));
-process.once("SIGTERM", () => shutdown("SIGTERM"));
+const onInterrupt = () => shutdown("SIGINT");
+const onTerminate = () => shutdown("SIGTERM");
+process.once("SIGINT", onInterrupt);
+process.once("SIGTERM", onTerminate);
