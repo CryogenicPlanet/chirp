@@ -11,10 +11,8 @@ interface AuthButtonsProps {
 	readonly user?: { readonly name: string; readonly email: string };
 }
 
-export const createCloudAuthClient = () => createAuthClient({ plugins: [passkeyClient()] });
-
 export function AuthButtons({ invitation, user }: AuthButtonsProps) {
-	const auth = useMemo(createCloudAuthClient, []);
+	const auth = useMemo(() => createAuthClient({ plugins: [passkeyClient()] }), []);
 	const [error, setError] = useState<string>();
 	const [notice, setNotice] = useState<string>();
 	const [pending, setPending] = useState(false);
