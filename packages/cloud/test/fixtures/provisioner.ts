@@ -209,13 +209,22 @@ export const makeFakeProvider = () => {
 					failCreateMachineBeforeMutation = false;
 					return yield* Effect.fail(flyUnavailable("create_machine"));
 				}
+				// Fly describes the attached Volume back on the mount rather than echoing the request.
+				const attached = volumes.find((volume) => volume.id === input.config.mounts[0]?.volume);
 				const machine: FlyMachine = {
 					id: "machine-id",
 					name: input.name,
 					state: "stopped",
 					region: input.region,
 					instance_id: "machine-version-1",
-					config: input.config,
+					config: {
+						...input.config,
+						mounts: input.config.mounts.map((mount) =>
+							attached === undefined
+								? mount
+								: { ...mount, encrypted: attached.encrypted, name: attached.name, size_gb: attached.size_gb },
+						),
+					},
 					checks: [{ status: "passing" }],
 				};
 				const volumeIndex = volumes.findIndex((volume) => volume.id === input.config.mounts[0]?.volume);
