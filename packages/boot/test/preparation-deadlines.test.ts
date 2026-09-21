@@ -56,7 +56,8 @@ describe("preparation deadlines", () => {
 							yield* Effect.sleep("20 millis");
 						}),
 					);
-					yield* TestClock.adjust(operation === "install" ? "59 seconds" : "119 seconds");
+					// Both operations share one 5-minute budget; stop one second short of it.
+					yield* TestClock.adjust("299 seconds");
 					expect(yield* Ref.get(done)).toBe(false);
 					yield* TestClock.adjust("1 second");
 					const result = yield* Fiber.join(running);
