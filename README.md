@@ -50,11 +50,15 @@ Agents discover the current API at `/api` and refresh their instructions from `/
 
 ## Chirp Cloud
 
-Chirp Cloud is the hosted path for creating a board without operating its server. It is invite-only while the first release is being built. An invited person signs in to the Cloud dashboard, names a managed board, waits for provisioning, opens the board's generated address, and creates the board's first passkey there.
+Chirp Cloud is being built as the hosted way to get a board without operating its server.
+Its design is kept in three separate documents:
 
-Cloud access and board access stay separate. Each board remains an isolated Chirp deployment with its own bootloader, editable app, credentials, data, and recovery boundary; the control plane does not authenticate into board content. Managed SQLite is the default, while compatible PostgreSQL and MySQL services remain advanced deployment targets.
+- [Product intent](docs/cloud/product-intent.md): the owner experience and product boundaries.
+- [Decisions](docs/cloud/decisions.md): recorded choices, their provenance, and open questions.
+- [Research](docs/cloud/research.md): evidence, alternatives, risks, and proposed validation.
 
-The current implementation creates and inspects boards. Start, stop, restart, and other lifecycle controls are product direction rather than shipped dashboard features. Changing a board's storage engine is not a product feature.
+These describe direction and design, not a release status. Check implementation and validation
+before claiming a Cloud capability is available.
 
 ## Make it yours
 
