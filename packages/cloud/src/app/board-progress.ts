@@ -36,6 +36,7 @@ const codeCheckpoints: readonly {
 		checkpoints: ["edge_reachable"],
 	},
 	{ codes: ["edge_unavailable"], checkpoints: ["edge_reachable", "child_route_observed"] },
+	{ codes: ["child_route_pending"], checkpoints: ["child_route_observed"] },
 ];
 
 export interface BoardProgressIssue {

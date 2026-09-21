@@ -39,6 +39,7 @@ export class ProvisioningError extends Data.TaggedError("ProvisioningError")<{
 		| "provider_observation_pending"
 		| "retry_exhausted"
 		| "edge_unavailable"
+		| "child_route_pending"
 		| "provisioning_internal_error";
 	readonly retriable: boolean;
 	readonly message: string;
@@ -742,7 +743,7 @@ const make = (settings: ProvisioningSettings) =>
 									yield* beforeProvider;
 									yield* edge
 										.childRoute(deployment.hostname)
-										.pipe(Effect.mapError(() => issue("edge_unavailable", true, "Board child route is not reachable")));
+										.pipe(Effect.mapError(() => issue("child_route_pending", true, "Board is still finishing its first start")));
 									deployment = yield* advance("child_route_observed");
 									break;
 								}
