@@ -84,6 +84,45 @@ jobs:
         # Each file launches Bun processes; four workers exceeded measured fixture budgets on this runner.
         run: bun run test packages/boot/test packages/server/test packages/storage/test --maxWorkers=2 --shard=${{ matrix.shard }}/2 --reporter=verbose
 
+  cloud:
+    name: Cloud PostgreSQL tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17.6-bookworm
+        env:
+          POSTGRES_USER: chirp
+          POSTGRES_PASSWORD: chirp
+          POSTGRES_DB: chirp_cloud
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U chirp -d chirp_cloud"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install declared Bun release
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl --fail --location --silent --show-error --retry 3 --output bun.zip \
+            https://github.com/oven-sh/bun/releases/download/bun-v1.4.0/bun-linux-x64.zip
+          printf '%s\n' '2d03fb5fb83ac8b567aca0a281b2ce1a1a19d488f56c2968d88c3f25e92fe452  bun.zip' | sha256sum --check -
+          unzip -q bun.zip
+          printf '%s\n' "$RUNNER_TEMP/bun-linux-x64" >> "$GITHUB_PATH"
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+      - name: Verify cloud persistence and leases
+        env:
+          CLOUD_TEST_DATABASE_URL: postgres://chirp:chirp@127.0.0.1:5432/chirp_cloud
+        run: bun run --filter @comms/cloud test
+
   image:
     runs-on: ubuntu-24.04
     timeout-minutes: 20

@@ -1,0 +1,19 @@
+{
+	"name": "@comms/cloud",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"check": "tsc --noEmit",
+		"test": "vitest run test --maxWorkers=1",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@effect/sql-pg": "4.0.0-rc.113",
+		"drizzle-orm": "1.0.0-rc.5-5935859",
+		"effect": "4.0.0-rc.113"
+	},
+	"devDependencies": {
+		"@effect/sql-pglite": "4.0.0-rc.113"
+	}
+}
