@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, eq, gt, isNull, lte, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer, Option } from "effect";
 import { Database } from "./database.ts";
 import {
@@ -139,18 +139,24 @@ const make = Effect.gen(function* () {
 					if (deployment.state !== locked.checkpoint)
 						return yield* new DeploymentDrift({ boardId: locked.board_id, field: "checkpoint" });
 					const volumeCreatePending = locked.ambiguous_mutations.includes("volume_create");
+					const normalizeLegacyVolumeName =
+						deployment.volume_name === legacyVolumeName(board.slug) && input.spec.volume_name === "chirp_data";
+					const growVolume =
+						deployment.volume_name === input.spec.volume_name && deployment.volume_size_gb < input.spec.volume_size_gb;
 					if (
 						!volumeCreatePending &&
 						deployment.volume_id === null &&
 						deployment.machine_id === null &&
-						deployment.volume_name === input.spec.volume_name &&
-						deployment.volume_size_gb < input.spec.volume_size_gb
+						(normalizeLegacyVolumeName || growVolume)
 					) {
 						const upgraded = one(
 							yield* db
 								.update(boardDeployments)
 								.set({
-									volume_size_gb: input.spec.volume_size_gb,
+									...(normalizeLegacyVolumeName ? { volume_name: input.spec.volume_name } : {}),
+									...(deployment.volume_size_gb < input.spec.volume_size_gb
+										? { volume_size_gb: input.spec.volume_size_gb }
+										: {}),
 									row_version: sql`${boardDeployments.row_version} + 1`,
 									updated_at: now,
 								})
@@ -160,8 +166,8 @@ const make = Effect.gen(function* () {
 										eq(boardDeployments.row_version, deployment.row_version),
 										isNull(boardDeployments.volume_id),
 										isNull(boardDeployments.machine_id),
-										eq(boardDeployments.volume_name, input.spec.volume_name),
-										lt(boardDeployments.volume_size_gb, input.spec.volume_size_gb),
+										eq(boardDeployments.volume_name, deployment.volume_name),
+										eq(boardDeployments.volume_size_gb, deployment.volume_size_gb),
 									),
 								)
 								.returning(),
