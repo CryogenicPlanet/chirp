@@ -6,6 +6,13 @@ on a running board is on the board itself, starting at `/init`.
 For running locally, see the [README](../README.md). This covers the container, HTTPS, and
 running against PostgreSQL or MySQL.
 
+For boards provisioned by Chirp Cloud, the control plane manages Fly shared public IPs,
+per-board TLS certificates, and exact DNS-only A and ownership TXT records in Cloudflare.
+Configure the authoritative active zone and zone-scoped provider credentials before
+running its worker; see [managed board networking](../packages/cloud/README.md#managed-board-networking).
+There is no manual wildcard DNS prerequisite. Existing conflicting records must be
+repaired by the operator; the worker never overwrites or deletes them.
+
 ## The container
 
 ```sh

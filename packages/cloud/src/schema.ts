@@ -12,9 +12,11 @@ import {
 	uuid,
 	varchar,
 } from "drizzle-orm/pg-core";
+import type { DeploymentState } from "./deployment.ts";
+import type { ProviderMutation } from "./operation.ts";
 
 const storageEngines = ["sqlite", "postgres", "mysql"] as const;
-const operationKinds = ["provision", "start", "stop", "restart", "backup"] as const;
+const operationKinds = ["provision", "backup"] as const;
 const operationStates = ["queued", "running", "succeeded", "failed"] as const;
 const cCollatedChar = customType<{
 	data: string;
@@ -68,11 +70,17 @@ export const boardOperations = pgTable(
 		request_hash: cCollatedChar({ length: 64 }).notNull(),
 		available_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
 		attempt: integer().notNull().default(0),
+		failure_count: integer().notNull().default(0),
 		lease_token: uuid(),
 		lease_owner: text(),
 		lease_expires_at: timestamp({ withTimezone: true }),
 		last_error_code: varchar({ length: 64 }),
 		last_error_message: varchar({ length: 2_000 }),
+		ambiguous_mutations: text()
+			.$type<ProviderMutation>()
+			.array()
+			.notNull()
+			.default(sql`'{}'::text[]`),
 		created_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
 		updated_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
 		finished_at: timestamp({ withTimezone: true }),
@@ -83,6 +91,14 @@ export const boardOperations = pgTable(
 		check("board_operations_state_check", sql`${table.state} IN ('queued', 'running', 'succeeded', 'failed')`),
 		check("board_operations_request_hash_hex", sql`${table.request_hash} ~ '^[0-9a-f]{64}$'`),
 		check("board_operations_attempt_nonnegative", sql`${table.attempt} >= 0`),
+		check("board_operations_failure_count_nonnegative", sql`${table.failure_count} >= 0`),
+		check(
+			"board_operations_ambiguous_mutations_known",
+			sql`array_position(${table.ambiguous_mutations}, NULL) IS NULL AND ${table.ambiguous_mutations} <@ ARRAY[
+				'app_create', 'volume_create', 'machine_create', 'machine_start',
+				'edge_ip', 'edge_certificate', 'edge_a_record', 'edge_txt_record'
+			]::text[]`,
+		),
 		check(
 			"board_operations_lease_shape",
 			sql`(
@@ -103,3 +119,39 @@ export const boardOperations = pgTable(
 		index("board_operations_queue").on(table.state, table.available_at, table.created_at, table.id),
 	],
 );
+
+export const boardDeployments = pgTable("board_deployments", {
+	board_id: uuid()
+		.primaryKey()
+		.references(() => boards.id, { onDelete: "restrict" }),
+	state: text().$type<DeploymentState>().notNull(),
+	row_version: integer().notNull().default(0),
+	hostname: text().notNull().unique(),
+	storage_engine: text({ enum: storageEngines }).notNull(),
+	region: text().notNull(),
+	image_ref: text().notNull(),
+	app_name: text().notNull().unique(),
+	network_name: text().notNull(),
+	volume_name: text().notNull(),
+	machine_name: text().notNull(),
+	volume_size_gb: integer().notNull(),
+	app_id: text(),
+	volume_id: text().unique(),
+	machine_id: text().unique(),
+	last_snapshot_id: text(),
+	last_snapshot_created_at: timestamp({ withTimezone: true }),
+	last_snapshot_digest: text(),
+	last_snapshot_retention_days: integer(),
+	created_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
+	updated_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
+});
+
+export const boardRoutes = pgTable("board_routes", {
+	hostname: text().primaryKey(),
+	board_id: uuid()
+		.notNull()
+		.unique()
+		.references(() => boardDeployments.board_id, { onDelete: "restrict" }),
+	app_name: text().notNull(),
+	created_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
+});

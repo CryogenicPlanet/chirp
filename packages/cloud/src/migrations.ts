@@ -6,6 +6,10 @@ import { Database, type DatabaseClient } from "./database.ts";
 import { CloudMigrationError, type MigrationMetadata, validateMigrationLedger } from "./migration-ledger.ts";
 import * as foundation from "./migrations/0001_foundation.ts";
 import * as cloudAuth from "./migrations/0002_cloud_auth.ts";
+import * as flyProvisioning from "./migrations/0003_fly_provisioning.ts";
+import * as provisioningRecovery from "./migrations/0004_provisioning_recovery.ts";
+import * as providerMutationMarkers from "./migrations/0005_provider_mutation_markers.ts";
+import * as provisioningRetryBudgets from "./migrations/0006_provisioning_retry_budgets.ts";
 import { cloudMigrations } from "./schema.ts";
 
 export { CloudMigrationError } from "./migration-ledger.ts";
@@ -14,7 +18,14 @@ interface Migration extends MigrationMetadata {
 	readonly effect: (database: DatabaseClient) => Effect.Effect<unknown, EffectDrizzleQueryError | SqlError>;
 }
 
-const migrations: ReadonlyArray<Migration> = [foundation, cloudAuth];
+const migrations: ReadonlyArray<Migration> = [
+	foundation,
+	cloudAuth,
+	flyProvisioning,
+	provisioningRecovery,
+	providerMutationMarkers,
+	provisioningRetryBudgets,
+];
 const receipts = Schema.decodeUnknownEffect(
 	Schema.Array(
 		Schema.Struct({ id: Schema.Int, name: Schema.String, compatibleSchemaVersions: Schema.Array(Schema.Int) }),

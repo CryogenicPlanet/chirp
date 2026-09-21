@@ -1,10 +1,21 @@
 import { Data, Schema } from "effect";
 
-export const OperationKind = Schema.Literals(["provision", "start", "stop", "restart", "backup"]);
+export const OperationKind = Schema.Literals(["provision", "backup"]);
 export type OperationKind = typeof OperationKind.Type;
 
-export const OperationState = Schema.Literals(["queued", "running", "succeeded", "failed"]);
-export type OperationState = typeof OperationState.Type;
+const OperationState = Schema.Literals(["queued", "running", "succeeded", "failed"]);
+
+export const ProviderMutation = Schema.Literals([
+	"app_create",
+	"volume_create",
+	"machine_create",
+	"machine_start",
+	"edge_ip",
+	"edge_certificate",
+	"edge_a_record",
+	"edge_txt_record",
+]);
+export type ProviderMutation = typeof ProviderMutation.Type;
 
 export const Operation = Schema.Struct({
 	id: Schema.String,
@@ -17,11 +28,13 @@ export const Operation = Schema.Struct({
 	request_hash: Schema.String,
 	available_at: Schema.DateFromString,
 	attempt: Schema.Int,
+	failure_count: Schema.Int,
 	lease_token: Schema.NullOr(Schema.String),
 	lease_owner: Schema.NullOr(Schema.String),
 	lease_expires_at: Schema.NullOr(Schema.DateFromString),
 	last_error_code: Schema.NullOr(Schema.String),
 	last_error_message: Schema.NullOr(Schema.String),
+	ambiguous_mutations: Schema.Array(ProviderMutation),
 	created_at: Schema.DateFromString,
 	updated_at: Schema.DateFromString,
 	finished_at: Schema.NullOr(Schema.DateFromString),
@@ -43,6 +56,10 @@ export class IdempotencyConflict extends Data.TaggedError("IdempotencyConflict")
 }> {}
 
 export class OperationAlreadyActive extends Data.TaggedError("OperationAlreadyActive")<{
+	readonly boardId: string;
+}> {}
+
+export class DeploymentRetryRequired extends Data.TaggedError("DeploymentRetryRequired")<{
 	readonly boardId: string;
 }> {}
 

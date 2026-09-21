@@ -18,6 +18,20 @@ const boardRequest = {
 } as const;
 
 describe("Operations", () => {
+	test("claims only the requested operation kind", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				yield* (yield* Boards).request(boardRequest);
+				const operations = yield* Operations;
+				expect(Option.isNone(yield* operations.claim("backup-worker", 30_000, "backup"))).toBe(true);
+				expect(Option.getOrThrow(yield* operations.claim("provision-worker", 30_000, "provision")).kind).toBe(
+					"provision",
+				);
+			}),
+		);
+	});
+
 	test.skipIf(!realPostgres)("allows only one concurrent claim of an operation", async () => {
 		await runFresh(
 			Effect.gen(function* () {
@@ -103,6 +117,89 @@ describe("Operations", () => {
 				});
 				expect(requeued.checkpoint).toBe("app_created");
 				expect(requeued.state).toBe("queued");
+				expect(requeued.failure_count).toBe(0);
+			}),
+		);
+	});
+
+	test("persists independent provider mutation markers across lease recovery", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				yield* (yield* Boards).request(boardRequest);
+				const operations = yield* Operations;
+				const first = Option.getOrThrow(yield* operations.claim("worker-1", 30_000));
+				if (!first.lease_token) return yield* Effect.die("Claim returned no lease token");
+				yield* operations.markAmbiguousMutation({
+					id: first.id,
+					leaseToken: first.lease_token,
+					workerId: "worker-1",
+					mutation: "edge_a_record",
+				});
+				yield* operations.markAmbiguousMutation({
+					id: first.id,
+					leaseToken: first.lease_token,
+					workerId: "worker-1",
+					mutation: "machine_start",
+				});
+				yield* operations.requeue({
+					id: first.id,
+					leaseToken: first.lease_token,
+					workerId: "worker-1",
+					availableAt: yield* DateTime.nowAsDate,
+					errorCode: "provider_unavailable",
+					errorMessage: "Observe before retry",
+					countFailure: true,
+				});
+				const recovered = Option.getOrThrow(yield* operations.claim("worker-2", 30_000));
+				expect(new Set(recovered.ambiguous_mutations)).toEqual(new Set(["edge_a_record", "machine_start"]));
+				expect(recovered.failure_count).toBe(1);
+				if (!recovered.lease_token) return yield* Effect.die("Claim returned no lease token");
+				yield* operations.clearAmbiguousMutation({
+					id: recovered.id,
+					leaseToken: recovered.lease_token,
+					workerId: "worker-2",
+					mutation: "machine_start",
+				});
+				const database = yield* Database;
+				expect(
+					(yield* database
+						.select({ markers: boardOperations.ambiguous_mutations })
+						.from(boardOperations)
+						.where(eq(boardOperations.id, first.id)))[0]?.markers,
+				).toEqual(["edge_a_record"]);
+			}),
+		);
+	});
+
+	test("refuses success while a provider mutation is unresolved", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				yield* (yield* Boards).request(boardRequest);
+				const operations = yield* Operations;
+				const claimed = Option.getOrThrow(yield* operations.claim("worker-1", 30_000));
+				if (!claimed.lease_token) return yield* Effect.die("Claim returned no lease token");
+				yield* operations.markAmbiguousMutation({
+					id: claimed.id,
+					leaseToken: claimed.lease_token,
+					workerId: "worker-1",
+					mutation: "edge_certificate",
+				});
+				expect(
+					Exit.isFailure(yield* Effect.exit(operations.succeed(claimed.id, claimed.lease_token, "worker-1"))),
+				).toBe(true);
+				const database = yield* Database;
+				expect((yield* database.select({ state: boardOperations.state }).from(boardOperations))[0]?.state).toBe(
+					"running",
+				);
+				yield* operations.clearAmbiguousMutation({
+					id: claimed.id,
+					leaseToken: claimed.lease_token,
+					workerId: "worker-1",
+					mutation: "edge_certificate",
+				});
+				yield* operations.succeed(claimed.id, claimed.lease_token, "worker-1");
 			}),
 		);
 	});
@@ -117,23 +214,23 @@ describe("Operations", () => {
 					operations.enqueue({
 						board_id: board.id,
 						owner_id: "user-1",
-						kind: "start",
+						kind: "backup",
 						requested_by: "user-1",
-						idempotency_key: "start-1",
+						idempotency_key: "backup-1",
 					}),
 				);
 				expect(Exit.isFailure(blocked)).toBe(true);
 				const provision = Option.getOrThrow(yield* operations.claim("worker-1", 30_000));
 				if (!provision.lease_token) return yield* Effect.die("Claim returned no lease token");
 				yield* operations.succeed(provision.id, provision.lease_token, "worker-1");
-				const start = yield* operations.enqueue({
+				const backup = yield* operations.enqueue({
 					board_id: board.id,
 					owner_id: "user-1",
-					kind: "start",
+					kind: "backup",
 					requested_by: "user-1",
-					idempotency_key: "start-1",
+					idempotency_key: "backup-1",
 				});
-				expect(start.state).toBe("queued");
+				expect(backup.state).toBe("queued");
 			}),
 		);
 	});
@@ -153,7 +250,7 @@ describe("Operations", () => {
 							.enqueue({
 								board_id: board.id,
 								owner_id: "user-1",
-								kind: "stop",
+								kind: "backup",
 								requested_by: "user-1",
 								idempotency_key: "stop-conflict",
 							})
@@ -180,9 +277,9 @@ describe("Operations", () => {
 				const input = {
 					board_id: board.id,
 					owner_id: "user-1",
-					kind: "start",
+					kind: "backup",
 					requested_by: "user-1",
-					idempotency_key: "concurrent-start",
+					idempotency_key: "concurrent-backup",
 				} as const;
 				const repeated = yield* Effect.all(
 					[sqlClient.withTransaction(operations.enqueue(input)), sqlClient.withTransaction(operations.enqueue(input))],
@@ -202,16 +299,23 @@ describe("Operations", () => {
 				const provision = Option.getOrThrow(yield* operations.claim("worker-1", 30_000));
 				if (!provision.lease_token) return yield* Effect.die("Claim returned no lease token");
 				yield* operations.succeed(provision.id, provision.lease_token, "worker-1");
+				const otherBoard = yield* (yield* Boards).request({
+					...boardRequest,
+					name: "Other board",
+					idempotency_key: "provision-2",
+				});
 				const input = {
 					board_id: board.id,
 					owner_id: "user-1",
-					kind: "start",
+					kind: "backup",
 					requested_by: "user-1",
 					idempotency_key: "control-1",
 				} as const;
 				const first = yield* operations.enqueue(input);
 				expect((yield* operations.enqueue(input)).id).toBe(first.id);
-				expect(Exit.isFailure(yield* Effect.exit(operations.enqueue({ ...input, kind: "stop" })))).toBe(true);
+				expect(Exit.isFailure(yield* Effect.exit(operations.enqueue({ ...input, board_id: otherBoard.id })))).toBe(
+					true,
+				);
 			}),
 		);
 	});
@@ -226,7 +330,7 @@ describe("Operations", () => {
 					operations.enqueue({
 						board_id: board.id,
 						owner_id: "user-2",
-						kind: "stop",
+						kind: "backup",
 						requested_by: "user-2",
 						idempotency_key: "cross-owner-stop",
 					}),

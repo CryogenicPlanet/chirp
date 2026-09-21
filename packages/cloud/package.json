@@ -9,6 +9,7 @@
 		"dev": "next dev",
 		"invite": "bun src/invite-command.ts",
 		"migrate": "bun src/migrate-command.ts",
+		"retry:deployment": "bun src/retry-deployment-command.ts",
 		"start": "bun src/server.ts",
 		"test": "vitest run test --exclude test/production-runtime.test.ts --maxWorkers=1",
 		"test:production": "vitest run test/production-runtime.test.ts --maxWorkers=1"
