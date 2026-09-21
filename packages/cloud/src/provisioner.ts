@@ -53,7 +53,11 @@ const rejected = (error: FlyApiError) =>
 	error.status !== null &&
 	error.status >= 400 &&
 	error.status < 500 &&
-	![404, 408, 409, 425, 429].includes(error.status);
+	// 412 reports a resource that is not in the required state yet rather than a refusal. Fly
+	// answers a start with `failed_precondition: unable to start machine from current state:
+	// 'created'` until a Machine created with skip_launch has settled, which is ordinary
+	// progress, not a rejection.
+	![404, 408, 409, 412, 425, 429].includes(error.status);
 const isAmbiguity = (code: string | null) => code === "provider_ambiguous" || code?.endsWith("_ambiguous") === true;
 interface MutationJournal<E, R> {
 	readonly pending: Set<ProviderMutation>;

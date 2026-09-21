@@ -696,6 +696,24 @@ describe("Provisioner", () => {
 		);
 	});
 
+	test("retries a Machine start that Fly refuses while the Machine is still settling", async () => {
+		const provider = makeFakeProvider();
+		// Fly answers 412 until a Machine created with skip_launch leaves the "created" state.
+		provider.set.failStartMachinePrecondition(1);
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				yield* (yield* Boards).request(request);
+				const operation = Option.getOrThrow(yield* (yield* Operations).claim("worker-1", 30_000));
+				expect(yield* (yield* Provisioner).run(operation, "worker-1")).not.toBe("blocked");
+				const sql = yield* SqlClient.SqlClient;
+				const [row] = yield* sql`SELECT state, last_error_code FROM board_operations WHERE id = ${operation.id}`;
+				expect(row?.last_error_code).not.toBe("provider_rejected");
+				expect(row?.state).not.toBe("failed");
+			}).pipe(Effect.provide(provisionerFor(provider))),
+		);
+	});
+
 	test("blocks a definite provider rejection instead of retrying it forever", async () => {
 		const provider = makeFakeProvider();
 		provider.set.rejectCreateAppAndReadback();

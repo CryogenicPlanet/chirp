@@ -85,6 +85,7 @@ export const makeFakeProvider = () => {
 	let failCreateMachine = false;
 	let failCreateMachineBeforeMutation = false;
 	let failStartMachineBeforeMutation = false;
+	let startPreconditionFailures = 0;
 	let failHealth = false;
 	let failChildRoute = false;
 	const calls = {
@@ -243,6 +244,12 @@ export const makeFakeProvider = () => {
 					failStartMachineBeforeMutation = false;
 					return yield* Effect.fail(flyUnavailable("start_machine"));
 				}
+				// Fly answers 412 `failed_precondition: unable to start machine from current state:
+				// 'created'` until a Machine created with skip_launch settles.
+				if (startPreconditionFailures > 0) {
+					startPreconditionFailures -= 1;
+					return yield* Effect.fail(new FlyApiError({ operation: "start_machine", reason: "status", status: 412 }));
+				}
 				const index = machines.findIndex((machine) => machine.id === id);
 				if (index >= 0) machines[index] = { ...machines[index]!, state: "started", checks: [{ status: "passing" }] };
 			}),
@@ -333,6 +340,9 @@ export const makeFakeProvider = () => {
 			},
 			failStartMachineBeforeMutation: () => {
 				failStartMachineBeforeMutation = true;
+			},
+			failStartMachinePrecondition: (times: number) => {
+				startPreconditionFailures = times;
 			},
 			failHealth: () => {
 				failHealth = true;
