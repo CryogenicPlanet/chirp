@@ -14,7 +14,8 @@ export const machineConfig = (deployment: Deployment): FlyMachineConfig => ({
 	auto_destroy: false,
 	restart: { policy: "on-failure", max_retries: 10 },
 	mounts: [{ volume: deployment.volume_id ?? "", path: "/data" }],
-	guest: { cpu_kind: "shared", cpus: 1, memory_mb: 512 },
+	// One shared CPU with 512 MB cannot complete a board's first-boot dependency install.
+	guest: { cpu_kind: "shared", cpus: 2, memory_mb: 1024 },
 	services: [
 		{
 			protocol: "tcp",
