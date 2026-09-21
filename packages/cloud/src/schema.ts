@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+	boolean,
 	check,
 	customType,
 	index,
@@ -16,7 +17,7 @@ import type { DeploymentState } from "./deployment.ts";
 import type { ProviderMutation } from "./operation.ts";
 
 const storageEngines = ["sqlite", "postgres", "mysql"] as const;
-const operationKinds = ["provision", "backup"] as const;
+const operationKinds = ["provision", "backup", "delete"] as const;
 const operationStates = ["queued", "running", "succeeded", "failed"] as const;
 const cCollatedChar = customType<{
 	data: string;
@@ -24,6 +25,10 @@ const cCollatedChar = customType<{
 	configRequired: true;
 }>({
 	dataType: ({ length }) => `char(${length}) COLLATE "C"`,
+});
+
+const cCollatedSlug = customType<{ data: string }>({
+	dataType: () => 'varchar(32) COLLATE "C"',
 });
 
 export const cloudMigrations = pgTable("cloud_migrations", {
@@ -42,14 +47,16 @@ export const boards = pgTable(
 		id: uuid().primaryKey(),
 		owner_id: text().notNull(),
 		name: text().notNull(),
-		slug: cCollatedChar({ length: 32 }).notNull(),
+		slug: cCollatedSlug().notNull(),
 		storage_engine: text({ enum: storageEngines }).notNull(),
+		deletion_requested_at: timestamp({ withTimezone: true }),
+		deleted_at: timestamp({ withTimezone: true }),
 		created_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
 	},
 	(table) => [
 		unique("boards_slug_unique").on(table.slug),
 		check("boards_name_nonempty", sql`length(btrim(${table.name})) > 0`),
-		check("boards_slug_hex", sql`${table.slug} ~ '^[0-9a-f]{32}$'`),
+		check("boards_slug_dns", sql`${table.slug} ~ '^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$' AND ${table.slug} !~ '^xn--'`),
 		check("boards_storage_engine_check", sql`${table.storage_engine} IN ('sqlite', 'postgres', 'mysql')`),
 		index("boards_owner_created").on(table.owner_id, table.created_at.desc(), table.id.desc()),
 	],
@@ -87,7 +94,10 @@ export const boardOperations = pgTable(
 	},
 	(table) => [
 		unique("board_operations_request_unique").on(table.requested_by, table.idempotency_key),
-		check("board_operations_kind_check", sql`${table.kind} IN ('provision', 'start', 'stop', 'restart', 'backup')`),
+		check(
+			"board_operations_kind_check",
+			sql`${table.kind} IN ('provision', 'start', 'stop', 'restart', 'backup', 'delete')`,
+		),
 		check("board_operations_state_check", sql`${table.state} IN ('queued', 'running', 'succeeded', 'failed')`),
 		check("board_operations_request_hash_hex", sql`${table.request_hash} ~ '^[0-9a-f]{64}$'`),
 		check("board_operations_attempt_nonnegative", sql`${table.attempt} >= 0`),
@@ -155,3 +165,25 @@ export const boardRoutes = pgTable("board_routes", {
 	app_name: text().notNull(),
 	created_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
 });
+
+export const boardPostgresSecrets = pgTable(
+	"board_postgres_secrets",
+	{
+		board_id: uuid()
+			.primaryKey()
+			.references(() => boards.id, { onDelete: "restrict" }),
+		bootstrap_ciphertext: text(),
+		runtime_ciphertext: text(),
+		prepared: boolean().notNull().default(false),
+		fly_secrets_version: integer(),
+	},
+	(table) => [
+		check(
+			"board_postgres_secrets_stage_check",
+			sql`(
+				(NOT ${table.prepared} AND ${table.bootstrap_ciphertext} IS NOT NULL AND ${table.runtime_ciphertext} IS NULL)
+				OR (${table.prepared} AND ${table.bootstrap_ciphertext} IS NULL AND ${table.runtime_ciphertext} IS NOT NULL)
+			)`,
+		),
+	],
+);

@@ -47,9 +47,9 @@ export const appFor = (slug: string): FlyApp => ({
 	organization: { slug: settings.organization },
 });
 
-export const volumeFor = (slug: string): FlyVolume => ({
+export const volumeFor = (): FlyVolume => ({
 	id: "volume-id",
-	name: `chirp_data_${slug}`,
+	name: "chirp_data",
 	state: "created",
 	region: settings.region,
 	encrypted: true,
@@ -85,6 +85,7 @@ export const makeFakeProvider = () => {
 	let failCreateMachine = false;
 	let failCreateMachineBeforeMutation = false;
 	let failStartMachineBeforeMutation = false;
+	let startPreconditionFailures = 0;
 	let failHealth = false;
 	let failChildRoute = false;
 	const calls = {
@@ -166,8 +167,11 @@ export const makeFakeProvider = () => {
 					failCreateVolumeBeforeMutation = false;
 					return yield* Effect.fail(flyUnavailable("create_volume"));
 				}
-				const volume = { ...volumeFor(input.name.replace(/^chirp_data_/, "")), name: input.name };
+				const volume = { ...volumeFor(), name: input.name };
 				volumes.push(volume);
+				// Fly echoes the create request before the Volume is materialized: the response carries
+				// no fstype, and only a later observation reports it.
+				const echoed = { ...volume, fstype: "" };
 				if (failListVolumesAfterCreate) {
 					failListVolumesAfterCreate = false;
 					failListVolumes = true;
@@ -176,7 +180,7 @@ export const makeFakeProvider = () => {
 					failCreateVolume = false;
 					return yield* Effect.fail(flyUnavailable("create_volume"));
 				}
-				return volume;
+				return echoed;
 			}),
 		listMachines: (_name: string) =>
 			Effect.gen(function* () {
@@ -206,13 +210,22 @@ export const makeFakeProvider = () => {
 					failCreateMachineBeforeMutation = false;
 					return yield* Effect.fail(flyUnavailable("create_machine"));
 				}
+				// Fly describes the attached Volume back on the mount rather than echoing the request.
+				const attached = volumes.find((volume) => volume.id === input.config.mounts[0]?.volume);
 				const machine: FlyMachine = {
 					id: "machine-id",
 					name: input.name,
 					state: "stopped",
 					region: input.region,
 					instance_id: "machine-version-1",
-					config: input.config,
+					config: {
+						...input.config,
+						mounts: input.config.mounts.map((mount) =>
+							attached === undefined
+								? mount
+								: { ...mount, encrypted: attached.encrypted, name: attached.name, size_gb: attached.size_gb },
+						),
+					},
 					checks: [{ status: "passing" }],
 				};
 				const volumeIndex = volumes.findIndex((volume) => volume.id === input.config.mounts[0]?.volume);
@@ -230,6 +243,12 @@ export const makeFakeProvider = () => {
 				if (failStartMachineBeforeMutation) {
 					failStartMachineBeforeMutation = false;
 					return yield* Effect.fail(flyUnavailable("start_machine"));
+				}
+				// Fly answers 412 `failed_precondition: unable to start machine from current state:
+				// 'created'` until a Machine created with skip_launch settles.
+				if (startPreconditionFailures > 0) {
+					startPreconditionFailures -= 1;
+					return yield* Effect.fail(new FlyApiError({ operation: "start_machine", reason: "status", status: 412 }));
 				}
 				const index = machines.findIndex((machine) => machine.id === id);
 				if (index >= 0) machines[index] = { ...machines[index]!, state: "started", checks: [{ status: "passing" }] };
@@ -322,15 +341,18 @@ export const makeFakeProvider = () => {
 			failStartMachineBeforeMutation: () => {
 				failStartMachineBeforeMutation = true;
 			},
+			failStartMachinePrecondition: (times: number) => {
+				startPreconditionFailures = times;
+			},
 			failHealth: () => {
 				failHealth = true;
 			},
 			failChildRoute: () => {
 				failChildRoute = true;
 			},
-			addDuplicateVolume: (slug: string) => {
-				volumes.push(volumeFor(slug));
-				volumes.push({ ...volumeFor(slug), id: "duplicate-volume-id" });
+			addDuplicateVolume: () => {
+				volumes.push(volumeFor());
+				volumes.push({ ...volumeFor(), id: "duplicate-volume-id" });
 			},
 			volume: (value: FlyVolume) => {
 				volumes.push(value);

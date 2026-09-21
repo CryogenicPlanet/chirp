@@ -11,6 +11,8 @@ export const drizzleLayer = Layer.effect(Database, PgDrizzle.makeWithDefaults())
 const postgresLayer = PgClient.layerConfig({
 	url: Config.Redacted("CLOUD_DATABASE_URL"),
 	applicationName: Config.succeed("chirp-cloud"),
+	maxConnections: Config.succeed(8),
+	multiplex: Config.succeed(false),
 });
 
 export const databaseLayer = drizzleLayer.pipe(Layer.provideMerge(postgresLayer));

@@ -1,0 +1,29 @@
+app = "chirp-cloud"
+primary_region = "sjc"
+
+[build]
+dockerfile = "Dockerfile"
+
+[deploy]
+# Migrations hold one transaction-scoped advisory lock and commit their receipt with the DDL.
+release_command = "bun src/migrate-command.ts"
+strategy = "immediate"
+
+[env]
+CLOUD_CLIENT_IP_HEADER = "fly-client-ip"
+FLY_ORGANIZATION = "rahul-tarak"
+FLY_REGION = "sjc"
+BOARDS_DOMAIN = "boards.chirp.wiki"
+FLY_VOLUME_SIZE_GB = "5"
+
+[http_service]
+internal_port = 8080
+force_https = true
+# The provisioning worker must keep running between dashboard requests.
+auto_stop_machines = "off"
+auto_start_machines = true
+min_machines_running = 1
+
+[[vm]]
+size = "shared-cpu-1x"
+memory = "1gb"

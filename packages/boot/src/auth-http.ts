@@ -4,6 +4,7 @@ import { bootRoute } from "./boot-route.ts";
 import { requestBytes } from "./request-bytes.ts";
 import { childErrorPolicy } from "./child-error-policy.ts";
 import { isSqlError } from "effect/unstable/sql/SqlError";
+import { chirpIcon } from "./auth-styles.ts";
 import { ChildError } from "./child-process.ts";
 import { TrafficError } from "./traffic.ts";
 import { Cause, Console, Effect, Option, Schema } from "effect";
@@ -327,6 +328,11 @@ export const authRoute = (auth: Auth["Service"], requestId: string) =>
 			return HttpServerResponse.text(authClient, {
 				contentType: "text/javascript",
 				headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" },
+			});
+		if (request.method === "GET" && path === "/favicon.svg")
+			return HttpServerResponse.text(chirpIcon, {
+				contentType: "image/svg+xml",
+				headers: { "cache-control": "public, max-age=86400", "x-content-type-options": "nosniff" },
 			});
 		if (request.method === "GET" && path === "/_boot/auth/state")
 			return yield* authFailure(

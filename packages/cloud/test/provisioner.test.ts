@@ -326,7 +326,7 @@ describe("Provisioner", () => {
 		);
 	});
 
-	test("keeps unresolved edge and Machine-start mutations independently", async () => {
+	test("keeps an unresolved edge mutation while retrying an idempotent Machine start", async () => {
 		const provider = makeFakeProvider();
 		provider.set.failHealth();
 		await runFresh(
@@ -363,8 +363,10 @@ describe("Provisioner", () => {
 				]);
 				expect(provider.calls.startMachine).toBe(2);
 				const fourth = yield* nextClaim("worker-4");
-				expect(yield* provisioner.run(fourth, "worker-4")).toBe("requeued");
-				expect(provider.calls.startMachine).toBe(2);
+				// A start cannot duplicate a resource, so an unresolved marker must not stop the next
+				// attempt from starting the Machine. The deployment recovers instead of deadlocking.
+				expect(yield* provisioner.run(fourth, "worker-4")).not.toBe("blocked");
+				expect(provider.calls.startMachine).toBe(3);
 			}).pipe(Effect.provide(provisionerFor(provider))),
 		);
 	});
@@ -584,7 +586,7 @@ describe("Provisioner", () => {
 						image_ref: settings.imageRef,
 						app_name: `chirp-${board.slug}`,
 						network_name: `chirp-${board.slug}`,
-						volume_name: `chirp_data_${board.slug}`,
+						volume_name: "chirp_data",
 						machine_name: `board-${board.slug}`,
 						volume_size_gb: settings.volumeSizeGb,
 					},
@@ -604,7 +606,7 @@ describe("Provisioner", () => {
 				}
 				const checkpointIndex = checkpoints.indexOf(checkpoint);
 				if (checkpointIndex >= checkpoints.indexOf("app_created")) provider.set.app(appFor(board.slug));
-				if (checkpointIndex >= checkpoints.indexOf("volume_created")) provider.set.volume(volumeFor(board.slug));
+				if (checkpointIndex >= checkpoints.indexOf("volume_created")) provider.set.volume(volumeFor());
 				if (checkpointIndex >= checkpoints.indexOf("machine_created"))
 					provider.set.machine({
 						id: "machine-id",
@@ -696,6 +698,31 @@ describe("Provisioner", () => {
 		);
 	});
 
+	test("retries a Machine start that Fly refuses while the Machine is still settling", async () => {
+		const provider = makeFakeProvider();
+		// Fly answers 412 until a Machine created with skip_launch leaves the "created" state.
+		provider.set.failStartMachinePrecondition(1);
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				yield* (yield* Boards).request(request);
+				const operation = Option.getOrThrow(yield* (yield* Operations).claim("worker-1", 30_000));
+				const provisioner = yield* Provisioner;
+				expect(yield* provisioner.run(operation, "worker-1")).not.toBe("blocked");
+				const sql = yield* SqlClient.SqlClient;
+				const [first] = yield* sql`SELECT state, last_error_code FROM board_operations WHERE id = ${operation.id}`;
+				expect(first?.last_error_code).not.toBe("provider_rejected");
+				expect(first?.state).not.toBe("failed");
+				// The refused start must not leave a marker that stops the next attempt retrying it.
+				const retried = yield* nextClaim("worker-2");
+				yield* provisioner.run(retried, "worker-2");
+				const [second] = yield* sql`SELECT state, last_error_code FROM board_operations WHERE id = ${operation.id}`;
+				expect(second?.last_error_code).not.toBe("machine_start_ambiguous");
+				expect(provider.calls.startMachine).toBeGreaterThan(1);
+			}).pipe(Effect.provide(provisionerFor(provider))),
+		);
+	});
+
 	test("blocks a definite provider rejection instead of retrying it forever", async () => {
 		const provider = makeFakeProvider();
 		provider.set.rejectCreateAppAndReadback();
@@ -724,7 +751,7 @@ describe("Provisioner", () => {
 				yield* migrateCloudDatabase;
 				const board = yield* (yield* Boards).request(request);
 				provider.set.app(appFor(board.slug));
-				provider.set.addDuplicateVolume(board.slug);
+				provider.set.addDuplicateVolume();
 				const operation = Option.getOrThrow(yield* (yield* Operations).claim("worker-1", 30_000));
 				const outcome = yield* (yield* Provisioner).run(operation, "worker-1");
 				const sql = yield* SqlClient.SqlClient;
@@ -758,7 +785,7 @@ describe("Provisioner", () => {
 						image_ref: settings.imageRef,
 						app_name: `chirp-${board.slug}`,
 						network_name: `chirp-${board.slug}`,
-						volume_name: `chirp_data_${board.slug}`,
+						volume_name: "chirp_data",
 						machine_name: `board-${board.slug}`,
 						volume_size_gb: settings.volumeSizeGb,
 					},

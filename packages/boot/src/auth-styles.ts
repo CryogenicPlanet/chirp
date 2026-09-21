@@ -1,6 +1,11 @@
 /** Self-contained recovery styling: no editable assets or external requests. */
 export const chirpMark = `<svg width="28" height="28" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 4h13v4h5v4h-8v9H8V11H3z"/><path fill="#161b1d" d="M12 6h2v2h-2z"/></svg>`;
 
+// The same mark as a standalone document, so a browser tab has an icon before any child runs.
+export const chirpIcon =
+	`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#161b1d"/>` +
+	`<path fill="#eeeee7" d="M3 4h13v4h5v4h-8v9H8V11H3z"/><path fill="#161b1d" d="M12 6h2v2h-2z"/></svg>`;
+
 export const authStyles = `
 *{box-sizing:border-box}body{margin:0;background:#161b1d;color:#eeeee7;font:16px/1.65 system-ui,sans-serif;-webkit-font-smoothing:antialiased}
 .auth-shell{max-width:32rem;margin:10vh auto;padding:1.5rem}

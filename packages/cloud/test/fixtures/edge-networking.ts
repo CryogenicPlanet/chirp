@@ -81,7 +81,7 @@ export const makeNetworking = () => {
 						hostname,
 						acme_requested: true,
 						configured: false,
-						status: "pending_validation",
+						status: "Awaiting configuration",
 						certificates: [],
 						validation: { ownership_txt_configured: false },
 						dns_requirements: {
@@ -101,7 +101,8 @@ export const makeNetworking = () => {
 						return {
 							...state.certificate,
 							configured: state.ready,
-							status: state.ready ? "active" : "pending_validation",
+							// Fly reports the hostname status as "Ready"; only an issued certificate is "active".
+							status: state.ready ? "Ready" : "Awaiting configuration",
 							certificates: state.ready ? [{ source: "fly", status: "active" }] : [],
 							validation: { ownership_txt_configured: state.ready },
 							dns_records: { a: state.resolved, ...(state.aaaa === undefined ? {} : { aaaa: state.aaaa }) },

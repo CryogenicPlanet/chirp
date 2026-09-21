@@ -16,11 +16,14 @@ import type { FlyApp, FlyMachine, FlyVolume } from "./fly-model.ts";
 import { machineConfig, machineMatches } from "./machine-spec.ts";
 import { InvalidLeaseDuration, LeaseLost, type Operation, type ProviderMutation } from "./operation.ts";
 import { Operations } from "./operations.ts";
+import { PostgresStorage } from "./postgres-storage.ts";
 import { deploymentSpec, type ProvisioningSettings } from "./provisioning-settings.ts";
 
 export class ProvisioningError extends Data.TaggedError("ProvisioningError")<{
 	readonly code:
 		| "storage_configuration_unsupported"
+		| "postgres_configuration_failed"
+		| "postgres_secrets_failed"
 		| "provider_unavailable"
 		| "provider_ambiguous"
 		| "app_create_ambiguous"
@@ -36,6 +39,7 @@ export class ProvisioningError extends Data.TaggedError("ProvisioningError")<{
 		| "provider_observation_pending"
 		| "retry_exhausted"
 		| "edge_unavailable"
+		| "child_route_pending"
 		| "provisioning_internal_error";
 	readonly retriable: boolean;
 	readonly message: string;
@@ -51,6 +55,12 @@ const rejected = (error: FlyApiError) =>
 	error.status >= 400 &&
 	error.status < 500 &&
 	![404, 408, 409, 425, 429].includes(error.status);
+// Fly answers a start with 412 `failed_precondition: unable to start machine from current
+// state: 'created'` until a Machine created with skip_launch has settled. That is ordinary
+// progress for a start, so the start path checks this before `rejected`. It is deliberately
+// not folded into `rejected`, which every Fly call shares: a 412 on a create is a refusal,
+// and treating it as transient there leaves a durable ambiguity marker no attempt can clear.
+const startNotSettled = (error: FlyApiError) => error.reason === "status" && error.status === 412;
 const isAmbiguity = (code: string | null) => code === "provider_ambiguous" || code?.endsWith("_ambiguous") === true;
 interface MutationJournal<E, R> {
 	readonly pending: Set<ProviderMutation>;
@@ -138,16 +148,18 @@ const make = (settings: ProvisioningSettings) =>
 				if (!deployment.machine_id) return yield* issue("provider_drift", false, "Fly Machine ID is missing");
 				let machine = initial;
 				if (machine.state !== "started") {
-					if (journal.pending.has("machine_start"))
-						return yield* issue(
-							"machine_start_ambiguous",
-							true,
-							"Fly Machine start remains unobservable; refusing to repeat it",
-						);
+					// A start is idempotent: unlike a create it cannot duplicate a resource, and the
+					// Machine's own state is the observation of whether it took effect. Refusing to
+					// repeat a marked start deadlocked instead, because the marker is only cleared once
+					// the Machine is observed started and nothing else could start it.
 					yield* renewLease;
 					yield* journal.mark("machine_start");
 					yield* renewLease;
 					const started = yield* fly.startMachine(deployment.app_name, deployment.machine_id).pipe(Effect.result);
+					if (Result.isFailure(started) && startNotSettled(started.failure)) {
+						yield* journal.clear("machine_start");
+						return yield* issue("provider_observation_pending", true, "Fly Machine is not startable yet");
+					}
 					if (Result.isFailure(started) && rejected(started.failure)) {
 						yield* journal.clear("machine_start");
 						return yield* issue("provider_rejected", false, "Fly rejected the Machine start");
@@ -158,6 +170,14 @@ const make = (settings: ProvisioningSettings) =>
 					machine = yield* assertMachine(found.value, deployment);
 					if (machine.state !== "started") {
 						if (Result.isFailure(started)) {
+							// A refused precondition is Fly declining the request outright, so the start
+							// definitively did not take effect and the next attempt may repeat it. A transport
+							// failure is different: the request may still have been received, so it stays
+							// ambiguous.
+							if (startNotSettled(started.failure)) {
+								yield* journal.clear("machine_start");
+								return yield* issue("provider_observation_pending", true, "Fly Machine is not startable yet");
+							}
 							return yield* issue("machine_start_ambiguous", true, "Fly Machine start is not observable");
 						}
 						yield* observed(
@@ -429,7 +449,34 @@ const make = (settings: ProvisioningSettings) =>
 							}
 							switch (deployment.state) {
 								case "requested": {
-									if (deployment.storage_engine !== "sqlite")
+									if (deployment.storage_engine === "postgres") {
+										const storage = yield* PostgresStorage;
+										yield* storage.prepare(board.id, lease).pipe(
+											Effect.raceFirst(beforeProvider.pipe(Effect.andThen(Effect.sleep("20 seconds")), Effect.forever)),
+											Effect.catchTags({
+												PostgresBootstrapError: (error) =>
+													Effect.fail(
+														issue(
+															"postgres_configuration_failed",
+															error.reason === "connection_failed" || error.reason === "transient_failure",
+															`PostgreSQL setup failed: ${error.reason}`,
+														),
+													),
+												CloudSecretsError: () =>
+													Effect.fail(
+														issue(
+															"postgres_configuration_failed",
+															false,
+															"PostgreSQL credentials could not be decrypted",
+														),
+													),
+												PostgresStorageError: () =>
+													Effect.fail(
+														issue("storage_configuration_unsupported", false, "PostgreSQL credentials are missing"),
+													),
+											}),
+										);
+									} else if (deployment.storage_engine !== "sqlite")
 										return yield* issue(
 											"storage_configuration_unsupported",
 											false,
@@ -440,6 +487,12 @@ const make = (settings: ProvisioningSettings) =>
 								}
 								case "storage_configuration_verified": {
 									let app = yield* observed(fly.getApp(deployment.app_name), beforeProvider);
+									if (Option.isSome(app) && deployment.app_id === null && !pending.has("app_create"))
+										return yield* issue(
+											"provider_drift",
+											false,
+											"A Fly App already uses this board address; refusing to adopt an untracked App",
+										);
 									let creation: Result.Result<void, FlyApiError> | undefined;
 									if (Option.isNone(app)) {
 										if (pending.has("app_create"))
@@ -458,6 +511,18 @@ const make = (settings: ProvisioningSettings) =>
 												network: deployment.network_name,
 											})
 											.pipe(Effect.result);
+										if (
+											Result.isFailure(creation) &&
+											creation.failure.reason === "status" &&
+											creation.failure.status === 409
+										) {
+											yield* journal.clear("app_create");
+											return yield* issue(
+												"provider_drift",
+												false,
+												"Fly App creation conflicted with an existing App; refusing to adopt it",
+											);
+										}
 										if (Result.isFailure(creation) && rejected(creation.failure)) {
 											yield* journal.clear("app_create");
 											return yield* issue("provider_rejected", false, "Fly rejected the App creation");
@@ -475,6 +540,36 @@ const make = (settings: ProvisioningSettings) =>
 									break;
 								}
 								case "app_created": {
+									if (deployment.storage_engine === "postgres") {
+										const storage = yield* PostgresStorage;
+										yield* storage.stage(board.id, deployment.app_name, lease).pipe(
+											Effect.raceFirst(beforeProvider.pipe(Effect.andThen(Effect.sleep("20 seconds")), Effect.forever)),
+											Effect.catchTags({
+												FlySecretsError: (error) =>
+													Effect.fail(
+														issue(
+															"postgres_secrets_failed",
+															error.reason === "transport" ||
+																(error.reason === "status" &&
+																	error.status !== null &&
+																	[404, 408, 409, 425, 429].includes(error.status)) ||
+																(error.reason === "status" && error.status !== null && error.status >= 500),
+															"Database secrets could not be verified at Fly",
+														),
+													),
+												CloudSecretsError: () =>
+													Effect.fail(
+														issue(
+															"postgres_configuration_failed",
+															false,
+															"PostgreSQL credentials could not be decrypted",
+														),
+													),
+												PostgresStorageError: () =>
+													Effect.fail(issue("postgres_configuration_failed", false, "PostgreSQL setup is incomplete")),
+											}),
+										);
+									}
 									const listed = yield* observed(fly.listVolumes(deployment.app_name), beforeProvider);
 									let matching = listed.filter(
 										(volume) => volume.name === deployment.volume_name && volume.region === deployment.region,
@@ -503,11 +598,12 @@ const make = (settings: ProvisioningSettings) =>
 											yield* journal.clear("volume_create");
 											return yield* issue("provider_rejected", false, "Fly rejected the Volume creation");
 										}
-										matching = Result.isSuccess(created)
-											? [created.success]
-											: (yield* observed(fly.listVolumes(deployment.app_name), beforeProvider)).filter(
-													(volume) => volume.name === deployment.volume_name && volume.region === deployment.region,
-												);
+										// Fly's create response echoes the request before the Volume is fully materialized
+										// and reports an empty fstype, so identity is asserted against a fresh observation
+										// instead of the mutation's own echo.
+										matching = (yield* observed(fly.listVolumes(deployment.app_name), beforeProvider)).filter(
+											(volume) => volume.name === deployment.volume_name && volume.region === deployment.region,
+										);
 									}
 									if (matching.length > 1)
 										return yield* issue("provider_drift", false, "Multiple Fly Volumes match this deployment");
@@ -526,6 +622,17 @@ const make = (settings: ProvisioningSettings) =>
 									break;
 								}
 								case "volume_created": {
+									let minSecretsVersion: number | undefined;
+									if (deployment.storage_engine === "postgres") {
+										const storage = yield* PostgresStorage;
+										minSecretsVersion = yield* storage
+											.assertReady(board.id)
+											.pipe(
+												Effect.catchTag("PostgresStorageError", () =>
+													Effect.fail(issue("postgres_configuration_failed", false, "PostgreSQL setup is incomplete")),
+												),
+											);
+									}
 									if (!deployment.volume_id) return yield* issue("provider_drift", false, "Fly Volume ID is missing");
 									const found = yield* observed(
 										fly.getVolume(deployment.app_name, deployment.volume_id),
@@ -572,6 +679,7 @@ const make = (settings: ProvisioningSettings) =>
 												name: deployment.machine_name,
 												region: deployment.region,
 												config: machineConfig(deployment),
+												...(minSecretsVersion === undefined ? {} : { minSecretsVersion }),
 											})
 											.pipe(Effect.result);
 										if (Result.isFailure(created) && rejected(created.failure)) {
@@ -635,7 +743,11 @@ const make = (settings: ProvisioningSettings) =>
 									yield* beforeProvider;
 									yield* edge
 										.childRoute(deployment.hostname)
-										.pipe(Effect.mapError(() => issue("edge_unavailable", true, "Board child route is not reachable")));
+										.pipe(
+											Effect.mapError(() =>
+												issue("child_route_pending", true, "Board is still finishing its first start"),
+											),
+										);
 									deployment = yield* advance("child_route_observed");
 									break;
 								}

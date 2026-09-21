@@ -10,6 +10,10 @@ import * as flyProvisioning from "./migrations/0003_fly_provisioning.ts";
 import * as provisioningRecovery from "./migrations/0004_provisioning_recovery.ts";
 import * as providerMutationMarkers from "./migrations/0005_provider_mutation_markers.ts";
 import * as provisioningRetryBudgets from "./migrations/0006_provisioning_retry_budgets.ts";
+import * as boardDeletion from "./migrations/0007_board_deletion.ts";
+import * as invitationLimits from "./migrations/0008_invitation_limits.ts";
+import * as postgresSecrets from "./migrations/0009_board_postgres_secrets.ts";
+import * as readableBoardSlugs from "./migrations/0010_readable_board_slugs.ts";
 import { cloudMigrations } from "./schema.ts";
 
 export { CloudMigrationError } from "./migration-ledger.ts";
@@ -25,6 +29,10 @@ const migrations: ReadonlyArray<Migration> = [
 	provisioningRecovery,
 	providerMutationMarkers,
 	provisioningRetryBudgets,
+	boardDeletion,
+	invitationLimits,
+	postgresSecrets,
+	readableBoardSlugs,
 ];
 const receipts = Schema.decodeUnknownEffect(
 	Schema.Array(

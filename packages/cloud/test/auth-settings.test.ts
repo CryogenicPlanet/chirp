@@ -29,6 +29,34 @@ describe("cloud auth settings", () => {
 		}
 	});
 
+	test.each(["github", "google"] as const)("allows %s alone", async (provider) => {
+		const values: Readonly<Record<string, string>> = { ...environment };
+		const omitted = provider === "github" ? "GOOGLE" : "GITHUB";
+		const { [`${omitted}_CLIENT_ID`]: _id, [`${omitted}_CLIENT_SECRET`]: _secret, ...single } = values;
+		const result = await load(single);
+		expect(Exit.isSuccess(result)).toBe(true);
+		if (Exit.isSuccess(result)) {
+			expect(result.value[provider]?.clientId).toBe(`${provider}-client`);
+			expect(result.value[provider === "github" ? "google" : "github"]).toBeUndefined();
+		}
+	});
+
+	test.each(["GITHUB", "GOOGLE"])("rejects either incomplete %s credential pair", async (provider) => {
+		for (const suffix of ["CLIENT_ID", "CLIENT_SECRET"])
+			expect(Exit.isFailure(await load({ ...environment, [`${provider}_${suffix}`]: " " }))).toBe(true);
+	});
+
+	test("rejects configuration without an OAuth provider", async () => {
+		const {
+			GITHUB_CLIENT_ID: _githubId,
+			GITHUB_CLIENT_SECRET: _githubSecret,
+			GOOGLE_CLIENT_ID: _googleId,
+			GOOGLE_CLIENT_SECRET: _googleSecret,
+			...none
+		} = environment;
+		expect(Exit.isFailure(await load(none))).toBe(true);
+	});
+
 	test("rejects a URL path and weak signing secrets", async () => {
 		expect(Exit.isFailure(await load({ ...environment, BETTER_AUTH_URL: "https://cloud.chirp.wiki/auth" }))).toBe(true);
 		expect(Exit.isFailure(await load({ ...environment, BETTER_AUTH_SECRET: "short" }))).toBe(true);

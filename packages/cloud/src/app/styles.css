@@ -54,3 +54,32 @@
 	--shadow-card: 0 0 0 1px rgb(15 15 15 / 7%), 0 1px 2px rgb(15 15 15 / 4%);
 	--shadow-elevated: 0 24px 60px -22px rgb(0 0 0 / 12%), 0 6px 18px -10px rgb(0 0 0 / 6%);
 }
+
+@theme {
+	--color-popover: #22292b;
+	--color-popover-foreground: #ece9e1;
+	--color-accent: #2c3638;
+	--color-accent-foreground: #ece9e1;
+	--color-secondary: #293335;
+	--color-secondary-foreground: #ece9e1;
+}
+
+@layer base {
+	* {
+		border-color: var(--color-border);
+	}
+	button,
+	a,
+	input {
+		-webkit-tap-highlight-color: transparent;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		transition-duration: 0.01ms !important;
+	}
+}

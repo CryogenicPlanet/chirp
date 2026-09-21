@@ -3,8 +3,13 @@ import { Config, Effect, Fiber, Layer, ManagedRuntime, Option } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { BackupObserver, backupObserverLayer } from "./backup-observer.ts";
 import { BackupScheduler, backupSchedulerLayer } from "./backup-scheduler.ts";
+import { BoardDeletionWorker, boardDeletionWorkerLayer } from "./board-deletion-worker.ts";
+import { flyDeletionApiLayer } from "./fly-deletion-api.ts";
 import { Boards, boardsLayer } from "./boards.ts";
 import { cloudflareDnsLayer, cloudflareSettings } from "./cloudflare-dns.ts";
+import { cloudSecretsLayer } from "./cloud-secrets.ts";
+import { flySecretsLayer } from "./fly-secrets.ts";
+import { postgresStorageLayer } from "./postgres-storage.ts";
 import { databaseLayer } from "./database.ts";
 import { Deployments, deploymentsLayer } from "./deployments.ts";
 import { edgeProbeLayer } from "./edge-probe.ts";
@@ -20,19 +25,24 @@ const workerLayer = Layer.unwrap(
 		cloudflare: cloudflareSettings,
 	}).pipe(
 		Effect.map(({ flyToken, provisioning, cloudflare }) => {
-			const stores = Layer.mergeAll(boardsLayer, deploymentsLayer, operationsLayer).pipe(
+			const stores = Layer.mergeAll(boardsLayer, deploymentsLayer, operationsLayer, postgresStorageLayer).pipe(
 				Layer.provideMerge(databaseLayer),
+				Layer.provideMerge(cloudSecretsLayer),
 				Layer.provideMerge(NodeServices.layer),
 			);
 			const providers = Layer.mergeAll(
+				flySecretsLayer({ token: flyToken }).pipe(Layer.provide(FetchHttpClient.layer)),
+				flyDeletionApiLayer({ token: flyToken }).pipe(Layer.provide(FetchHttpClient.layer)),
 				cloudflareDnsLayer(cloudflare).pipe(Layer.provide(FetchHttpClient.layer)),
 				flyBoardApiLayer({ token: flyToken }).pipe(Layer.provide(FetchHttpClient.layer)),
 				edgeProbeLayer.pipe(Layer.provide(FetchHttpClient.layer)),
 			);
-			return Layer.mergeAll(provisionerLayer(provisioning), backupObserverLayer, backupSchedulerLayer).pipe(
-				Layer.provideMerge(stores),
-				Layer.provideMerge(providers),
-			);
+			return Layer.mergeAll(
+				provisionerLayer(provisioning),
+				boardDeletionWorkerLayer(provisioning),
+				backupObserverLayer,
+				backupSchedulerLayer,
+			).pipe(Layer.provideMerge(stores), Layer.provideMerge(providers));
 		}),
 	),
 );
@@ -42,7 +52,16 @@ const loop = Effect.gen(function* () {
 	const provisioner = yield* Provisioner;
 	const scheduler = yield* BackupScheduler;
 	const observer = yield* BackupObserver;
+	const deletion = yield* BoardDeletionWorker;
 	return yield* Effect.gen(function* () {
+		const deleted = yield* operations.claim("chirp-cloud-deletion", 90_000, "delete").pipe(
+			Effect.flatMap(
+				Option.match({
+					onNone: () => Effect.succeedNone,
+					onSome: (operation) => deletion.run(operation, "chirp-cloud-deletion").pipe(Effect.asSome),
+				}),
+			),
+		);
 		const provisioned = yield* operations.claim("chirp-cloud-provisioner", 90_000, "provision").pipe(
 			Effect.flatMap(
 				Option.match({
@@ -60,7 +79,8 @@ const loop = Effect.gen(function* () {
 				}),
 			),
 		);
-		if (Option.isNone(provisioned) && Option.isNone(observed)) yield* Effect.sleep("1 second");
+		if (Option.isNone(deleted) && Option.isNone(provisioned) && Option.isNone(observed))
+			yield* Effect.sleep("1 second");
 	}).pipe(
 		Effect.catchCause((cause) =>
 			Effect.logError("Chirp Cloud worker iteration failed", cause).pipe(Effect.andThen(Effect.sleep("1 second"))),

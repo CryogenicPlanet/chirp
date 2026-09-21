@@ -1,6 +1,6 @@
 import { Data, Schema } from "effect";
 
-export const OperationKind = Schema.Literals(["provision", "backup"]);
+export const OperationKind = Schema.Literals(["provision", "backup", "delete"]);
 export type OperationKind = typeof OperationKind.Type;
 
 const OperationState = Schema.Literals(["queued", "running", "succeeded", "failed"]);

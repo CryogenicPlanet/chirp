@@ -14,10 +14,8 @@ const settings: CloudAuthSettings = {
 	publicOrigin: "https://cloud.test",
 	authSecret: Redacted.make("test-auth-secret-with-at-least-32-characters"),
 	clientIpHeader: "fly-client-ip",
-	githubClientId: "github-client",
-	githubClientSecret: Redacted.make("github-secret"),
-	googleClientId: "google-client",
-	googleClientSecret: Redacted.make("google-secret"),
+	github: { clientId: "github-client", clientSecret: Redacted.make("github-secret") },
+	google: { clientId: "google-client", clientSecret: Redacted.make("google-secret") },
 };
 
 const authLayer = cloudAuthLayer(settings).pipe(Layer.provideMerge(cryptoLayer));
@@ -57,6 +55,46 @@ const signedCookieValue = async (value: string) => {
 
 describe.skipIf(!realPostgres)("CloudAuth", () => {
 	afterEach(() => vi.unstubAllGlobals());
+
+	test("routes authentication failures to the Cloud error page", async () => {
+		await runFresh(migrateCloudDatabase);
+		for (const error of ["signup_disabled", "invitation_invalid", "unknown_error"]) {
+			const response = await handle(new Request(`https://cloud.test/api/auth/error?error=${error}`));
+			expect(response.status).toBe(302);
+			expect(response.headers.get("location")).toBe(`https://cloud.test/auth/error?error=${error}`);
+		}
+		const callback = await handle(new Request("https://cloud.test/api/auth/callback/github?error=access_denied"));
+		expect(callback.status).toBe(302);
+		expect(callback.headers.get("location")).toContain("https://cloud.test/auth/error?error=");
+	});
+
+	test.each(["github", "google"] as const)("registers only the configured %s provider", async (provider) => {
+		await runFresh(migrateCloudDatabase);
+		const excluded = provider === "github" ? "google" : "github";
+		const singleProviderLayer = cloudAuthLayer({ ...settings, [excluded]: undefined }).pipe(
+			Layer.provideMerge(cryptoLayer),
+		);
+		await Effect.runPromise(
+			Effect.gen(function* () {
+				const auth = yield* CloudAuth;
+				expect(auth.providers).toEqual([provider]);
+				for (const selected of [provider, excluded]) {
+					const response = yield* auth.handle(
+						new Request("https://cloud.test/api/auth/sign-in/social", {
+							method: "POST",
+							headers: {
+								"content-type": "application/json",
+								origin: "https://cloud.test",
+								"fly-client-ip": "192.0.2.10",
+							},
+							body: json({ provider: selected, callbackURL: "/" }),
+						}),
+					);
+					expect(response.status).toBe(selected === provider ? 200 : 404);
+				}
+			}).pipe(Effect.provide(singleProviderLayer)),
+		);
+	});
 
 	test("serves standard Requests and refuses unauthenticated or untrusted mutations", async () => {
 		await runFresh(migrateCloudDatabase);

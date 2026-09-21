@@ -52,7 +52,10 @@ export const provisioningSettings = Config.all({
 	region: Config.String("FLY_REGION"),
 	imageRef: Config.String("CHIRP_IMAGE"),
 	boardsDomain: Config.String("BOARDS_DOMAIN").pipe(Config.withDefault("boards.chirp.wiki")),
-	volumeSizeGb: Config.Int("FLY_VOLUME_SIZE_GB").pipe(Config.withDefault(1)),
+	// A board's first boot installs its app's dependencies and builds its UI into /data. One
+	// gigabyte fills completely part way through that and the install fails, so the child never
+	// serves. Measured on Fly: /data reached 100% at 907 MB with a 1 GB volume.
+	volumeSizeGb: Config.Int("FLY_VOLUME_SIZE_GB").pipe(Config.withDefault(5)),
 	maxFailures: Config.Int("PROVISIONING_MAX_FAILURES").pipe(Config.withDefault(10)),
 	maxOperationAgeMs: Config.Int("PROVISIONING_MAX_AGE_MS").pipe(Config.withDefault(86_400_000)),
 	pollIntervalMs: Config.Int("PROVISIONING_POLL_INTERVAL_MS").pipe(Config.withDefault(30_000)),
@@ -64,7 +67,9 @@ export const deploymentSpec = (slug: string, settings: ProvisioningSettings): De
 	image_ref: settings.imageRef,
 	app_name: `chirp-${slug}`,
 	network_name: `chirp-${slug}`,
-	volume_name: `chirp_data_${slug}`,
+	// Fly rejects volume names over 30 characters, and a 32-character slug cannot fit in one.
+	// Each board owns its Fly App, so the volume is already unique without repeating the slug.
+	volume_name: "chirp_data",
 	machine_name: `board-${slug}`,
 	volume_size_gb: settings.volumeSizeGb,
 });

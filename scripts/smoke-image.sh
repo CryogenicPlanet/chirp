@@ -48,6 +48,16 @@ docker exec --user 1000:1003 "$container" sh -ec '
 	test ! -w /opt/comms/packages/boot/dist/index.js
 	printf "image persistence probe\n" > /data/pages/image-smoke.txt
 '
+# The fixed root operator command mints without exposing its result in smoke logs.
+docker exec "$container" bun -e 'const p=Bun.spawnSync(["/usr/local/bin/bun","/opt/comms/packages/boot/dist/setup-code.js"]); const v=JSON.parse(p.stdout.toString()); if(p.exitCode!==0 || !/^[A-F0-9]{16}$/.test(v.code) || v.expires_at<=Date.now()+890000 || v.expires_at>Date.now()+900000)process.exit(1);'
+docker exec --user 1000:1000 "$container" sh -ec '
+    test "$(stat -c %a /data/.boot-operator)" = 700
+    test "$(stat -c %u /data/.boot-operator)" = 1000
+    test "$(stat -c %a /data/.boot-operator/setup.sock)" = 600
+'
+for denied_user in 1001:1003 1002:1002; do
+    docker exec --user "$denied_user" "$container" bun -e 'import {connect} from "node:net"; const socket=connect("/data/.boot-operator/setup.sock"); socket.on("connect",()=>process.exit(1)); socket.on("error",error=>process.exit(error.code==="EACCES" || error.code==="EPERM" ? 0 : 1)); setTimeout(()=>process.exit(1),2000).unref();'
+done
 # Real kernel access checks, not Dockerfile ownership assertions.
 docker exec "$container" bun -e 'const pids=(await Bun.file("/proc/1/task/1/children").text()).trim().split(/\s+/); if(pids.length!==1)process.exit(1); const status=await Bun.file(`/proc/${pids[0]}/status`).text(); if(!/^Uid:\s+1000\s+1000\s+1000\s+1000$/m.test(status))process.exit(1);'
 docker exec --user 1001:1003 "$container" sh -ec '

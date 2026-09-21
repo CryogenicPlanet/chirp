@@ -214,6 +214,7 @@ export const proxy = Effect.gen(function* () {
 			(request.method === "GET" || request.method === "HEAD") &&
 			[
 				"/onboarding",
+				"/favicon.svg",
 				"/assets/board.js",
 				"/assets/style.css",
 				"/init",

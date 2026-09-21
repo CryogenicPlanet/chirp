@@ -175,9 +175,11 @@ export const ensureEdgeNetworking = <E, R, E2, R2>(
 		const checked = yield* observe(fly.checkCertificate(appName, hostname));
 		yield* assertCertificate(checked);
 		const records = checked.dns_records;
+		// Fly reports a hostname's certificate status as "Ready". "active" is the status of an
+		// individual issued certificate inside `certificates`, which is asserted separately below.
 		if (
 			checked.configured !== true ||
-			checked.status !== "active" ||
+			checked.status?.toLowerCase() !== "ready" ||
 			checked.validation?.ownership_txt_configured !== true ||
 			!checked.certificates?.some((entry) => entry.source === "fly" && entry.status === "active") ||
 			records?.a?.length !== 1 ||

@@ -130,6 +130,7 @@ const makeAuth = (config: AuthConfig) =>
 			readonly code: string;
 			readonly generation: string;
 			readonly failures: number;
+			readonly expiresAt: number | null;
 		} | null>(null);
 		const { hash, random } = authSecrets(crypto);
 		// REOPEN_SETUP=1 lets one setup add a passkey while passkeys exist, once per boot process.
@@ -138,21 +139,22 @@ const makeAuth = (config: AuthConfig) =>
 			const rows = yield* sql`SELECT id FROM passkeys LIMIT 1`;
 			return rows.length === 0;
 		});
-		const rotateSetup = Effect.gen(function* () {
-			const bytes = yield* crypto.randomBytes(8);
-			const code = Buffer.from(bytes).toString("hex").toUpperCase();
-			const generation = yield* random;
-			yield* sql`DELETE FROM auth_challenges WHERE ceremony = 'setup'`;
-			yield* Ref.set(setup, { code, generation, failures: 0 });
-			yield* Effect.sync(() => bootConsole.log(`chirp: /setup is open, code ${code}`));
-			return { code, generation, failures: 0 };
-		});
+		const rotateSetup = (expiresAt: number | null = null) =>
+			Effect.gen(function* () {
+				const bytes = yield* crypto.randomBytes(8);
+				const code = Buffer.from(bytes).toString("hex").toUpperCase();
+				const generation = yield* random;
+				yield* sql`DELETE FROM auth_challenges WHERE ceremony = 'setup'`;
+				yield* Ref.set(setup, { code, generation, failures: 0, expiresAt });
+				if (expiresAt === null) yield* Effect.sync(() => bootConsole.log(`chirp: /setup is open, code ${code}`));
+				return { code, generation, failures: 0, expiresAt };
+			});
 		const setupState = Effect.gen(function* () {
 			if (!(yield* noPasskeys) && !(yield* Ref.get(reopenAvailable))) {
 				yield* Ref.set(setup, null);
 				return null;
 			}
-			return (yield* Ref.get(setup)) ?? (yield* rotateSetup);
+			return (yield* Ref.get(setup)) ?? (yield* rotateSetup());
 		});
 		// Every boot invalidates setup ceremonies created under an earlier stdout code.
 		yield* sql`DELETE FROM auth_challenges WHERE ceremony = 'setup'`;
@@ -206,12 +208,13 @@ const makeAuth = (config: AuthConfig) =>
 			challenge: string,
 			ceremony: string,
 			generation: string | null,
+			expiresAt: number | null = null,
 		) {
 			const now = yield* Clock.currentTimeMillis;
 			const id = yield* random;
 			yield* sql`DELETE FROM auth_challenges WHERE expires_at <= ${now}`;
 			yield* sql`INSERT INTO auth_challenges (id, challenge, ceremony, setup_generation, expires_at)
-			VALUES (${id}, ${challenge}, ${ceremony}, ${generation}, ${now + 120_000})`;
+			VALUES (${id}, ${challenge}, ${ceremony}, ${generation}, ${Math.min(now + 120_000, expiresAt ?? Infinity)})`;
 			return id;
 		});
 		const takeChallenge = Effect.fn("Auth.takeChallenge")(function* (id: string, ceremony: string) {
@@ -241,8 +244,10 @@ const makeAuth = (config: AuthConfig) =>
 					// A reopened setup only adds a passkey for the primary origin.
 					if (!(yield* noPasskeys) && party.expectedOrigin !== config.expectedOrigin)
 						return yield* refuse("origin_invalid");
+					if (state.expiresAt !== null && state.expiresAt <= (yield* Clock.currentTimeMillis))
+						return yield* refuse("setup_code_invalid");
 					if (!same(code, state.code)) {
-						if (state.failures + 1 >= 3) yield* rotateSetup;
+						if (state.failures + 1 >= 3) yield* rotateSetup(state.expiresAt);
 						else yield* Ref.set(setup, { ...state, failures: state.failures + 1 });
 						return yield* refuse("setup_code_invalid");
 					}
@@ -258,7 +263,7 @@ const makeAuth = (config: AuthConfig) =>
 							}),
 						catch: () => new AuthError({ code: "registration_failed" }),
 					});
-					return { id: yield* saveChallenge(options.challenge, "setup", state.generation), options };
+					return { id: yield* saveChallenge(options.challenge, "setup", state.generation, state.expiresAt), options };
 				}),
 			);
 		const finishSetup = (party: RelyingParty) => (id: string, response: RegistrationResponseJSON) =>
@@ -272,7 +277,12 @@ const makeAuth = (config: AuthConfig) =>
 							if (reopened && party.expectedOrigin !== config.expectedOrigin) return yield* refuse("origin_invalid");
 							const state = yield* Ref.get(setup);
 							const challenge = yield* takeChallenge(id, "setup");
-							if (!state || challenge.setup_generation !== state.generation) return yield* refuse("challenge_invalid");
+							if (
+								!state ||
+								challenge.setup_generation !== state.generation ||
+								(state.expiresAt !== null && state.expiresAt <= (yield* Clock.currentTimeMillis))
+							)
+								return yield* refuse("challenge_invalid");
 							const verified = yield* Effect.tryPromise({
 								try: () =>
 									verifyRegistrationResponse({
@@ -320,6 +330,18 @@ const makeAuth = (config: AuthConfig) =>
 						Effect.tap(() => Ref.set(reopenAvailable, false)),
 					),
 			);
+		// This private operator capability is deliberately narrower than REOPEN_SETUP recovery.
+		const mintSetupCode = mutex.withPermit(
+			sql.withTransaction(
+				Effect.gen(function* () {
+					yield* lockBootWrite(sql);
+					if (!(yield* noPasskeys)) return yield* refuse("setup_closed");
+					const expiresAt = (yield* Clock.currentTimeMillis) + 15 * 60_000;
+					const state = yield* rotateSetup(expiresAt);
+					return { code: state.code, expires_at: expiresAt };
+				}),
+			),
+		);
 		const startLogin = (party: RelyingParty) =>
 			mutex.withPermit(
 				Effect.gen(function* () {
@@ -534,6 +556,7 @@ const makeAuth = (config: AuthConfig) =>
 			at,
 			setupOpen: mutex.withPermit(Effect.map(setupState, (state) => state !== null)),
 			setupRequired: noPasskeys,
+			mintSetupCode,
 			passkeyOriginState,
 			authenticateSession,
 			logout,

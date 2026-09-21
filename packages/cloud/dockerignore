@@ -1,0 +1,23 @@
+# Build inputs for the Chirp Cloud control-plane image only.
+*
+!package.json
+!bun.lock
+!tsconfig.json
+!tsconfig.base.json
+!patches/
+!patches/**
+!packages/
+!packages/*/package.json
+!packages/cloud/
+!packages/cloud/src/
+!packages/cloud/src/**
+!packages/cloud/public/
+!packages/cloud/public/**
+!packages/cloud/postcss.config.mjs
+!packages/cloud/tsconfig.json
+packages/cloud/test/
+packages/cloud/.next/
+**/.env
+**/.env.*
+**/node_modules
+**/.DS_Store

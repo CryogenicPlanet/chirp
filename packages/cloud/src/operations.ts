@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, inArray, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { Context, Crypto, Effect, Layer, Option, Schema } from "effect";
 import { Database } from "./database.ts";
 import {
@@ -40,7 +40,14 @@ const make = Effect.gen(function* () {
 		db
 			.select({ id: boards.id })
 			.from(boards)
-			.where(and(eq(boards.id, boardId), eq(boards.owner_id, ownerId)))
+			.where(
+				and(
+					eq(boards.id, boardId),
+					eq(boards.owner_id, ownerId),
+					isNull(boards.deleted_at),
+					isNull(boards.deletion_requested_at),
+				),
+			)
 			.limit(1)
 			.pipe(Effect.map((rows) => rows.length === 1));
 	const leased = <E, R>(
@@ -84,6 +91,22 @@ const make = Effect.gen(function* () {
 			? Effect.succeed(milliseconds)
 			: Effect.fail(new InvalidLeaseDuration({ milliseconds }));
 	return {
+		latestLifecycle: (boardId: string) =>
+			db
+				.select()
+				.from(boardOperations)
+				.where(and(eq(boardOperations.board_id, boardId), inArray(boardOperations.kind, ["provision", "delete"])))
+				.orderBy(desc(boardOperations.created_at), desc(boardOperations.id))
+				.limit(1)
+				.pipe(Effect.map((rows) => Option.fromNullishOr(rows[0]))),
+		latest: (boardId: string, kind: OperationKind) =>
+			db
+				.select()
+				.from(boardOperations)
+				.where(and(eq(boardOperations.board_id, boardId), eq(boardOperations.kind, kind)))
+				.orderBy(desc(boardOperations.created_at), desc(boardOperations.id))
+				.limit(1)
+				.pipe(Effect.map((rows) => Option.fromNullishOr(rows[0]))),
 		enqueue: (input: EnqueueOperation) =>
 			Effect.gen(function* () {
 				if (!(yield* ownedBoard(input.board_id, input.owner_id)))
@@ -105,27 +128,39 @@ const make = Effect.gen(function* () {
 						});
 					return existing.value;
 				}
-				if (input.kind === "provision") return yield* new DeploymentRetryRequired({ boardId: input.board_id });
+				if (input.kind === "provision" || input.kind === "delete")
+					return yield* new DeploymentRetryRequired({ boardId: input.board_id });
 				const id = yield* crypto.randomUUIDv7;
 				const insert = db.transaction(() =>
-					db
-						.insert(boardOperations)
-						.values({
-							id,
-							board_id: input.board_id,
-							kind: input.kind,
-							state: "queued",
-							checkpoint: "requested",
-							requested_by: input.requested_by,
-							idempotency_key: input.idempotency_key,
-							request_hash: requestHash,
-						})
-						.returning()
-						.pipe(
-							Effect.flatMap((rows) =>
-								rows[0] ? Effect.succeed(rows[0]) : Effect.die("Operation insert returned no row"),
-							),
-						),
+					Effect.gen(function* () {
+						const board = yield* db
+							.select({ id: boards.id })
+							.from(boards)
+							.where(
+								and(eq(boards.id, input.board_id), isNull(boards.deleted_at), isNull(boards.deletion_requested_at)),
+							)
+							.for("update")
+							.limit(1);
+						if (!board[0]) return yield* new BoardNotFound({ boardId: input.board_id });
+						return yield* db
+							.insert(boardOperations)
+							.values({
+								id,
+								board_id: input.board_id,
+								kind: input.kind,
+								state: "queued",
+								checkpoint: "requested",
+								requested_by: input.requested_by,
+								idempotency_key: input.idempotency_key,
+								request_hash: requestHash,
+							})
+							.returning()
+							.pipe(
+								Effect.flatMap((rows) =>
+									rows[0] ? Effect.succeed(rows[0]) : Effect.die("Operation insert returned no row"),
+								),
+							);
+					}),
 				);
 				return yield* insert.pipe(
 					Effect.catchTag("EffectDrizzleQueryError", (error) =>
@@ -160,6 +195,7 @@ const make = Effect.gen(function* () {
 								.where(
 									and(
 										kind ? eq(boardOperations.kind, kind) : undefined,
+										sql`EXISTS (SELECT 1 FROM boards b WHERE b.id = ${boardOperations.board_id} AND b.deleted_at IS NULL AND (b.deletion_requested_at IS NULL OR ${boardOperations.kind} = 'delete'))`,
 										or(
 											and(eq(boardOperations.state, "queued"), lte(boardOperations.available_at, now)),
 											and(eq(boardOperations.state, "running"), lte(boardOperations.lease_expires_at, now)),
@@ -380,6 +416,7 @@ const make = Effect.gen(function* () {
 			readonly workerId: string;
 			readonly errorCode: string;
 			readonly errorMessage: string;
+			readonly countFailure?: boolean;
 		}) =>
 			withLease(
 				input,
@@ -388,6 +425,7 @@ const make = Effect.gen(function* () {
 						.update(boardOperations)
 						.set({
 							state: "failed",
+							...(input.countFailure ? { failure_count: sql`${boardOperations.failure_count} + 1` } : {}),
 							lease_token: null,
 							lease_owner: null,
 							lease_expires_at: null,
