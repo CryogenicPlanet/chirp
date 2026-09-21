@@ -1,3 +1,4 @@
+import { setupCodeServer } from "./setup-code-server.ts";
 import { logRedactor } from "./log-redaction.ts";
 import { logEvents } from "./log-events.ts";
 import { migrateAppStore } from "./app-store-layout.ts";
@@ -179,6 +180,11 @@ export const boot = Effect.fn("boot")(function* (options: ApplicationSource & { 
 	).pipe(Layer.provideMerge(sourceServices));
 
 	yield* Effect.gen(function* () {
+		yield* setupCodeServer(options.dataDirectory).pipe(
+			Effect.catchCause(() =>
+				Effect.logWarning("Operator setup-code service unavailable; public authentication remains available"),
+			),
+		);
 		const coordinator = yield* cutover(options, supervisor);
 		const reverts = yield* sourceReverts;
 		const restore = yield* databaseRestore(supervisor);

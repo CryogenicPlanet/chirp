@@ -124,6 +124,7 @@ const view = (
 const make = Effect.gen(function* () {
 	const boards = yield* Boards;
 	const secrets = yield* CloudSecrets;
+	const boardsDomain = yield* Config.String("BOARDS_DOMAIN").pipe(Config.withDefault("boards.chirp.wiki"));
 	const allowLocal = yield* Config.Boolean("CLOUD_POSTGRES_ALLOW_LOCAL").pipe(Config.withDefault(false));
 	const deployments = yield* Deployments;
 	const operations = yield* Operations;
@@ -182,6 +183,7 @@ const make = Effect.gen(function* () {
 							.map(({ board, deployment, operation }) => view(board, deployment ?? undefined, operation ?? undefined)),
 						truncated: rows.length > maxListedBoardsPerOwner,
 						capabilities: { postgres: secrets.enabled },
+						boards_domain: boardsDomain,
 					})),
 				),
 		get: (ownerId: string, boardId: string) =>
@@ -206,6 +208,7 @@ const make = Effect.gen(function* () {
 				const board = yield* boards.request({
 					owner_id: ownerId,
 					name,
+					...(input.slug === undefined ? {} : { slug: input.slug }),
 					storage_engine: storageEngine,
 					...(adminUrl ? { postgres_admin_url: adminUrl } : {}),
 					requested_by: ownerId,

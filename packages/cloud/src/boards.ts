@@ -1,10 +1,14 @@
 import { and, desc, eq, getTableColumns, isNull, sql } from "drizzle-orm";
 import { Context, Crypto, Data, Effect, Layer, Option, Schema } from "effect";
+import { isBoardSlug, suggestedBoardSlug } from "./board-slug.ts";
 import type { Board, RequestBoard } from "./board.ts";
 import { Database, type DatabaseClient } from "./database.ts";
 import { IdempotencyConflict } from "./operation.ts";
 import { CloudSecrets } from "./cloud-secrets.ts";
 import { boardOperations, boardPostgresSecrets, boards } from "./schema.ts";
+
+export class InvalidBoardSlug extends Data.TaggedError("InvalidBoardSlug")<{}> {}
+export class BoardSlugUnavailable extends Data.TaggedError("BoardSlugUnavailable")<{}> {}
 
 export const maxBoardsPerOwner = 5;
 export const maxListedBoardsPerOwner = 100;
@@ -14,6 +18,7 @@ const encodeRequestHash = Schema.encodeSync(
 	Schema.fromJsonString(
 		Schema.Struct({
 			owner_id: Schema.String,
+			slug: Schema.optional(Schema.String),
 			name: Schema.String,
 			storage_engine: Schema.String,
 			postgres_fingerprint: Schema.optional(Schema.String),
@@ -59,6 +64,7 @@ const make = Effect.gen(function* () {
 	return {
 		request: (input: RequestBoard) =>
 			Effect.gen(function* () {
+				if (input.slug !== undefined && !isBoardSlug(input.slug)) return yield* new InvalidBoardSlug();
 				const fingerprint = input.postgres_admin_url ? yield* secrets.fingerprint(input.postgres_admin_url) : undefined;
 				const requestHash = hex(
 					yield* crypto.digest(
@@ -66,6 +72,7 @@ const make = Effect.gen(function* () {
 						new TextEncoder().encode(
 							encodeRequestHash({
 								owner_id: input.owner_id,
+								...(input.slug === undefined ? {} : { slug: input.slug }),
 								name: input.name,
 								storage_engine: input.storage_engine,
 								...(fingerprint === undefined ? {} : { postgres_fingerprint: fingerprint }),
@@ -78,7 +85,7 @@ const make = Effect.gen(function* () {
 				const [id, operationId, slugBytes] = yield* Effect.all([
 					crypto.randomUUIDv7,
 					crypto.randomUUIDv7,
-					crypto.randomBytes(16),
+					crypto.randomBytes(3),
 				]);
 				const ciphertext = input.postgres_admin_url ? yield* secrets.prepare(id, input.postgres_admin_url) : undefined;
 				const create = database.transaction((transaction) =>
@@ -100,12 +107,13 @@ const make = Effect.gen(function* () {
 								id,
 								owner_id: input.owner_id,
 								name: input.name,
-								slug: hex(slugBytes),
+								slug: input.slug ?? suggestedBoardSlug(slugBytes),
 								storage_engine: input.storage_engine,
 							})
+							.onConflictDoNothing({ target: boards.slug })
 							.returning();
 						const board = created[0];
-						if (!board) return yield* Effect.die("Board insert returned no row");
+						if (!board) return yield* new BoardSlugUnavailable();
 						if (ciphertext !== undefined)
 							yield* transaction
 								.insert(boardPostgresSecrets)

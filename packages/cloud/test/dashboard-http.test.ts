@@ -25,12 +25,25 @@ const dependencies = () => ({
 		headers: renewedHeaders,
 	})),
 	getPublicOrigin: vi.fn(async () => "https://cloud.chirp.wiki"),
-	list: vi.fn(async () => ({ boards: [board], truncated: false, capabilities: { postgres: false } })),
+	list: vi.fn(async () => ({
+		boards: [board],
+		truncated: false,
+		capabilities: { postgres: false },
+		boards_domain: "boards.chirp.wiki",
+	})),
 	get: vi.fn(async () => Option.some(board)),
 	create: vi.fn(
 		async (): Promise<
 			| { readonly ok: true; readonly board: DashboardBoard }
-			| { readonly ok: false; readonly code: "idempotency_conflict" | "invalid_request" | "board_quota_exceeded" }
+			| {
+					readonly ok: false;
+					readonly code:
+						| "idempotency_conflict"
+						| "invalid_request"
+						| "board_quota_exceeded"
+						| "slug_unavailable"
+						| "invalid_slug";
+			  }
 		> => ({ ok: true, board }),
 	),
 });
@@ -55,7 +68,12 @@ describe("dashboard HTTP", () => {
 		expect(response.headers.get("cache-control")).toBe("no-store");
 		expect(response.headers.getSetCookie()).toEqual(["renewed=session; Path=/; HttpOnly"]);
 		expect(deps.list).toHaveBeenCalledWith("user-1");
-		expect(await response.json()).toEqual({ boards: [board], truncated: false, capabilities: { postgres: false } });
+		expect(await response.json()).toEqual({
+			boards: [board],
+			truncated: false,
+			capabilities: { postgres: false },
+			boards_domain: "boards.chirp.wiki",
+		});
 	});
 
 	test("returns the same 404 for missing and foreign board identifiers", async () => {
@@ -205,5 +223,27 @@ describe("dashboard HTTP", () => {
 		const unavailableResponse = await makeDashboardHttp(unavailable).list(request());
 		expect(unavailableResponse.status).toBe(503);
 		expect(await unavailableResponse.text()).not.toContain("secret database detail");
+	});
+	test("accepts explicit slugs and maps globally unavailable addresses to 409", async () => {
+		const deps = dependencies();
+		deps.create.mockResolvedValueOnce({ ok: false, code: "slug_unavailable" });
+		const response = await makeDashboardHttp(deps).create(
+			request("/api/boards", {
+				method: "POST",
+				headers: {
+					origin: "https://cloud.chirp.wiki",
+					"content-type": "application/json",
+					"idempotency-key": "slug-create",
+				},
+				body: JSON.stringify({ name: "Display name", slug: "quiet-robin" }),
+			}),
+		);
+		expect(response.status).toBe(409);
+		expect(await response.json()).toEqual({ error: { code: "slug_unavailable" } });
+		expect(deps.create).toHaveBeenCalledWith("user-1", {
+			name: "Display name",
+			slug: "quiet-robin",
+			idempotency_key: "slug-create",
+		});
 	});
 });

@@ -27,6 +27,10 @@ const cCollatedChar = customType<{
 	dataType: ({ length }) => `char(${length}) COLLATE "C"`,
 });
 
+const cCollatedSlug = customType<{ data: string }>({
+	dataType: () => 'varchar(32) COLLATE "C"',
+});
+
 export const cloudMigrations = pgTable("cloud_migrations", {
 	migration_id: integer().primaryKey(),
 	name: text().notNull(),
@@ -43,7 +47,7 @@ export const boards = pgTable(
 		id: uuid().primaryKey(),
 		owner_id: text().notNull(),
 		name: text().notNull(),
-		slug: cCollatedChar({ length: 32 }).notNull(),
+		slug: cCollatedSlug().notNull(),
 		storage_engine: text({ enum: storageEngines }).notNull(),
 		deletion_requested_at: timestamp({ withTimezone: true }),
 		deleted_at: timestamp({ withTimezone: true }),
@@ -52,7 +56,7 @@ export const boards = pgTable(
 	(table) => [
 		unique("boards_slug_unique").on(table.slug),
 		check("boards_name_nonempty", sql`length(btrim(${table.name})) > 0`),
-		check("boards_slug_hex", sql`${table.slug} ~ '^[0-9a-f]{32}$'`),
+		check("boards_slug_dns", sql`${table.slug} ~ '^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$' AND ${table.slug} !~ '^xn--'`),
 		check("boards_storage_engine_check", sql`${table.storage_engine} IN ('sqlite', 'postgres', 'mysql')`),
 		index("boards_owner_created").on(table.owner_id, table.created_at.desc(), table.id.desc()),
 	],

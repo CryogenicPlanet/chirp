@@ -56,7 +56,8 @@ const decodeCreateRequest = async (request: Request) => {
 		}
 		const body = decodeJson(new TextDecoder().decode(bytes));
 		if (typeof body !== "object" || body === null || Array.isArray(body)) return null;
-		if (Object.keys(body).some((key) => !["name", "storage_engine", "postgres_admin_url"].includes(key))) return null;
+		if (Object.keys(body).some((key) => !["name", "slug", "storage_engine", "postgres_admin_url"].includes(key)))
+			return null;
 		return Schema.decodeUnknownSync(DashboardCreateRequest)(body);
 	} catch {
 		return null;
@@ -102,7 +103,11 @@ export const makeDashboardHttp = (dependencies: DashboardHttpDependencies) => ({
 			});
 			if (!result.ok)
 				return error(
-					result.code === "idempotency_conflict" ? 409 : result.code === "board_quota_exceeded" ? 403 : 400,
+					result.code === "idempotency_conflict" || result.code === "slug_unavailable"
+						? 409
+						: result.code === "board_quota_exceeded"
+							? 403
+							: 400,
 					result.code,
 					session.headers,
 				);

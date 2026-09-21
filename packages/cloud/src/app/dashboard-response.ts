@@ -10,10 +10,20 @@ export const readDashboardResponse = async <A, I>(response: Response, schema: Sc
 		if (!response.ok) {
 			if (response.status === 401) throw new DashboardResponseError("Your session expired. Sign in again to continue.");
 			if (response.status === 404) throw new DashboardResponseError("This board was not found.");
-			if (response.status === 409)
-				throw new DashboardResponseError("That request key was already used for different board details.");
+			if (response.status === 409) {
+				const body = Schema.decodeUnknownSync(errorResponse)(await response.json());
+				throw new DashboardResponseError(
+					body.error.code === "slug_unavailable"
+						? "That board address is already taken. Choose another slug."
+						: "That request key was already used for different board details.",
+				);
+			}
 			if (response.status === 400 || response.status === 403) {
 				const body = Schema.decodeUnknownSync(errorResponse)(await response.json());
+				if (body.error.code === "invalid_slug")
+					throw new DashboardResponseError(
+						"Use 3–32 lowercase letters, numbers, or hyphens. Start and end with a letter or number.",
+					);
 				if (body.error.code === "board_quota_exceeded")
 					throw new DashboardResponseError("Your account has reached its board limit. Contact support for help.");
 				if (body.error.code === "invalid_postgres_url")

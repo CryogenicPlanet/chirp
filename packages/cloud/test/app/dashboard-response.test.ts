@@ -25,7 +25,7 @@ describe("dashboard response boundary", () => {
 		for (const [status, message] of [
 			[401, "Your session expired. Sign in again to continue."],
 			[404, "This board was not found."],
-			[409, "That request key was already used for different board details."],
+			[409, "Chirp Cloud is temporarily unavailable."],
 			[503, "Chirp Cloud is temporarily unavailable."],
 		] as const) {
 			const cause = await readDashboardResponse(
@@ -33,6 +33,14 @@ describe("dashboard response boundary", () => {
 				DashboardBoardResponse,
 			).catch((error: unknown) => error);
 			expect(dashboardErrorMessage(cause)).toBe(message);
+		}
+		for (const [code, message] of [
+			["slug_unavailable", "That board address is already taken. Choose another slug."],
+			["idempotency_conflict", "That request key was already used for different board details."],
+		]) {
+			await expect(
+				readDashboardResponse(Response.json({ error: { code } }, { status: 409 }), DashboardBoardResponse),
+			).rejects.toThrow(message);
 		}
 		await expect(
 			readDashboardResponse(

@@ -56,6 +56,7 @@ describe("Dashboard", () => {
 					boards: [],
 					truncated: false,
 					capabilities: { postgres: false },
+					boards_domain: "boards.chirp.wiki",
 				});
 				expect(Option.isSome(yield* dashboard.get("user-1", board.id))).toBe(true);
 				expect(Option.isNone(yield* dashboard.get("user-2", board.id))).toBe(true);
@@ -79,6 +80,7 @@ describe("Dashboard", () => {
 					boards: [],
 					truncated: false,
 					capabilities: { postgres: false },
+					boards_domain: "boards.chirp.wiki",
 				});
 			}),
 		);
@@ -152,6 +154,7 @@ describe("Dashboard", () => {
 					boards: [failed],
 					truncated: false,
 					capabilities: { postgres: false },
+					boards_domain: "boards.chirp.wiki",
 				});
 			}),
 		);
@@ -344,6 +347,7 @@ describe("Dashboard", () => {
 					boards: [ready],
 					truncated: false,
 					capabilities: { postgres: false },
+					boards_domain: "boards.chirp.wiki",
 				});
 			}),
 		);

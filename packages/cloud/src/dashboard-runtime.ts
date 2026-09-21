@@ -1,3 +1,8 @@
+import { Config } from "effect";
+import { FetchHttpClient } from "effect/unstable/http";
+import { BoardSetup, boardSetupLayer } from "./board-setup.ts";
+import { flyBoardApiLayer } from "./fly-board-api.ts";
+import { flySetupApiLayer, SetupCodeIssue } from "./fly-setup-api.ts";
 import { BoardDeletion, boardDeletionLayer, type DeleteBoard } from "./board-deletion.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Layer, ManagedRuntime } from "effect";
@@ -10,9 +15,30 @@ import { deploymentsLayer } from "./deployments.ts";
 import { Invitations, invitationsLayer } from "./invitations.ts";
 import { operationsLayer } from "./operations.ts";
 
+const setupLayer = Layer.unwrap(
+	Effect.all({
+		token: Config.Redacted("FLY_API_TOKEN").pipe(Config.option),
+		organization: Config.String("FLY_ORGANIZATION").pipe(Config.withDefault("")),
+	}).pipe(
+		Effect.map(({ token, organization }) =>
+			token._tag === "Some" && organization
+				? boardSetupLayer(organization).pipe(
+						Layer.provide(
+							Layer.mergeAll(flyBoardApiLayer({ token: token.value }), flySetupApiLayer({ token: token.value })).pipe(
+								Layer.provide(FetchHttpClient.layer),
+							),
+						),
+					)
+				: Layer.succeed(BoardSetup, {
+						issue: () => Effect.fail(new SetupCodeIssue({ code: "setup_code_unavailable" })),
+					}),
+		),
+	),
+);
+
 const dashboardRequestLayer = dashboardLayer.pipe(
 	Layer.provideMerge(
-		Layer.mergeAll(boardDeletionLayer, boardsLayer, deploymentsLayer, operationsLayer, invitationsLayer),
+		Layer.mergeAll(setupLayer, boardDeletionLayer, boardsLayer, deploymentsLayer, operationsLayer, invitationsLayer),
 	),
 	Layer.provideMerge(databaseLayer),
 	Layer.provideMerge(cloudSecretsLayer),
@@ -21,12 +47,22 @@ const dashboardRequestLayer = dashboardLayer.pipe(
 
 export const makeDashboardRequestRuntime = (
 	layer: Layer.Layer<
-		Dashboard | Invitations | BoardDeletion,
+		Dashboard | Invitations | BoardDeletion | BoardSetup,
 		Layer.Error<typeof dashboardRequestLayer>
 	> = dashboardRequestLayer,
 ) => {
 	const runtime = ManagedRuntime.make(layer);
 	return {
+		setupCode: (ownerId: string, boardId: string) =>
+			runtime.runPromise(
+				BoardSetup.use((setup) => setup.issue(ownerId, boardId)).pipe(
+					Effect.map((result) => ({ ok: true as const, ...result })),
+					Effect.catchTags({
+						BoardNotFound: () => Effect.succeed({ ok: false as const, code: "not_found" as const }),
+						SetupCodeIssue: (issue) => Effect.succeed({ ok: false as const, code: issue.code }),
+					}),
+				),
+			),
 		list: (ownerId: string) => runtime.runPromise(Dashboard.use((dashboard) => dashboard.list(ownerId))),
 		get: (ownerId: string, boardId: string) =>
 			runtime.runPromise(Dashboard.use((dashboard) => dashboard.get(ownerId, boardId))),
@@ -46,6 +82,8 @@ export const makeDashboardRequestRuntime = (
 										: ("invalid_postgres_url" as const),
 							}),
 						CloudSecretsError: () => Effect.succeed({ ok: false as const, code: "postgres_unavailable" as const }),
+						InvalidBoardSlug: () => Effect.succeed({ ok: false as const, code: "invalid_slug" as const }),
+						BoardSlugUnavailable: () => Effect.succeed({ ok: false as const, code: "slug_unavailable" as const }),
 						InvalidBoardName: () => Effect.succeed({ ok: false as const, code: "invalid_request" as const }),
 						IdempotencyConflict: () => Effect.succeed({ ok: false as const, code: "idempotency_conflict" as const }),
 						BoardQuotaExceeded: () => Effect.succeed({ ok: false as const, code: "board_quota_exceeded" as const }),

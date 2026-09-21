@@ -104,7 +104,11 @@ export function CloudApp({
 					<p className="mt-5 mb-8 max-w-md text-base leading-relaxed text-muted-foreground">
 						Bring conversations, context, and work together in a private board. We'll take care of getting it online.
 					</p>
-					<CreateBoardDialog first postgresAvailable={listing.capabilities?.postgres ?? false} />
+					<CreateBoardDialog
+						first
+						postgresAvailable={listing.capabilities?.postgres ?? false}
+						boardsDomain={listing.boards_domain}
+					/>
 					<div className="mt-16 grid w-full gap-6 border-t pt-8 text-left sm:grid-cols-3">
 						{[
 							{ icon: Layers3, title: "Create a board", text: "Name your space and choose where its data lives." },
@@ -134,7 +138,10 @@ export function CloudApp({
 							<h1 className="text-3xl tracking-[-0.035em]">Your boards</h1>
 							<p className="mt-2 text-muted-foreground">A shared space for every project.</p>
 						</div>
-						<CreateBoardDialog postgresAvailable={listing.capabilities?.postgres ?? false} />
+						<CreateBoardDialog
+							postgresAvailable={listing.capabilities?.postgres ?? false}
+							boardsDomain={listing.boards_domain}
+						/>
 					</header>
 					<div className="mb-4 flex items-center justify-between border-b pb-4">
 						<p className="flex items-center gap-2 font-medium">

@@ -31,7 +31,7 @@ describe("Cloud Drizzle schema", () => {
 				"board_operations_request_unique",
 				"board_operations_state_check",
 				"boards_name_nonempty",
-				"boards_slug_hex",
+				"boards_slug_dns",
 				"boards_slug_unique",
 				"boards_storage_engine_check",
 			]),
@@ -40,7 +40,7 @@ describe("Cloud Drizzle schema", () => {
 			getTableConfig(boards)
 				.columns.find(({ name }) => name === "slug")
 				?.getSQLType(),
-		).toBe('char(32) COLLATE "C"');
+		).toBe('varchar(32) COLLATE "C"');
 		expect(
 			getTableConfig(boardOperations)
 				.columns.find(({ name }) => name === "request_hash")

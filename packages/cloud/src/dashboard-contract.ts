@@ -59,11 +59,13 @@ export type DashboardBoard = typeof DashboardBoard.Type;
 export const DashboardBoardsResponse = Schema.Struct({
 	boards: Schema.Array(DashboardBoard),
 	truncated: Schema.Boolean,
+	boards_domain: Schema.optional(Schema.String),
 	capabilities: Schema.optional(Schema.Struct({ postgres: Schema.Boolean })),
 });
 export type DashboardBoardList = typeof DashboardBoardsResponse.Type;
 
 export const DashboardCreateRequest = Schema.Struct({
+	slug: Schema.optional(Schema.String),
 	name: Schema.String,
 	storage_engine: Schema.optional(Schema.Literals(["sqlite", "postgres"])),
 	postgres_admin_url: Schema.optional(Schema.String),

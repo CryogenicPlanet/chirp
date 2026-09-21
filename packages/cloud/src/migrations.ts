@@ -13,6 +13,7 @@ import * as provisioningRetryBudgets from "./migrations/0006_provisioning_retry_
 import * as boardDeletion from "./migrations/0007_board_deletion.ts";
 import * as invitationLimits from "./migrations/0008_invitation_limits.ts";
 import * as postgresSecrets from "./migrations/0009_board_postgres_secrets.ts";
+import * as readableBoardSlugs from "./migrations/0010_readable_board_slugs.ts";
 import { cloudMigrations } from "./schema.ts";
 
 export { CloudMigrationError } from "./migration-ledger.ts";
@@ -31,6 +32,7 @@ const migrations: ReadonlyArray<Migration> = [
 	boardDeletion,
 	invitationLimits,
 	postgresSecrets,
+	readableBoardSlugs,
 ];
 const receipts = Schema.decodeUnknownEffect(
 	Schema.Array(

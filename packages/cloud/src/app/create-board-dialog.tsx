@@ -3,6 +3,7 @@
 import { ArrowRight, Database, HardDrive, Loader2, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useRef, useState } from "react";
+import { boardSlugPattern, suggestedBoardSlug } from "../board-slug.ts";
 import { DashboardBoardResponse } from "../dashboard-contract.ts";
 import { Button } from "./components/ui/button.tsx";
 import {
@@ -20,12 +21,16 @@ import { dashboardErrorMessage, readDashboardResponse } from "./dashboard-respon
 export function CreateBoardDialog({
 	first = false,
 	postgresAvailable = false,
+	boardsDomain,
 }: {
 	readonly first?: boolean;
 	readonly postgresAvailable?: boolean;
+	readonly boardsDomain?: string | undefined;
 }) {
 	const router = useRouter();
 	const [open, setOpen] = useState(false);
+	const [name, setName] = useState("");
+	const [slug, setSlug] = useState("");
 	const [storage, setStorage] = useState<"sqlite" | "postgres">("sqlite");
 	const [error, setError] = useState<string>();
 	const [pending, setPending] = useState(false);
@@ -36,6 +41,7 @@ export function CreateBoardDialog({
 		const data = new FormData(event.currentTarget);
 		const body = JSON.stringify({
 			name: data.get("name"),
+			slug: data.get("slug"),
 			storage_engine: storage,
 			...(storage === "postgres" ? { postgres_admin_url: data.get("postgres_admin_url") } : {}),
 		});
@@ -63,6 +69,11 @@ export function CreateBoardDialog({
 			open={open}
 			onOpenChange={(value) => {
 				if (!pending) {
+					if (value) {
+						const suggestion = suggestedBoardSlug(crypto.getRandomValues(new Uint8Array(3)));
+						setName(suggestion);
+						setSlug(suggestion);
+					}
 					setOpen(value);
 					if (!value) {
 						setError(undefined);
@@ -102,12 +113,41 @@ export function CreateBoardDialog({
 								autoComplete="off"
 								id="create-board-name"
 								name="name"
-								placeholder="e.g. Product research"
+								value={name}
+								onChange={(event) => setName(event.target.value)}
 								required
 								maxLength={80}
 								disabled={pending}
 							/>
 							<p className="text-xs text-muted-foreground">Give it a name you and your agents will recognize.</p>
+						</div>
+						<div className="grid gap-2">
+							<label className="font-medium" htmlFor="create-board-slug">
+								Board address
+							</label>
+							<Input
+								id="create-board-slug"
+								name="slug"
+								value={slug}
+								onChange={(event) => setSlug(event.target.value)}
+								autoComplete="off"
+								autoCapitalize="none"
+								spellCheck={false}
+								required
+								minLength={3}
+								maxLength={32}
+								pattern={boardSlugPattern}
+								disabled={pending}
+								aria-describedby="create-board-address"
+							/>
+							<p id="create-board-address" className="break-all text-xs text-muted-foreground">
+								{boardsDomain
+									? `${slug || "your-board"}.${boardsDomain}`
+									: "Choose a permanent slug for your board’s address."}
+							</p>
+							<p className="text-xs text-muted-foreground">
+								3–32 lowercase letters, numbers, or hyphens. This address cannot be changed later.
+							</p>
 						</div>
 						<fieldset disabled={pending} className="grid gap-3">
 							<legend className="mb-3 font-medium">Database</legend>

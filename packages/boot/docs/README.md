@@ -36,3 +36,23 @@ SQLite is the default. PostgreSQL/MySQL use existing databases and separate cred
 ## Source map
 
 Start with [index.ts](../src/index.ts) for wiring, [supervisor.ts](../src/supervisor.ts) for child lifetime and [application.ts](../src/application.ts) for seed and snapshot selection. Recovery changes need failure, restart and durability tests in [test/](../test/), alongside `bun run check`.
+
+## Cloud first setup
+
+The immutable image bundles `packages/boot/dist/setup-code.js`. The Cloud owner can invoke
+this fixed command through the provider's operator exec capability to rotate the first-setup
+code. Its private Unix socket is `DATA_DIR/.boot-operator/setup.sock`: the directory belongs
+to boot with mode `0700`, and the socket is `0600`. The app and dependency build users cannot
+connect. This is not a public HTTP route or a shared Cloud credential. Development under one
+OS user is not an isolation boundary.
+
+The command prints only JSON: `{ "code": "...", "expires_at": 1234567890000 }` on success,
+where expiry is epoch milliseconds; `{ "error": "setup_closed" }` once any passkey exists;
+or `{ "error": "setup_code_unavailable" }` with exit status 1 if unavailable. Success and
+setup-closed results use exit status 0. Images predating this command are unsupported and
+must be updated; callers must not fall back to scraping logs.
+
+Each generated code lasts 15 minutes, replaces previous codes and pending setup challenges,
+and is never logged by boot. Both registration start and finish enforce the deadline.
+It cannot reopen setup even with `REOPEN_SETUP=1`; existing passkey recovery remains the
+separate operator workflow. Self-hosted startup codes in stdout retain their existing lifetime.

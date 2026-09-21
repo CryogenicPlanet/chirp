@@ -483,6 +483,12 @@ const make = (settings: ProvisioningSettings) =>
 								}
 								case "storage_configuration_verified": {
 									let app = yield* observed(fly.getApp(deployment.app_name), beforeProvider);
+									if (Option.isSome(app) && deployment.app_id === null && !pending.has("app_create"))
+										return yield* issue(
+											"provider_drift",
+											false,
+											"A Fly App already uses this board address; refusing to adopt an untracked App",
+										);
 									let creation: Result.Result<void, FlyApiError> | undefined;
 									if (Option.isNone(app)) {
 										if (pending.has("app_create"))
@@ -501,6 +507,18 @@ const make = (settings: ProvisioningSettings) =>
 												network: deployment.network_name,
 											})
 											.pipe(Effect.result);
+										if (
+											Result.isFailure(creation) &&
+											creation.failure.reason === "status" &&
+											creation.failure.status === 409
+										) {
+											yield* journal.clear("app_create");
+											return yield* issue(
+												"provider_drift",
+												false,
+												"Fly App creation conflicted with an existing App; refusing to adopt it",
+											);
+										}
 										if (Result.isFailure(creation) && rejected(creation.failure)) {
 											yield* journal.clear("app_create");
 											return yield* issue("provider_rejected", false, "Fly rejected the App creation");

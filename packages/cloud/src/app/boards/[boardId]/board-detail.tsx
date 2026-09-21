@@ -8,6 +8,7 @@ import { dashboardErrorMessage, readDashboardResponse } from "../../dashboard-re
 import { type CloudClientUser, DashboardShell } from "../../dashboard-shell.tsx";
 import { pollDashboardBoard } from "../../poll-dashboard-board.ts";
 import { DeleteBoardDialog } from "../../delete-board-dialog.tsx";
+import { BoardSetupPanel } from "../../board-setup-panel.tsx";
 import { BoardProgressPanel } from "../../board-progress-panel.tsx";
 import { boardStatusBanner } from "../../board-status-banner.ts";
 import { StatusBadge } from "../../status-badge.tsx";
@@ -178,6 +179,9 @@ export function BoardDetail({
 							</div>
 						</div>
 					</header>
+					{board.phase === "ready" && board.hostname ? (
+						<BoardSetupPanel key={board.id} boardId={board.id} hostname={board.hostname} />
+					) : null}
 					{banner ? (
 						<div
 							role="alert"

@@ -14,6 +14,7 @@ export const Board = Schema.Struct({
 export type Board = typeof Board.Type;
 
 export const RequestBoard = Schema.Struct({
+	slug: Schema.optional(Schema.String),
 	owner_id: Schema.String,
 	name: Schema.String,
 	storage_engine: StorageEngine,

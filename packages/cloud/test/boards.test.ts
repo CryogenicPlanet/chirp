@@ -4,7 +4,7 @@ import { describe, expect, test } from "vitest";
 import { Boards } from "../src/boards.ts";
 import { Database } from "../src/database.ts";
 import { migrateCloudDatabase } from "../src/migrations.ts";
-import { boardOperations } from "../src/schema.ts";
+import { boardOperations, boards as boardTable } from "../src/schema.ts";
 import { runFresh } from "./fixture.ts";
 
 const request = {
@@ -23,7 +23,7 @@ describe("Boards", () => {
 				const boards = yield* Boards;
 				const database = yield* Database;
 				const board = yield* boards.request(request);
-				expect(board.slug).toMatch(/^[0-9a-f]{32}$/);
+				expect(board.slug).toMatch(/^[a-z]+-[a-z]+-[0-9a-f]{4}$/);
 				expect(
 					yield* database
 						.select({
@@ -112,7 +112,7 @@ describe("Boards", () => {
 		);
 	});
 
-	test("generates a unique opaque slug for each board", async () => {
+	test("generates a unique readable slug for each board", async () => {
 		await runFresh(
 			Effect.gen(function* () {
 				yield* migrateCloudDatabase;
@@ -128,6 +128,71 @@ describe("Boards", () => {
 						}),
 				);
 				expect(new Set(created.map(({ slug }) => slug)).size).toBe(created.length);
+			}),
+		);
+	});
+	test("reserves custom slugs globally including deleted boards, and fingerprints slug changes", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				const boards = yield* Boards;
+				const input = { ...request, slug: "quiet-robin" };
+				const board = yield* boards.request(input);
+				expect(board.slug).toBe("quiet-robin");
+				expect((yield* boards.request(input)).id).toBe(board.id);
+				const changed = yield* boards.request({ ...input, slug: "bright-lark" }).pipe(Effect.flip);
+				expect(changed._tag).toBe("IdempotencyConflict");
+				yield* (yield* Database).update(boardTable).set({ deleted_at: new Date() }).where(eq(boardTable.id, board.id));
+				const unavailable = yield* boards
+					.request({ ...input, owner_id: "other", requested_by: "other" })
+					.pipe(Effect.flip);
+				expect(unavailable._tag).toBe("BoardSlugUnavailable");
+			}),
+		);
+	});
+	test("concurrent owners cannot claim the same address", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				const boards = yield* Boards;
+				const results = yield* Effect.forEach(
+					["one", "two"],
+					(owner) =>
+						boards
+							.request({ ...request, owner_id: owner, requested_by: owner, slug: "shared-robin" })
+							.pipe(Effect.match({ onSuccess: () => "created", onFailure: (error) => error._tag })),
+					{ concurrency: "unbounded" },
+				);
+				expect(results.sort()).toEqual(["BoardSlugUnavailable", "created"]);
+			}),
+		);
+	});
+	test("rejects invalid slugs and accepts both bounds without changing the name", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				const boards = yield* Boards;
+				for (const slug of [
+					"",
+					"ab",
+					"Aaa",
+					"a_b",
+					"-aaa",
+					"aaa-",
+					"a.b",
+					"a/b",
+					"xn--a",
+					"a".repeat(33),
+					" abc",
+					"abc ",
+				]) {
+					expect((yield* boards.request({ ...request, slug }).pipe(Effect.flip))._tag).toBe("InvalidBoardSlug");
+				}
+				for (const slug of ["abc", "a".repeat(32)]) {
+					const board = yield* boards.request({ ...request, slug, idempotency_key: slug });
+					expect(board.name).toBe(request.name);
+					expect(board.slug).toBe(slug);
+				}
 			}),
 		);
 	});

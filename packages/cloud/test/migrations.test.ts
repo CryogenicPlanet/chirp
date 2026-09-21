@@ -34,6 +34,7 @@ describe("cloud migrations", () => {
 					{ migration_id: 7, name: "board_deletion", compatibleSchemaVersions: [] },
 					{ migration_id: 8, name: "invitation_limits", compatibleSchemaVersions: [] },
 					{ migration_id: 9, name: "board_postgres_secrets", compatibleSchemaVersions: [] },
+					{ migration_id: 10, name: "readable_board_slugs", compatibleSchemaVersions: [] },
 				]);
 			}),
 		);
@@ -59,7 +60,7 @@ describe("cloud migrations", () => {
 				yield* migrateCloudDatabase;
 				yield* database
 					.insert(cloudMigrations)
-					.values({ migration_id: 10, name: "unknown", compatible_schema_versions: [] });
+					.values({ migration_id: 11, name: "unknown", compatible_schema_versions: [] });
 				const result = yield* Effect.exit(migrateCloudDatabase);
 				expect(Exit.isFailure(result)).toBe(true);
 			}),
@@ -166,6 +167,18 @@ describe("cloud migrations", () => {
 					WHERE table_schema = current_schema() AND table_name IN ('boards', 'board_operations')`;
 				expect(tables).toEqual([]);
 				yield* client`DROP FUNCTION reject_cloud_receipt() CASCADE`;
+			}),
+		);
+	});
+	test("preserves legacy names and hex addresses when enabling readable slugs", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				yield* runCloudMigrations([foundation]);
+				const sql = yield* SqlClient.SqlClient;
+				yield* sql`INSERT INTO boards (id, owner_id, name, slug, storage_engine)
+    VALUES ('00000000-0000-4000-8000-000000000001', 'owner', 'Original name', ${"a".repeat(32)}, 'sqlite')`;
+				yield* migrateCloudDatabase;
+				expect(yield* sql`SELECT name, slug FROM boards`).toEqual([{ name: "Original name", slug: "a".repeat(32) }]);
 			}),
 		);
 	});

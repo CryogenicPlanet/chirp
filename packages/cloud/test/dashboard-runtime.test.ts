@@ -1,3 +1,4 @@
+import { BoardSetup } from "../src/board-setup.ts";
 import { BoardDeletion } from "../src/board-deletion.ts";
 import { EffectDrizzleQueryError } from "drizzle-orm/effect-core/errors";
 import { Effect, Layer, Option } from "effect";
@@ -44,7 +45,13 @@ describe("dashboard request runtime", () => {
 					Effect.sync(() => {
 						builds += 1;
 						return Dashboard.of({
-							list: () => Effect.succeed({ boards: [board], truncated: false, capabilities: { postgres: false } }),
+							list: () =>
+								Effect.succeed({
+									boards: [board],
+									truncated: false,
+									capabilities: { postgres: false },
+									boards_domain: "boards.chirp.wiki",
+								}),
 							get: () => Effect.succeedSome(board),
 							create: () => Effect.succeed(board),
 						});
@@ -59,6 +66,7 @@ describe("dashboard request runtime", () => {
 				),
 			).pipe(
 				Layer.merge(invitationsStub),
+				Layer.merge(Layer.succeed(BoardSetup, { issue: () => Effect.die("Unexpected setup request") })),
 				Layer.merge(
 					Layer.succeed(BoardDeletion, BoardDeletion.of({ request: () => Effect.succeed({ deleted: true }) })),
 				),
@@ -104,6 +112,7 @@ describe("dashboard request runtime", () => {
 					}),
 				).pipe(
 					Layer.merge(invitationsStub),
+					Layer.merge(Layer.succeed(BoardSetup, { issue: () => Effect.die("Unexpected setup request") })),
 					Layer.merge(
 						Layer.succeed(BoardDeletion, BoardDeletion.of({ request: () => Effect.succeed({ deleted: true }) })),
 					),
