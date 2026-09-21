@@ -122,6 +122,7 @@ jobs:
         env:
           CLOUD_DATABASE_URL: postgres://chirp:chirp@127.0.0.1:5432/chirp_cloud
           CLOUD_TEST_DATABASE_URL: postgres://chirp:chirp@127.0.0.1:5432/chirp_cloud
+          POSTGRES_ADMIN_TEST_URL: postgres://chirp:chirp@127.0.0.1:5432/chirp_cloud
         run: bun run --filter @comms/cloud test
       - name: Build full-stack cloud application
         env:

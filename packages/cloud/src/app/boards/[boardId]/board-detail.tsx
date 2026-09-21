@@ -102,7 +102,10 @@ export function BoardDetail({
 	return (
 		<DashboardShell user={sessionUser}>
 			{error ? (
-				<div className="mb-3 rounded-md border border-destructive-border bg-destructive-surface px-4 py-3.5 text-xs leading-[1.55] text-destructive">
+				<div
+					role="alert"
+					className="mb-3 rounded-md border border-destructive-border bg-destructive-surface px-4 py-3.5 text-xs leading-[1.55] text-destructive"
+				>
 					<p className="m-0">{error}</p>
 					<button
 						className="mt-2.5 inline-flex min-h-[30px] cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-input bg-card px-2.5 py-1.5 text-xs font-medium leading-none text-foreground hover:border-primary hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
@@ -137,7 +140,12 @@ export function BoardDetail({
 									{board.name}
 								</h1>
 								<p className="mt-2 mb-0 leading-normal text-muted-foreground [overflow-wrap:anywhere]">
-									{board.hostname ?? "Your board address will appear when setup is complete."}
+									{board.hostname ??
+										(board.phase === "deleting"
+											? "This board’s hosting resources are being removed."
+											: board.phase === "deletion_blocked"
+												? "Deletion needs administrator attention before it can continue."
+												: "Your board address will appear when setup is complete.")}
 								</p>
 							</div>
 							<div className="flex flex-wrap items-center justify-start gap-2 min-[761px]:justify-end">
@@ -164,6 +172,7 @@ export function BoardDetail({
 					</header>
 					{board.error ? (
 						<div
+							role="alert"
 							className={`mb-3 rounded-md border px-4 py-3.5 text-xs leading-[1.55] ${board.error.retrying ? "border-warning-border bg-warning-surface text-warning" : "border-destructive-border bg-destructive-surface text-destructive"}`}
 						>
 							<p className="mt-0 mb-[5px] font-mono text-[11px] font-medium tracking-[0.08em] uppercase">

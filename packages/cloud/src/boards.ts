@@ -107,7 +107,9 @@ const make = Effect.gen(function* () {
 						const board = created[0];
 						if (!board) return yield* Effect.die("Board insert returned no row");
 						if (ciphertext !== undefined)
-							yield* transaction.insert(boardPostgresSecrets).values({ board_id: id, ciphertext });
+							yield* transaction
+								.insert(boardPostgresSecrets)
+								.values({ board_id: id, bootstrap_ciphertext: ciphertext });
 						yield* transaction.insert(boardOperations).values({
 							id: operationId,
 							board_id: id,

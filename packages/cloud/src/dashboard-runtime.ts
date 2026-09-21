@@ -68,6 +68,7 @@ export const makeDashboardRequestRuntime = (
 							Effect.succeed({ ok: false as const, code: "confirmation_mismatch" as const }),
 						BoardDeletionUnsafe: () =>
 							Effect.succeed({ ok: false as const, code: "provider_ownership_unverified" as const }),
+						BoardDeletionFailed: () => Effect.succeed({ ok: false as const, code: "deletion_failed" as const }),
 						OperationAlreadyActive: () => Effect.succeed({ ok: false as const, code: "operation_active" as const }),
 						IdempotencyConflict: () => Effect.succeed({ ok: false as const, code: "idempotency_conflict" as const }),
 					}),

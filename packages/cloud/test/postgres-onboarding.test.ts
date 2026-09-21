@@ -1,7 +1,8 @@
 import { Effect, Option, Redacted } from "effect";
 import { describe, expect, test, vi } from "vitest";
 import { eq } from "drizzle-orm";
-import { PostgresStorage } from "../src/postgres-storage.ts";
+import { Client } from "pg";
+import { PostgresStorage, postgresStorageLayerWithLocal } from "../src/postgres-storage.ts";
 import { FlySecrets, FlySecretsError } from "../src/fly-secrets.ts";
 import { Operations } from "../src/operations.ts";
 import { Provisioner } from "../src/provisioner.ts";
@@ -10,8 +11,10 @@ import { Dashboard } from "../src/dashboard.ts";
 import { Database } from "../src/database.ts";
 import { CloudSecrets } from "../src/cloud-secrets.ts";
 import { migrateCloudDatabase } from "../src/migrations.ts";
+import { PostgresBootstrapError } from "../src/postgres-bootstrap.ts";
 import { boardOperations, boardPostgresSecrets } from "../src/schema.ts";
-import { runFresh } from "./fixture.ts";
+import { Boards } from "../src/boards.ts";
+import { realPostgres, runFresh } from "./fixture.ts";
 
 const url = "postgresql://admin:example-private-password@database.example.com/main?sslmode=require";
 const input = {
@@ -46,7 +49,11 @@ describe("Postgres onboarding persistence", () => {
 				expect(JSON.stringify(operations)).not.toContain(url);
 				const row = rows[0];
 				if (!row) throw new Error("missing encrypted record");
-				const payload = Redacted.value(yield* (yield* CloudSecrets).decrypt(board.id, row.ciphertext));
+				expect(row.runtime_ciphertext).toBe(null);
+				if (!row.bootstrap_ciphertext) throw new Error("missing bootstrap credentials");
+				const payload = Redacted.value(
+					yield* (yield* CloudSecrets).decryptBootstrap(board.id, row.bootstrap_ciphertext),
+				);
 				expect(payload.adminUrl).toBe(url);
 				expect(payload.bootPassword).not.toBe(payload.appPassword);
 			}),
@@ -108,16 +115,28 @@ test("retries secret upload durably and never leaks URLs to Machine configuratio
 			yield* migrateCloudDatabase;
 			const board = yield* (yield* Dashboard).create("owner", input);
 			const database = yield* Database;
+			const cloudSecrets = yield* CloudSecrets;
 			// Bootstrap DDL is verified by the isolated live-Postgres suite. Start at its durable checkpoint.
 			const storage = yield* PostgresStorage;
 			const prepared = {
 				...storage,
 				prepare: (boardId: string) =>
-					database
-						.update(boardPostgresSecrets)
-						.set({ prepared: true })
-						.where(eq(boardPostgresSecrets.board_id, boardId))
-						.pipe(Effect.asVoid),
+					Effect.gen(function* () {
+						const runtimeCiphertext = yield* cloudSecrets.prepareRuntime(boardId, {
+							bootUrl: "postgres://boot:boot-password@database.example/boot",
+							appUrl: "postgres://app:app-password@database.example/app",
+							tls: true,
+						});
+						yield* database
+							.update(boardPostgresSecrets)
+							.set({
+								prepared: true,
+								bootstrap_ciphertext: null,
+								runtime_ciphertext: runtimeCiphertext,
+							})
+							.where(eq(boardPostgresSecrets.board_id, boardId));
+						return undefined;
+					}),
 			};
 			const run = Effect.gen(function* () {
 				const provisioner = yield* Provisioner;
@@ -125,6 +144,8 @@ test("retries secret upload durably and never leaks URLs to Machine configuratio
 				expect(provider.resources().machines).toBe(0);
 				const row = (yield* database.select().from(boardPostgresSecrets))[0];
 				expect(row?.prepared).toBe(true);
+				expect(row?.bootstrap_ciphertext).toBe(null);
+				expect(row?.runtime_ciphertext).not.toBe(null);
 				expect(row?.fly_secrets_version).toBe(null);
 				expect(yield* provisioner.run(yield* nextClaim("worker"), "worker")).toBe("succeeded");
 				expect(stageCalls).toBe(2);
@@ -143,3 +164,148 @@ test("retries secret upload durably and never leaks URLs to Machine configuratio
 		Redacted.make("e".repeat(64)),
 	);
 });
+
+test("retries app propagation misses but blocks definite Fly secret rejection", async () => {
+	for (const [status, expected] of [
+		[404, "requeued"],
+		[401, "blocked"],
+	] as const) {
+		const provider = makeFakeProvider();
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				const board = yield* (yield* Dashboard).create("owner", input);
+				const database = yield* Database;
+				const cloudSecrets = yield* CloudSecrets;
+				const storage = yield* PostgresStorage;
+				const prepared = {
+					...storage,
+					prepare: (boardId: string) =>
+						Effect.gen(function* () {
+							const runtimeCiphertext = yield* cloudSecrets.prepareRuntime(boardId, {
+								bootUrl: "postgres://boot:boot-password@database.example/boot",
+								appUrl: "postgres://app:app-password@database.example/app",
+								tls: true,
+							});
+							yield* database
+								.update(boardPostgresSecrets)
+								.set({
+									prepared: true,
+									bootstrap_ciphertext: null,
+									runtime_ciphertext: runtimeCiphertext,
+								})
+								.where(eq(boardPostgresSecrets.board_id, boardId));
+							return undefined;
+						}),
+				};
+				const operation = yield* nextClaim("worker");
+				const outcome = yield* Provisioner.use((service) => service.run(operation, "worker")).pipe(
+					Effect.provide(provisionerFor(provider)),
+					Effect.provideService(PostgresStorage, prepared),
+					Effect.provideService(FlySecrets, {
+						ensure: () => Effect.fail(new FlySecretsError({ reason: "status", status })),
+					}),
+				);
+				expect(outcome).toBe(expected);
+				expect(provider.resources().machines).toBe(0);
+				expect(Option.getOrThrow(yield* (yield* Operations).latest(board.id, "provision"))).toMatchObject({
+					state: status === 404 ? "queued" : "failed",
+					failure_count: status === 404 ? 1 : 0,
+					last_error_code: "postgres_secrets_failed",
+				});
+			}),
+			Redacted.make("e".repeat(64)),
+		);
+	}
+});
+
+test("retries transient PostgreSQL bootstrap failures and blocks permanent ones", async () => {
+	for (const [reason, expected] of [
+		["transient_failure", "requeued"],
+		["bootstrap_failed", "blocked"],
+	] as const) {
+		const provider = makeFakeProvider();
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				yield* (yield* Dashboard).create("owner", { ...input, idempotency_key: `create-${reason}` });
+				const storage = yield* PostgresStorage;
+				const operation = yield* nextClaim(`worker-${reason}`);
+				const outcome = yield* Provisioner.use((service) => service.run(operation, `worker-${reason}`)).pipe(
+					Effect.provide(provisionerFor(provider)),
+					Effect.provideService(PostgresStorage, {
+						...storage,
+						prepare: () => Effect.fail(new PostgresBootstrapError({ reason })),
+					}),
+				);
+				expect(outcome).toBe(expected);
+			}),
+			Redacted.make("e".repeat(64)),
+		);
+	}
+});
+
+const adminTestUrl = process.env["POSTGRES_ADMIN_TEST_URL"];
+test.skipIf(!adminTestUrl || !realPostgres)(
+	"purges the database administrator credential at the fenced bootstrap checkpoint",
+	async () => {
+		if (!adminTestUrl) return;
+		const localUrl = new URL(adminTestUrl);
+		localUrl.searchParams.set("sslmode", "disable");
+		let names: { readonly boot: string; readonly app: string } | undefined;
+		try {
+			names = await runFresh(
+				Effect.gen(function* () {
+					yield* migrateCloudDatabase;
+					const board = yield* (yield* Boards).request({
+						owner_id: "owner",
+						name: "Live Postgres board",
+						storage_engine: "postgres",
+						postgres_admin_url: Redacted.make(localUrl.toString()),
+						requested_by: "owner",
+						idempotency_key: "live-postgres",
+					});
+					const operations = yield* Operations;
+					const operation = Option.getOrThrow(yield* operations.claim("bootstrap-worker", 90_000, "provision"));
+					if (!operation.lease_token) throw new Error("missing bootstrap lease");
+					const storage = yield* PostgresStorage;
+					const lease = {
+						operationId: operation.id,
+						leaseToken: operation.lease_token,
+						workerId: "bootstrap-worker",
+					};
+					yield* storage.prepare(board.id, lease);
+					yield* storage.prepare(board.id, lease);
+					const row = (yield* (yield* Database).select().from(boardPostgresSecrets))[0];
+					expect(row).toMatchObject({ prepared: true, bootstrap_ciphertext: null });
+					if (!row?.runtime_ciphertext) throw new Error("missing runtime credentials");
+					const payload = Redacted.value(yield* (yield* CloudSecrets).decryptRuntime(board.id, row.runtime_ciphertext));
+					const generated = {
+						boot: new URL(payload.bootUrl).username,
+						app: new URL(payload.appUrl).username,
+					};
+					names = generated;
+					for (const runtimeUrl of [payload.bootUrl, payload.appUrl]) {
+						const parsed = new URL(runtimeUrl);
+						expect(parsed.username).not.toBe(localUrl.username);
+						expect(parsed.password).not.toBe(localUrl.password);
+					}
+					return generated;
+				}).pipe(Effect.provide(postgresStorageLayerWithLocal(true))),
+				Redacted.make("e".repeat(64)),
+			);
+		} finally {
+			if (names) {
+				const admin = new Client({ connectionString: adminTestUrl });
+				await admin.connect();
+				try {
+					for (const name of [names.app, names.boot]) await admin.query(`DROP DATABASE IF EXISTS "${name}"`);
+					for (const name of [names.app, names.boot]) await admin.query(`DROP ROLE IF EXISTS "${name}"`);
+				} finally {
+					await admin.end();
+				}
+			}
+		}
+	},
+	30_000,
+);

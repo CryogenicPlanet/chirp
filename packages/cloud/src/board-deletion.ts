@@ -6,6 +6,7 @@ import { boardDeployments, boardOperations, boardPostgresSecrets, boardRoutes, b
 
 export class BoardConfirmationMismatch extends Data.TaggedError("BoardConfirmationMismatch")<{}> {}
 export class BoardDeletionUnsafe extends Data.TaggedError("BoardDeletionUnsafe")<{}> {}
+export class BoardDeletionFailed extends Data.TaggedError("BoardDeletionFailed")<{}> {}
 export interface DeleteBoard {
 	readonly confirmation_name: string;
 	readonly idempotency_key: string;
@@ -66,7 +67,8 @@ const make = Effect.gen(function* () {
 					if (replay) {
 						if (replay.request_hash !== requestHash || replay.kind !== "delete")
 							return yield* new IdempotencyConflict({ requestedBy: ownerId, idempotencyKey: input.idempotency_key });
-						return { deleted: board.deleted_at !== null };
+						if (replay.state === "failed") return yield* new BoardDeletionFailed();
+						return { deleted: replay.state === "succeeded" };
 					}
 					if (board.deleted_at) return yield* new BoardNotFound({ boardId });
 					// Lock the same rows as claim before cancelling anything. A claim that wins makes this conflict.

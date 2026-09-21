@@ -45,6 +45,7 @@ export function DeleteBoardDialog({
 				body: JSON.stringify({ confirmation_name: name }),
 			});
 			if (!response.ok) {
+				if (response.status === 409) requestKey.current = undefined;
 				setError(
 					response.status === 409
 						? "This board can't be deleted right now. Another operation may be running, or its resources need verification. Refresh and try again."
@@ -81,6 +82,7 @@ export function DeleteBoardDialog({
 					if (!value) {
 						setName("");
 						setError(undefined);
+						requestKey.current = undefined;
 					}
 				}
 			}}
@@ -99,7 +101,7 @@ export function DeleteBoardDialog({
 							: "Delete board"}
 				</Button>
 			</AlertDialogTrigger>
-			<AlertDialogContent className="bg-card">
+			<AlertDialogContent className="max-h-[90svh] overflow-y-auto bg-card">
 				<AlertDialogHeader>
 					<div className="mb-2 flex size-10 items-center justify-center rounded-xl bg-destructive/10 text-destructive">
 						<Trash2 className="size-5" />

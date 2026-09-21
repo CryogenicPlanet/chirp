@@ -10,6 +10,7 @@ export class PostgresBootstrapError extends Data.TaggedError("PostgresBootstrapE
 		| "unsafe_endpoint"
 		| "unsupported_channel_binding"
 		| "connection_failed"
+		| "transient_failure"
 		| "resource_conflict"
 		| "bootstrap_failed";
 }> {}
@@ -23,6 +24,29 @@ export interface PostgresBootstrapInput {
 }
 
 const invalid = () => new PostgresBootstrapError({ reason: "invalid_url" });
+const transientCodes: ReadonlyArray<string> = [
+	"40001",
+	"40P01",
+	"55P03",
+	"57014",
+	"57P01",
+	"57P02",
+	"57P03",
+	"53300",
+	"ECONNRESET",
+	"EPIPE",
+	"ETIMEDOUT",
+];
+export const isTransientPostgresFailure = (cause: unknown) => {
+	const code = cause instanceof Error ? Reflect.get(cause, "code") : undefined;
+	return (
+		(typeof code === "string" && (code.startsWith("08") || transientCodes.some((candidate) => candidate === code))) ||
+		(cause instanceof Error &&
+			/(?:connection (?:ended|terminated)|query read timeout|socket hang up)/i.test(cause.message))
+	);
+};
+const statementFailure = (cause: unknown) =>
+	new PostgresBootstrapError({ reason: isTransientPostgresFailure(cause) ? "transient_failure" : "bootstrap_failed" });
 
 export const isAllowedPostgresAddress = (address: string, allowLocal = false): boolean => {
 	if (allowLocal && (address === "127.0.0.1" || address === "::1")) return true;
@@ -169,7 +193,7 @@ export const bootstrapPostgres = (input: PostgresBootstrapInput) =>
 			const run = (client: Client, statement: string, values: readonly string[] = []) =>
 				Effect.tryPromise({
 					try: () => client.query(statement, [...values]),
-					catch: () => new PostgresBootstrapError({ reason: "bootstrap_failed" }),
+					catch: statementFailure,
 				});
 			// A dedicated connection holds this lock across nontransactional CREATE DATABASE calls.
 			yield* run(admin, "SELECT pg_advisory_lock(hashtextextended($1, 0))", [`chirp-bootstrap:${input.boardId}`]);
@@ -190,7 +214,7 @@ export const bootstrapPostgres = (input: PostgresBootstrapInput) =>
 							"SELECT shobj_description(oid, 'pg_authid') AS marker, rolcanlogin AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls AND NOT EXISTS (SELECT 1 FROM pg_auth_members WHERE member=pg_roles.oid) AS safe FROM pg_roles WHERE rolname=$1",
 							[name],
 						),
-					catch: () => new PostgresBootstrapError({ reason: "bootstrap_failed" }),
+					catch: statementFailure,
 				});
 				if (rows.rows.length) {
 					if (rows.rows[0]?.marker !== marker || !rows.rows[0]?.safe)
@@ -210,7 +234,7 @@ export const bootstrapPostgres = (input: PostgresBootstrapInput) =>
 							"SELECT pg_get_userbyid(datdba) AS owner FROM pg_database WHERE datname=$1",
 							[name],
 						),
-					catch: () => new PostgresBootstrapError({ reason: "bootstrap_failed" }),
+					catch: statementFailure,
 				});
 				if (databases.rows.length && databases.rows[0]?.owner !== result.bootName)
 					return yield* new PostgresBootstrapError({ reason: "resource_conflict" });
@@ -242,7 +266,7 @@ export const bootstrapPostgres = (input: PostgresBootstrapInput) =>
 						result.appName,
 						result.bootName,
 					]),
-				catch: () => new PostgresBootstrapError({ reason: "bootstrap_failed" }),
+				catch: statementFailure,
 			});
 			if (!privileges.rows[0]?.denied) return yield* new PostgresBootstrapError({ reason: "resource_conflict" });
 			return result;

@@ -3,7 +3,7 @@ import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { FlyApiError, type FlyApiSettings } from "./fly-board-api.ts";
 
 // Isolated from the provisioner's provider service: only deletion workers receive this capability.
-// Contract: https://docs.machines.dev/openapi.json (DELETE app: 202, machine/volume: 200).
+// Contract: https://docs.machines.dev/openapi.json (DELETE machine/volume: 200).
 const make = (settings: FlyApiSettings) =>
 	Effect.gen(function* () {
 		const client = yield* HttpClient.HttpClient;
@@ -33,7 +33,6 @@ const make = (settings: FlyApiSettings) =>
 			);
 		const segment = encodeURIComponent;
 		return {
-			app: (name: string) => remove("delete_app", `/v1/apps/${segment(name)}`),
 			machine: (app: string, id: string) =>
 				remove("delete_machine", `/v1/apps/${segment(app)}/machines/${segment(id)}?force=true`),
 			volume: (app: string, id: string) => remove("delete_volume", `/v1/apps/${segment(app)}/volumes/${segment(id)}`),

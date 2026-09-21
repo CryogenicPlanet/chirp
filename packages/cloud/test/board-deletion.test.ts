@@ -31,7 +31,7 @@ describe("board deletion", () => {
 		await runFresh(
 			Effect.gen(function* () {
 				const { board, deletion, operations, dashboard, sql } = yield* setup;
-				yield* sql`INSERT INTO board_postgres_secrets (board_id, ciphertext) VALUES (${board.id}, 'encrypted-credential-fixture')`;
+				yield* sql`INSERT INTO board_postgres_secrets (board_id, bootstrap_ciphertext) VALUES (${board.id}, 'encrypted-credential-fixture')`;
 				for (let i = 0; i < 4; i++) yield* (yield* Boards).request({ ...request, idempotency_key: `extra-${i}` });
 				expect(yield* deletion.request(request.owner_id, board.id, confirmation)).toEqual({ deleted: true });
 				expect(yield* deletion.request(request.owner_id, board.id, confirmation)).toEqual({ deleted: true });
@@ -129,17 +129,14 @@ const providerDeletion = (
 ) => {
 	let removedMachine = false;
 	let removedVolume = false;
-	let removedApp = false;
 	let first = true;
 	const calls: string[] = [];
 	const fly = {
 		...provider.fake,
 		getApp: (name: string) =>
-			removedApp
-				? Effect.succeedNone
-				: provider.fake
-						.getApp(name)
-						.pipe(Effect.map(Option.map((app) => (mode === "app_drift" ? { ...app, id: "replacement-app" } : app)))),
+			provider.fake
+				.getApp(name)
+				.pipe(Effect.map(Option.map((app) => (mode === "app_drift" ? { ...app, id: "replacement-app" } : app)))),
 		getMachine: (name: string, id: string) =>
 			removedMachine ? Effect.succeedNone : provider.fake.getMachine(name, id),
 		getVolume: (name: string, id: string) => (removedVolume ? Effect.succeedNone : provider.fake.getVolume(name, id)),
@@ -177,15 +174,10 @@ const providerDeletion = (
 					return yield* new FlyApiError({ operation: "delete_volume", reason: "transport", status: null });
 				}
 			}),
-		app: (_name: string) =>
-			Effect.sync(() => {
-				calls.push("app");
-				removedApp = true;
-			}),
 	};
 	return {
 		calls,
-		layer: boardDeletionWorkerLayer(settings.organization).pipe(
+		layer: boardDeletionWorkerLayer(settings).pipe(
 			Layer.provide(Layer.mergeAll(Layer.succeed(FlyBoardApi, fly), Layer.succeed(FlyDeletionApi, remove))),
 		),
 	};
@@ -198,7 +190,7 @@ for (const mode of ["ok", "partial", "drift", "app_drift", "volume_drift"] as co
 		await runFresh(
 			Effect.gen(function* () {
 				const { board, deletion, operations, dashboard, sql } = yield* setup;
-				yield* sql`INSERT INTO board_postgres_secrets (board_id, ciphertext) VALUES (${board.id}, 'encrypted-credential-fixture')`;
+				yield* sql`INSERT INTO board_postgres_secrets (board_id, bootstrap_ciphertext) VALUES (${board.id}, 'encrypted-credential-fixture')`;
 				const provision = Option.getOrThrow(yield* operations.claim("provisioner", 90_000));
 				yield* Provisioner.use((service) => service.run(provision, "provisioner")).pipe(
 					Effect.provide(provisionerFor(provider)),
@@ -213,6 +205,9 @@ for (const mode of ["ok", "partial", "drift", "app_drift", "volume_drift"] as co
 					expect(deletionProvider.calls).toEqual([]);
 					expect(yield* sql`SELECT board_id FROM board_postgres_secrets WHERE board_id = ${board.id}`).toHaveLength(1);
 					expect(Option.getOrThrow(yield* dashboard.get(request.owner_id, board.id)).phase).toBe("deletion_blocked");
+					expect(yield* Effect.result(deletion.request(request.owner_id, board.id, confirmation))).toMatchObject({
+						failure: { _tag: "BoardDeletionFailed" },
+					});
 					return;
 				}
 				if (mode === "partial") {
@@ -223,7 +218,7 @@ for (const mode of ["ok", "partial", "drift", "app_drift", "volume_drift"] as co
 					const resumed = Option.getOrThrow(yield* operations.claim("delete-worker-2", 90_000, "delete"));
 					expect(yield* worker.run(resumed, "delete-worker-2")).toBe("deleted");
 				} else expect(outcome).toBe("deleted");
-				expect(deletionProvider.calls).toEqual(["machine", "volume", "app"]);
+				expect(deletionProvider.calls).toEqual(["machine", "volume"]);
 				expect(Option.isNone(yield* dashboard.get(request.owner_id, board.id))).toBe(true);
 				expect(yield* sql`SELECT board_id FROM board_postgres_secrets WHERE board_id = ${board.id}`).toEqual([]);
 				expect(yield* deletion.request(request.owner_id, board.id, confirmation)).toEqual({ deleted: true });
@@ -244,7 +239,7 @@ test("refuses destructive provider calls when observation outlives the lease", a
 			const operation = Option.getOrThrow(yield* operations.claim("delete-worker", 90_000, "delete"));
 			let observations = 0;
 			const calls: string[] = [];
-			const layer = boardDeletionWorkerLayer(settings.organization).pipe(
+			const layer = boardDeletionWorkerLayer(settings).pipe(
 				Layer.provide(
 					Layer.mergeAll(
 						Layer.succeed(FlyBoardApi, {
@@ -268,10 +263,6 @@ test("refuses destructive provider calls when observation outlives the lease", a
 								Effect.sync(() => {
 									calls.push("volume");
 								}),
-							app: () =>
-								Effect.sync(() => {
-									calls.push("app");
-								}),
 						}),
 					),
 				),
@@ -282,6 +273,73 @@ test("refuses destructive provider calls when observation outlives the lease", a
 				),
 			).toMatchObject({ failure: { _tag: "LeaseLost" } });
 			expect(calls).toEqual([]);
+		}),
+	);
+});
+
+test("does not spend the provider failure budget on healthy polls or reclaimed claims", async () => {
+	const provider = makeFakeProvider();
+	await runFresh(
+		Effect.gen(function* () {
+			const { board, deletion, operations, sql } = yield* setup;
+			const provision = Option.getOrThrow(yield* operations.claim("provisioner", 90_000));
+			yield* Provisioner.use((service) => service.run(provision, "provisioner")).pipe(
+				Effect.provide(provisionerFor(provider)),
+			);
+			yield* deletion.request(request.owner_id, board.id, confirmation);
+			yield* sql`UPDATE board_operations SET attempt = 50 WHERE kind = 'delete' AND board_id = ${board.id}`;
+			const operation = Option.getOrThrow(yield* operations.claim("delete-worker", 90_000, "delete"));
+			const layer = boardDeletionWorkerLayer(settings).pipe(
+				Layer.provide(
+					Layer.mergeAll(
+						Layer.succeed(FlyBoardApi, provider.fake),
+						Layer.succeed(FlyDeletionApi, { machine: () => Effect.void, volume: () => Effect.void }),
+					),
+				),
+			);
+			expect(
+				yield* BoardDeletionWorker.use((worker) => worker.run(operation, "delete-worker")).pipe(Effect.provide(layer)),
+			).toBe("requeued");
+			expect(Option.getOrThrow(yield* operations.latest(board.id, "delete"))).toMatchObject({
+				state: "queued",
+				attempt: 51,
+				failure_count: 0,
+				last_error_code: "deletion_pending",
+			});
+		}),
+	);
+});
+
+test("persists the provider failure that exhausts the deletion budget", async () => {
+	const provider = makeFakeProvider();
+	await runFresh(
+		Effect.gen(function* () {
+			const { board, deletion, operations } = yield* setup;
+			const provision = Option.getOrThrow(yield* operations.claim("provisioner", 90_000));
+			yield* Provisioner.use((service) => service.run(provision, "provisioner")).pipe(
+				Effect.provide(provisionerFor(provider)),
+			);
+			yield* deletion.request(request.owner_id, board.id, confirmation);
+			const operation = Option.getOrThrow(yield* operations.claim("delete-worker", 90_000, "delete"));
+			const layer = boardDeletionWorkerLayer({ ...settings, maxFailures: 1 }).pipe(
+				Layer.provide(
+					Layer.mergeAll(
+						Layer.succeed(FlyBoardApi, {
+							...provider.fake,
+							getApp: () => Effect.fail(new FlyApiError({ operation: "get_app", reason: "transport", status: null })),
+						}),
+						Layer.succeed(FlyDeletionApi, { machine: () => Effect.void, volume: () => Effect.void }),
+					),
+				),
+			);
+			expect(
+				yield* BoardDeletionWorker.use((worker) => worker.run(operation, "delete-worker")).pipe(Effect.provide(layer)),
+			).toBe("blocked");
+			expect(Option.getOrThrow(yield* operations.latest(board.id, "delete"))).toMatchObject({
+				state: "failed",
+				failure_count: 1,
+				last_error_code: "deletion_provider_unavailable",
+			});
 		}),
 	);
 });

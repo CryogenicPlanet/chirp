@@ -1,6 +1,11 @@
 import { Effect, Exit, Redacted } from "effect";
 import { describe, expect, test } from "vitest";
-import { derivePostgresUrls, isAllowedPostgresAddress, validatePostgresUrl } from "../src/postgres-bootstrap.ts";
+import {
+	derivePostgresUrls,
+	isAllowedPostgresAddress,
+	isTransientPostgresFailure,
+	validatePostgresUrl,
+} from "../src/postgres-bootstrap.ts";
 
 describe("Postgres bootstrap configuration", () => {
 	test("refuses private, metadata, multicast and mapped addresses", () => {
@@ -53,6 +58,12 @@ describe("Postgres bootstrap configuration", () => {
 		expect(boot.username).toBe("chirp_0123456789abcdef0123456789abcdef_boot");
 		expect(app.username).not.toBe(boot.username);
 		expect(result.tls).toBe(true);
+	});
+	test("classifies only transient statement and connection failures for retry", () => {
+		for (const code of ["08006", "40001", "40P01", "55P03", "57014", "57P01", "57P02", "57P03", "53300", "ECONNRESET"])
+			expect(isTransientPostgresFailure(Object.assign(new Error("failure"), { code }))).toBe(true);
+		expect(isTransientPostgresFailure(new Error("Query read timeout"))).toBe(true);
+		expect(isTransientPostgresFailure(Object.assign(new Error("permission denied"), { code: "42501" }))).toBe(false);
 	});
 });
 

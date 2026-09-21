@@ -39,7 +39,7 @@ const workerLayer = Layer.unwrap(
 			);
 			return Layer.mergeAll(
 				provisionerLayer(provisioning),
-				boardDeletionWorkerLayer(provisioning.organization),
+				boardDeletionWorkerLayer(provisioning),
 				backupObserverLayer,
 				backupSchedulerLayer,
 			).pipe(Layer.provideMerge(stores), Layer.provideMerge(providers));

@@ -16,8 +16,8 @@ describe("CloudSecrets", () => {
 				const second = yield* secrets.prepare("board-a", adminUrl);
 				expect(first).not.toBe(second);
 				expect(first).not.toContain("private-password");
-				const payload = yield* secrets.decrypt("board-a", first);
-				const other = yield* secrets.decrypt("board-a", second);
+				const payload = yield* secrets.decryptBootstrap("board-a", first);
+				const other = yield* secrets.decryptBootstrap("board-a", second);
 				expect(Redacted.value(payload).adminUrl).toBe(Redacted.value(adminUrl));
 				expect(Redacted.value(payload).bootPassword).toHaveLength(64);
 				expect(Redacted.value(payload).bootPassword).not.toBe(Redacted.value(payload).appPassword);
@@ -42,16 +42,37 @@ describe("CloudSecrets", () => {
 		]) {
 			const exit = await run(
 				Effect.gen(function* () {
-					return yield* Effect.exit((yield* CloudSecrets).decrypt(boardId ?? "", envelope ?? ""));
+					return yield* Effect.exit((yield* CloudSecrets).decryptBootstrap(boardId ?? "", envelope ?? ""));
 				}),
 			);
 			expect(Exit.isFailure(exit)).toBe(true);
 			expect(JSON.stringify(exit)).not.toContain("private-password");
 		}
 		const wrongKey = await Effect.gen(function* () {
-			return yield* (yield* CloudSecrets).decrypt("board-a", ciphertext);
+			return yield* (yield* CloudSecrets).decryptBootstrap("board-a", ciphertext);
 		}).pipe(Effect.provide(cloudSecretsLayerWithKey(Redacted.make("f3".repeat(32)))), Effect.runPromiseExit);
 		expect(Exit.isFailure(wrongKey)).toBe(true);
+	});
+
+	test("separates bootstrap authority from board-scoped runtime credentials", async () => {
+		await run(
+			Effect.gen(function* () {
+				const secrets = yield* CloudSecrets;
+				const ciphertext = yield* secrets.prepareRuntime("board-a", {
+					bootUrl: "postgres://boot:boot-password@database.example/boot",
+					appUrl: "postgres://app:app-password@database.example/app",
+					tls: true,
+				});
+				const payload = Redacted.value(yield* secrets.decryptRuntime("board-a", ciphertext));
+				expect(payload).toEqual({
+					bootUrl: "postgres://boot:boot-password@database.example/boot",
+					appUrl: "postgres://app:app-password@database.example/app",
+					tls: true,
+				});
+				expect(JSON.stringify(payload)).not.toContain("private-password");
+				expect(Exit.isFailure(yield* Effect.exit(secrets.decryptBootstrap("board-a", ciphertext)))).toBe(true);
+			}),
+		);
 	});
 
 	test("uses stable key-dependent request fingerprints", async () => {

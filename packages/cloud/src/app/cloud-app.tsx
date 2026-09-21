@@ -14,6 +14,12 @@ import { type CloudClientUser, DashboardShell } from "./dashboard-shell.tsx";
 import { StatusBadge } from "./status-badge.tsx";
 
 const storageLabels = { sqlite: "SQLite", postgres: "PostgreSQL", mysql: "MySQL" } as const;
+const boardSubtitle = (board: DashboardBoardList["boards"][number]) => {
+	if (board.hostname) return board.hostname;
+	if (board.phase === "deleting") return "Deletion is in progress";
+	if (board.phase === "deletion_blocked") return "Deletion needs your attention";
+	return board.phase === "blocked" ? "Setup needs your attention" : "Getting your board ready";
+};
 export function CloudApp({
 	authUnavailable,
 	providers,
@@ -76,12 +82,12 @@ export function CloudApp({
 					</Button>
 				</div>
 			) : null}
-			{!listing ? (
+			{!listing && !loadError ? (
 				<div aria-label="Loading boards" className="grid gap-6">
 					<div className="h-10 w-44 animate-pulse rounded-md bg-muted motion-reduce:animate-none" />
 					<div className="h-52 animate-pulse rounded-xl border bg-card motion-reduce:animate-none" />
 				</div>
-			) : listing.boards.length === 0 ? (
+			) : !listing ? null : listing.boards.length === 0 ? (
 				<motion.section
 					initial={reducedMotion ? false : { opacity: 0, y: 10 }}
 					animate={{ opacity: 1, y: 0 }}
@@ -169,10 +175,7 @@ export function CloudApp({
 										{board.name}
 										<ArrowRight className="size-4 text-subtle transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none" />
 									</Link>
-									<p className="mt-2 truncate text-xs text-muted-foreground">
-										{board.hostname ??
-											(board.phase === "blocked" ? "Setup needs your attention" : "Getting your board ready")}
-									</p>
+									<p className="mt-2 truncate text-xs text-muted-foreground">{boardSubtitle(board)}</p>
 								</div>
 								<div className="flex items-center justify-between gap-3 border-t bg-background/20 px-5 py-3">
 									<span className="flex items-center gap-2 text-xs text-subtle">

@@ -23,7 +23,7 @@ test("uses verified DELETE contracts, accepts 404 and does not retry or leak fai
 		await Effect.runPromise(
 			Effect.gen(function* () {
 				const api = yield* FlyDeletionApi;
-				for (const operation of [api.machine("app", "machine"), api.volume("app", "volume"), api.app("app")]) {
+				for (const operation of [api.machine("app", "machine"), api.volume("app", "volume")]) {
 					const result = yield* Effect.result(operation);
 					expect(Result.isSuccess(result)).toBe(status < 300 || status === 404);
 					expect(JSON.stringify(result)).not.toContain("provider-secret-body");
@@ -33,7 +33,6 @@ test("uses verified DELETE contracts, accepts 404 and does not retry or leak fai
 		expect(requests).toEqual([
 			"https://fly.test/v1/apps/app/machines/machine?force=true",
 			"https://fly.test/v1/apps/app/volumes/volume",
-			"https://fly.test/v1/apps/app",
 		]);
 	}
 });

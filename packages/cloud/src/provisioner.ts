@@ -441,7 +441,7 @@ const make = (settings: ProvisioningSettings) =>
 													Effect.fail(
 														issue(
 															"postgres_configuration_failed",
-															error.reason === "connection_failed",
+															error.reason === "connection_failed" || error.reason === "transient_failure",
 															`PostgreSQL setup failed: ${error.reason}`,
 														),
 													),
@@ -510,13 +510,17 @@ const make = (settings: ProvisioningSettings) =>
 										yield* storage.stage(board.id, deployment.app_name, lease).pipe(
 											Effect.raceFirst(beforeProvider.pipe(Effect.andThen(Effect.sleep("20 seconds")), Effect.forever)),
 											Effect.catchTags({
-												FlySecretsError: () =>
+												FlySecretsError: (error) =>
 													Effect.fail(
-														issue("postgres_secrets_failed", true, "Database secrets could not be verified at Fly"),
-													),
-												PostgresBootstrapError: () =>
-													Effect.fail(
-														issue("postgres_configuration_failed", false, "PostgreSQL configuration is invalid"),
+														issue(
+															"postgres_secrets_failed",
+															error.reason === "transport" ||
+																(error.reason === "status" &&
+																	error.status !== null &&
+																	[404, 408, 409, 425, 429].includes(error.status)) ||
+																(error.reason === "status" && error.status !== null && error.status >= 500),
+															"Database secrets could not be verified at Fly",
+														),
 													),
 												CloudSecretsError: () =>
 													Effect.fail(

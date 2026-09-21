@@ -6,6 +6,7 @@ import { FlyBoardApi } from "./fly-board-api.ts";
 import { FlyDeletionApi } from "./fly-deletion-api.ts";
 import { LeaseLost, type Operation } from "./operation.ts";
 import { Operations } from "./operations.ts";
+import type { ProvisioningSettings } from "./provisioning-settings.ts";
 import { boardOperations, boardPostgresSecrets, boardRoutes, boards } from "./schema.ts";
 
 class DeletionIssue extends Data.TaggedError("DeletionIssue")<{
@@ -17,7 +18,7 @@ const drift = (message: string) => new DeletionIssue({ code: "deletion_provider_
 const pending = () =>
 	new DeletionIssue({ code: "deletion_pending", message: "Waiting for Fly to confirm resource removal", retry: true });
 
-const make = (organization: string) =>
+const make = (settings: ProvisioningSettings) =>
 	Effect.gen(function* () {
 		const db = yield* Database;
 		const deployments = yield* Deployments;
@@ -49,7 +50,7 @@ const make = (organization: string) =>
 									app.name !== deployment.app_name ||
 									app.network !== deployment.network_name ||
 									app.network !== `chirp-${board.slug}` ||
-									app.organization.slug !== organization
+									app.organization.slug !== settings.organization
 								)
 									return yield* drift("Fly App identity does not match this board; no resources were adopted");
 							}
@@ -98,11 +99,8 @@ const make = (organization: string) =>
 								(yield* fly.listVolumes(deployment.app_name)).length
 							)
 								return yield* drift("Fly App is not empty; refusing to delete untracked resources");
-							yield* renew;
-							yield* remove.app(deployment.app_name);
-							if (Option.isSome(yield* observeApp)) return yield* pending();
 						}
-						// Absence is observed before hiding the board. Finish and tombstone share a fenced transaction.
+						// Tracked compute and storage absence is observed before hiding the board.
 						yield* db.transaction(() =>
 							Effect.gen(function* () {
 								yield* db.select({ id: boards.id }).from(boards).where(eq(boards.id, operation.board_id)).for("update");
@@ -145,13 +143,18 @@ const make = (organization: string) =>
 						),
 						Effect.catchTag("DeletionIssue", (error) =>
 							Effect.gen(function* () {
-								if (error.retry && operation.attempt < 10) {
+								const countFailure = error.retry && error.code !== "deletion_pending";
+								const nextFailureCount = operation.failure_count + (countFailure ? 1 : 0);
+								if (error.retry && (!countFailure || nextFailureCount < settings.maxFailures)) {
 									const now = yield* DateTime.now;
 									yield* operations.requeue({
 										...lease,
-										availableAt: DateTime.toDateUtc(DateTime.addDuration(now, 60_000)),
+										availableAt: DateTime.toDateUtc(
+											DateTime.addDuration(now, Math.max(60_000, settings.pollIntervalMs)),
+										),
 										errorCode: error.code,
 										errorMessage: error.message,
+										countFailure,
 									});
 									return "requeued" as const;
 								}
@@ -159,6 +162,7 @@ const make = (organization: string) =>
 									...lease,
 									errorCode: error.code,
 									errorMessage: `${error.message}. Resolve the issue, then confirm deletion again to retry.`,
+									countFailure,
 								});
 								return "blocked" as const;
 							}),
@@ -171,4 +175,5 @@ export class BoardDeletionWorker extends Context.Service<
 	BoardDeletionWorker,
 	Effect.Success<ReturnType<typeof make>>
 >()("comms/cloud/BoardDeletionWorker") {}
-export const boardDeletionWorkerLayer = (organization: string) => Layer.effect(BoardDeletionWorker, make(organization));
+export const boardDeletionWorkerLayer = (settings: ProvisioningSettings) =>
+	Layer.effect(BoardDeletionWorker, make(settings));

@@ -416,6 +416,7 @@ const make = Effect.gen(function* () {
 			readonly workerId: string;
 			readonly errorCode: string;
 			readonly errorMessage: string;
+			readonly countFailure?: boolean;
 		}) =>
 			withLease(
 				input,
@@ -424,6 +425,7 @@ const make = Effect.gen(function* () {
 						.update(boardOperations)
 						.set({
 							state: "failed",
+							...(input.countFailure ? { failure_count: sql`${boardOperations.failure_count} + 1` } : {}),
 							lease_token: null,
 							lease_owner: null,
 							lease_expires_at: null,

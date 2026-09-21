@@ -46,5 +46,16 @@ describe("dashboard response boundary", () => {
 				DashboardBoardResponse,
 			),
 		).rejects.toThrow("This page could not be verified. Reload Chirp Cloud and try again.");
+		for (const [code, message] of [
+			["invalid_postgres_url", "Enter a valid public PostgreSQL administrator URL and try again."],
+			[
+				"postgres_channel_binding_unsupported",
+				"This PostgreSQL driver can't enforce channel_binding=require. Remove that parameter and keep verified TLS enabled.",
+			],
+			["postgres_unavailable", "PostgreSQL board creation is not available on this Cloud instance."],
+		] as const)
+			await expect(
+				readDashboardResponse(Response.json({ error: { code } }, { status: 400 }), DashboardBoardResponse),
+			).rejects.toThrow(message);
 	});
 });

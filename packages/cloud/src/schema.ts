@@ -162,11 +162,24 @@ export const boardRoutes = pgTable("board_routes", {
 	created_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
 });
 
-export const boardPostgresSecrets = pgTable("board_postgres_secrets", {
-	board_id: uuid()
-		.primaryKey()
-		.references(() => boards.id, { onDelete: "restrict" }),
-	ciphertext: text().notNull(),
-	prepared: boolean().notNull().default(false),
-	fly_secrets_version: integer(),
-});
+export const boardPostgresSecrets = pgTable(
+	"board_postgres_secrets",
+	{
+		board_id: uuid()
+			.primaryKey()
+			.references(() => boards.id, { onDelete: "restrict" }),
+		bootstrap_ciphertext: text(),
+		runtime_ciphertext: text(),
+		prepared: boolean().notNull().default(false),
+		fly_secrets_version: integer(),
+	},
+	(table) => [
+		check(
+			"board_postgres_secrets_stage_check",
+			sql`(
+				(NOT ${table.prepared} AND ${table.bootstrap_ciphertext} IS NOT NULL AND ${table.runtime_ciphertext} IS NULL)
+				OR (${table.prepared} AND ${table.bootstrap_ciphertext} IS NULL AND ${table.runtime_ciphertext} IS NOT NULL)
+			)`,
+		),
+	],
+);
