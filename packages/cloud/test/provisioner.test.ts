@@ -8,7 +8,7 @@ import { Deployments } from "../src/deployments.ts";
 import { FlyApiError } from "../src/fly-board-api.ts";
 import { machineConfig } from "../src/machine-spec.ts";
 import { migrateCloudDatabase } from "../src/migrations.ts";
-import * as provisioningTemplateV2 from "../src/migrations/0011_provisioning_template_v2.ts";
+import * as provisioningTemplateV2 from "../src/migrations/0013_provisioning_template_v2.ts";
 import { Operations } from "../src/operations.ts";
 import { Provisioner } from "../src/provisioner.ts";
 import { runFresh } from "./fixture.ts";

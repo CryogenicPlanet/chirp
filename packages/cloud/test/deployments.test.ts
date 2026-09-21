@@ -6,7 +6,7 @@ import { Database } from "../src/database.ts";
 import { DeploymentDrift } from "../src/deployment.ts";
 import { Deployments } from "../src/deployments.ts";
 import { migrateCloudDatabase } from "../src/migrations.ts";
-import * as provisioningTemplateV2 from "../src/migrations/0011_provisioning_template_v2.ts";
+import * as provisioningTemplateV2 from "../src/migrations/0013_provisioning_template_v2.ts";
 import { Operations } from "../src/operations.ts";
 import { boardDeployments, boardOperations, boardRoutes } from "../src/schema.ts";
 import { runFresh } from "./fixture.ts";
@@ -101,22 +101,26 @@ describe("Deployments", () => {
 					spec: {
 						...spec,
 						image_ref: `registry.example/chirp@sha256:${"b".repeat(64)}`,
-						volume_name: "new-default-volume-name",
 						volume_size_gb: 20,
 					},
 				});
 				expect(existing).toMatchObject({
 					image_ref: spec.image_ref,
 					volume_name: spec.volume_name,
-					volume_size_gb: spec.volume_size_gb,
+					volume_size_gb: 20,
 				});
+				const volumeDrift = yield* Effect.exit(
+					deployments.ensure({ ...lease, spec: { ...spec, volume_name: "foreign-volume", volume_size_gb: 20 } }),
+				);
+				expect(Exit.isFailure(volumeDrift)).toBe(true);
+				if (Exit.isFailure(volumeDrift)) expect(volumeDrift.cause.toString()).toContain(DeploymentDrift.name);
 				const drift = yield* Effect.exit(deployments.ensure({ ...lease, spec: { ...spec, region: "iad" } }));
 				expect(Exit.isFailure(drift)).toBe(true);
 				if (Exit.isFailure(drift)) expect(drift.cause.toString()).toContain(DeploymentDrift.name);
 				yield* deployments.transition({
 					...lease,
 					expectedCheckpoint: "requested",
-					expectedRowVersion: 0,
+					expectedRowVersion: existing.row_version,
 					next: "storage_configuration_verified",
 				});
 				expect(
@@ -125,7 +129,7 @@ describe("Deployments", () => {
 							deployments.transition({
 								...lease,
 								expectedCheckpoint: "storage_configuration_verified",
-								expectedRowVersion: 0,
+								expectedRowVersion: existing.row_version,
 								next: "app_created",
 							}),
 						),
