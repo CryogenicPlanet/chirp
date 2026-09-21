@@ -104,8 +104,8 @@ If independent provider inspection proves a recorded mutation never took effect,
 
 ## Deletion and backups
 
-Confirmed deletion removes the recorded machine and volume only after checking their identities. Active operations or unresolved provider mutations prevent deletion. A failed deletion appears as needing attention; after fixing the cause, confirm deletion again to queue a new attempt. The board counts toward quota until provider absence is confirmed.
+Confirmed deletion first verifies and removes only the board's exact DNS-only `A` and Fly ownership `TXT` records with the managed 60-second TTL, then waits at least that TTL before releasing provider resources. A changed TTL blocks deletion for operator review. It removes the recorded machine and volume only after checking their identities, then destroys the verified empty Fly app; app destruction releases its IP and certificate. Active operations, conflicting DNS, changed provider identities, or unresolved mutations prevent deletion. A failed deletion appears as needing attention; after fixing the cause, confirm deletion again to queue a new attempt. The board counts toward quota until both DNS and the Fly app are confirmed absent.
 
-Managed volume data is permanently removed. External databases, the verified empty Fly app, and Cloudflare records are retained. Operators may remove obsolete DNS records only after independently verifying ownership. Encrypted PostgreSQL credentials are purged when deletion completes. Tombstones preserve slug reservations.
+Managed volume data is permanently removed. External PostgreSQL databases are retained. Encrypted PostgreSQL credentials are purged when deletion completes. Tombstones preserve slug reservations.
 
 Managed SQLite volumes have Fly automatic snapshots enabled. Cloud periodically records the newest snapshot reported as completed, including observed retention. This is provider metadata, not proof of SQLite consistency or a tested restore. There is no Cloud restore workflow or guaranteed retention beyond what the provider reports.

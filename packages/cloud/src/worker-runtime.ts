@@ -6,6 +6,7 @@ import { BackupScheduler, backupSchedulerLayer } from "./backup-scheduler.ts";
 import { BoardDeletionWorker, boardDeletionWorkerLayer } from "./board-deletion-worker.ts";
 import { flyDeletionApiLayer } from "./fly-deletion-api.ts";
 import { Boards, boardsLayer } from "./boards.ts";
+import { cloudflareDeletionApiLayer } from "./cloudflare-deletion-api.ts";
 import { cloudflareDnsLayer, cloudflareSettings } from "./cloudflare-dns.ts";
 import { cloudSecretsLayer } from "./cloud-secrets.ts";
 import { flySecretsLayer } from "./fly-secrets.ts";
@@ -33,6 +34,7 @@ const workerLayer = Layer.unwrap(
 			const providers = Layer.mergeAll(
 				flySecretsLayer({ token: flyToken }).pipe(Layer.provide(FetchHttpClient.layer)),
 				flyDeletionApiLayer({ token: flyToken }).pipe(Layer.provide(FetchHttpClient.layer)),
+				cloudflareDeletionApiLayer(cloudflare).pipe(Layer.provide(FetchHttpClient.layer)),
 				cloudflareDnsLayer(cloudflare).pipe(Layer.provide(FetchHttpClient.layer)),
 				flyBoardApiLayer({ token: flyToken }).pipe(Layer.provide(FetchHttpClient.layer)),
 				edgeProbeLayer.pipe(Layer.provide(FetchHttpClient.layer)),

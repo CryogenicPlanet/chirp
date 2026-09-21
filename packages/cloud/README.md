@@ -45,7 +45,7 @@ Each link works **once** and expires after **24 hours**. Share it privately; Clo
 
 ## Delete a board
 
-Open the board's details, choose **Delete board**, and type its exact name to confirm. Deletion permanently removes its managed machine and volume, including the data on that volume. There is no dashboard restore workflow.
+Open the board's details, choose **Delete board**, and type its exact name to confirm. Deletion withdraws the board's DNS records, waits for their cache lifetime, then permanently removes its Fly app and managed storage. The app removal also releases its public IP and certificate. There is no dashboard restore workflow.
 
 External PostgreSQL databases are retained. A board stays visible and counts toward your limit until deletion completes. If deletion needs attention, resolve the reported issue before trying again; active provisioning or an uncertain provider result can prevent deletion.
 

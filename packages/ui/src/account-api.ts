@@ -22,8 +22,8 @@ const explanation = (code: string) => {
 		return "This token request conflicts with an earlier attempt. Check the token list before creating another.";
 	return `Account request refused (${code}). Refresh the account list to check its current state.`;
 };
-export const accountRequest = (request: HttpClientRequest.HttpClientRequest, timeoutMs = 15000) =>
-	Effect.gen(function* () {
+export const accountRequest = (request: HttpClientRequest.HttpClientRequest, timeoutMs: number | null = 15000) => {
+	const response = Effect.gen(function* () {
 		const client = yield* HttpClient.HttpClient;
 		const response = yield* client.execute(request);
 		if (response.status < 200 || response.status >= 300) {
@@ -35,19 +35,24 @@ export const accountRequest = (request: HttpClientRequest.HttpClientRequest, tim
 			return yield* new BoardError({ status: response.status, message });
 		}
 		return yield* response.json;
-	}).pipe(
-		Effect.provide(FetchHttpClient.layer),
-		Effect.timeoutOrElse({
-			duration: timeoutMs,
-			orElse: () =>
-				Effect.fail(
-					new BoardError({
-						status: 0,
-						message:
-							"The response was lost or delayed. The action may have completed; refresh the account list to check.",
+	}).pipe(Effect.provide(FetchHttpClient.layer));
+	return (
+		timeoutMs === null
+			? response
+			: response.pipe(
+					Effect.timeoutOrElse({
+						duration: timeoutMs,
+						orElse: () =>
+							Effect.fail(
+								new BoardError({
+									status: 0,
+									message:
+										"The response was lost or delayed. The action may have completed; refresh the account list to check.",
+								}),
+							),
 					}),
-				),
-		}),
+				)
+	).pipe(
 		Effect.catchTag("HttpClientError", () =>
 			Effect.fail(
 				new BoardError({
@@ -57,6 +62,7 @@ export const accountRequest = (request: HttpClientRequest.HttpClientRequest, tim
 			),
 		),
 	);
+};
 export const accountPost = (path: string, body: unknown, proof?: string, key?: string) =>
 	accountRequest(
 		HttpClientRequest.post(new URL(path, window.location.origin).href).pipe(
