@@ -53,14 +53,13 @@ const rejected = (error: FlyApiError) =>
 	error.status !== null &&
 	error.status >= 400 &&
 	error.status < 500 &&
-	// 412 reports a resource that is not in the required state yet rather than a refusal. Fly
-	// answers a start with `failed_precondition: unable to start machine from current state:
-	// 'created'` until a Machine created with skip_launch has settled, which is ordinary
-	// progress, not a rejection.
-	![404, 408, 409, 412, 425, 429].includes(error.status);
-// Fly answers a start with 412 `failed_precondition` while the resource is in a state it
-// refuses to act on. The request was declined outright, so it cannot have taken effect.
-const precondition = (error: FlyApiError) => error.reason === "status" && error.status === 412;
+	![404, 408, 409, 425, 429].includes(error.status);
+// Fly answers a start with 412 `failed_precondition: unable to start machine from current
+// state: 'created'` until a Machine created with skip_launch has settled. That is ordinary
+// progress for a start, so the start path checks this before `rejected`. It is deliberately
+// not folded into `rejected`, which every Fly call shares: a 412 on a create is a refusal,
+// and treating it as transient there leaves a durable ambiguity marker no attempt can clear.
+const startNotSettled = (error: FlyApiError) => error.reason === "status" && error.status === 412;
 const isAmbiguity = (code: string | null) => code === "provider_ambiguous" || code?.endsWith("_ambiguous") === true;
 interface MutationJournal<E, R> {
 	readonly pending: Set<ProviderMutation>;
@@ -156,6 +155,10 @@ const make = (settings: ProvisioningSettings) =>
 					yield* journal.mark("machine_start");
 					yield* renewLease;
 					const started = yield* fly.startMachine(deployment.app_name, deployment.machine_id).pipe(Effect.result);
+					if (Result.isFailure(started) && startNotSettled(started.failure)) {
+						yield* journal.clear("machine_start");
+						return yield* issue("provider_observation_pending", true, "Fly Machine is not startable yet");
+					}
 					if (Result.isFailure(started) && rejected(started.failure)) {
 						yield* journal.clear("machine_start");
 						return yield* issue("provider_rejected", false, "Fly rejected the Machine start");
@@ -170,7 +173,7 @@ const make = (settings: ProvisioningSettings) =>
 							// definitively did not take effect and the next attempt may repeat it. A transport
 							// failure is different: the request may still have been received, so it stays
 							// ambiguous.
-							if (precondition(started.failure)) {
+							if (startNotSettled(started.failure)) {
 								yield* journal.clear("machine_start");
 								return yield* issue("provider_observation_pending", true, "Fly Machine is not startable yet");
 							}
