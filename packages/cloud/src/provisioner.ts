@@ -743,7 +743,11 @@ const make = (settings: ProvisioningSettings) =>
 									yield* beforeProvider;
 									yield* edge
 										.childRoute(deployment.hostname)
-										.pipe(Effect.mapError(() => issue("child_route_pending", true, "Board is still finishing its first start")));
+										.pipe(
+											Effect.mapError(() =>
+												issue("child_route_pending", true, "Board is still finishing its first start"),
+											),
+										);
 									deployment = yield* advance("child_route_observed");
 									break;
 								}
