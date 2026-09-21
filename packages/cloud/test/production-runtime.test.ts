@@ -147,12 +147,21 @@ describe.skipIf(!realPostgres)("production cloud runtime", () => {
 			const rejectedOrigin = await create(`http://127.0.0.1:${port}`, "internal-origin-create");
 			expect(rejectedOrigin.status).toBe(403);
 			expect(await rejectedOrigin.json()).toEqual({ error: { code: "origin_rejected" } });
+			await monitor.query(`UPDATE session SET "expiresAt" = now() + interval '1 hour' WHERE id = 'runtime-session'`);
 			const listed = await dashboard();
 			expect(listed.status).toBe(200);
 			expect(listed.headers.get("cache-control")).toBe("no-store");
+			expect(listed.headers.getSetCookie()).toHaveLength(1);
 			expect(await listed.json()).toMatchObject({
 				boards: expect.arrayContaining([expect.objectContaining({ id: board.id })]),
 			});
+			expect(
+				(
+					await monitor.query<{ readonly renewed: boolean }>(
+						`SELECT "expiresAt" > now() + interval '6 days' AS renewed FROM session WHERE id = 'runtime-session'`,
+					)
+				).rows,
+			).toEqual([{ renewed: true }]);
 			expect((await monitor.query("SELECT id FROM boards")).rows).toHaveLength(2);
 			const sharedPids = (await cloudConnections()).rows
 				.filter(({ pid }) => !workerPids.has(pid))

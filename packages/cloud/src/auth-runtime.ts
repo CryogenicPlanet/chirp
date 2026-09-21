@@ -9,11 +9,20 @@ export interface AuthRequestRuntime {
 	readonly dashboard: ReturnType<typeof makeDashboardRequestRuntime>;
 	readonly getPublicOrigin: () => Promise<string>;
 	readonly handle: (request: Request) => Promise<Response>;
-	readonly getSession: (headers: Headers) => Promise<{
-		readonly user: { readonly id: string; readonly name: string; readonly email: string };
-	} | null>;
+	readonly getSession: (headers: Headers) => Promise<AuthSession | null>;
+	readonly getSessionWithHeaders: (headers: Headers) => Promise<{
+		readonly session: AuthSession | null;
+		readonly headers: Headers;
+	}>;
 	readonly dispose: () => Promise<void>;
 }
+
+interface AuthSession {
+	readonly user: { readonly id: string; readonly name: string; readonly email: string };
+}
+
+const projectSession = (session: { readonly user: AuthSession["user"] } | null): AuthSession | null =>
+	session ? { user: { id: session.user.id, name: session.user.name, email: session.user.email } } : null;
 
 export const makeAuthRequestRuntime = <E>(settings: Effect.Effect<CloudAuthSettings, E>): AuthRequestRuntime => {
 	const dashboard = makeDashboardRequestRuntime();
@@ -28,11 +37,11 @@ export const makeAuthRequestRuntime = <E>(settings: Effect.Effect<CloudAuthSetti
 				.runPromise(CloudAuth.use((auth) => auth.handle(request)))
 				.catch(() => Response.json({ error: "authentication_unavailable" }, { status: 503 })),
 		getSession: (headers: Headers) =>
+			runtime.runPromise(CloudAuth.use((auth) => auth.getSession(headers)).pipe(Effect.map(projectSession))),
+		getSessionWithHeaders: (headers: Headers) =>
 			runtime.runPromise(
-				CloudAuth.use((auth) => auth.getSession(headers)).pipe(
-					Effect.map((session) =>
-						session ? { user: { id: session.user.id, name: session.user.name, email: session.user.email } } : null,
-					),
+				CloudAuth.use((auth) => auth.getSessionWithHeaders(headers)).pipe(
+					Effect.map((result) => ({ session: projectSession(result.response), headers: result.headers })),
 				),
 			),
 		dispose: () => Promise.all([dashboard.dispose(), runtime.dispose()]).then(() => undefined),
@@ -47,6 +56,7 @@ const live = (globalThis.chirpCloudAuthRuntime ??= makeAuthRequestRuntime(cloudA
 
 export const handleAuthRequest = live.handle;
 export const getAuthSession = live.getSession;
+export const getAuthSessionWithHeaders = live.getSessionWithHeaders;
 export const getAuthPublicOrigin = live.getPublicOrigin;
 export const dashboardRequestRuntime = live.dashboard;
 export const disposeCloudRequestRuntime = async () => {

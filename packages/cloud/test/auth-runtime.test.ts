@@ -1,4 +1,6 @@
+import { createHmac } from "node:crypto";
 import { Effect, Redacted } from "effect";
+import { SqlClient } from "effect/unstable/sql";
 import { Pool } from "pg";
 import { describe, expect, test } from "vitest";
 import { makeAuthRequestRuntime } from "../src/auth-runtime.ts";
@@ -19,6 +21,46 @@ const settings: CloudAuthSettings = {
 };
 
 describe.skipIf(!realPostgres)("authentication request runtime", () => {
+	test("keeps server reads nonrefreshing and returns browser renewal headers", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				const sql = yield* SqlClient.SqlClient;
+				yield* sql`INSERT INTO "user" (id, name, email, "emailVerified")
+					VALUES ('runtime-owner', 'Owner', 'owner@example.com', true)`;
+				yield* sql`INSERT INTO session (id, token, "userId", "expiresAt", "updatedAt")
+					VALUES ('runtime-session', 'runtime-token', 'runtime-owner', now() + interval '1 hour', now())`;
+			}),
+		);
+		const runtime = makeAuthRequestRuntime(Effect.succeed(settings));
+		const monitor = new Pool({ connectionString: databaseUrl, max: 2 });
+		const signature = createHmac("sha256", "test-auth-secret-with-at-least-32-characters")
+			.update("runtime-token")
+			.digest("base64");
+		const headers = new Headers({
+			cookie: `__Host-chirp-cloud.session_token=${encodeURIComponent(`runtime-token.${signature}`)}`,
+			"fly-client-ip": "192.0.2.10",
+		});
+		try {
+			expect(await runtime.getSession(headers)).toMatchObject({ user: { id: "runtime-owner" } });
+			const afterServerRead = await monitor.query<{ readonly remaining: string }>(
+				`SELECT extract(epoch FROM "expiresAt" - now()) AS remaining FROM session WHERE id = 'runtime-session'`,
+			);
+			expect(Number(afterServerRead.rows[0]?.remaining)).toBeLessThan(7_200);
+
+			const browserRead = await runtime.getSessionWithHeaders(headers);
+			expect(browserRead.session).toMatchObject({ user: { id: "runtime-owner" } });
+			expect(browserRead.headers.getSetCookie()).toHaveLength(1);
+			const afterBrowserRead = await monitor.query<{ readonly renewed: boolean }>(
+				`SELECT "expiresAt" > now() + interval '6 days' AS renewed FROM session WHERE id = 'runtime-session'`,
+			);
+			expect(afterBrowserRead.rows).toEqual([{ renewed: true }]);
+		} finally {
+			await runtime.dispose();
+			await monitor.end();
+		}
+	}, 10_000);
+
 	test("bounds concurrent requests to one application pool and disposes it", async () => {
 		await runFresh(migrateCloudDatabase);
 		const runtime = makeAuthRequestRuntime(Effect.succeed(settings));

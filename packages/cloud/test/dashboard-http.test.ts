@@ -18,8 +18,12 @@ const board: DashboardBoard = {
 };
 
 const session = { user: { id: "user-1", name: "Owner", email: "owner@example.com" } };
+const renewedHeaders = new Headers({ "set-cookie": "renewed=session; Path=/; HttpOnly" });
 const dependencies = () => ({
-	getSession: vi.fn(async (): Promise<typeof session | null> => session),
+	getSession: vi.fn(async (): Promise<{ readonly session: typeof session | null; readonly headers: Headers }> => ({
+		session,
+		headers: renewedHeaders,
+	})),
 	getPublicOrigin: vi.fn(async () => "https://cloud.chirp.wiki"),
 	list: vi.fn(async () => ({ boards: [board], truncated: false })),
 	get: vi.fn(async () => Option.some(board)),
@@ -36,9 +40,10 @@ const request = (path = "/api/boards", init?: RequestInit) => new Request(`https
 describe("dashboard HTTP", () => {
 	test("rejects unauthenticated reads before accessing dashboard data", async () => {
 		const deps = dependencies();
-		deps.getSession.mockResolvedValueOnce(null);
+		deps.getSession.mockResolvedValueOnce({ session: null, headers: renewedHeaders });
 		const response = await makeDashboardHttp(deps).list(request());
 		expect(response.status).toBe(401);
+		expect(response.headers.getSetCookie()).toEqual(["renewed=session; Path=/; HttpOnly"]);
 		expect(await response.json()).toEqual({ error: { code: "unauthorized" } });
 		expect(deps.list).not.toHaveBeenCalled();
 	});
@@ -48,6 +53,7 @@ describe("dashboard HTTP", () => {
 		const response = await makeDashboardHttp(deps).list(request());
 		expect(response.status).toBe(200);
 		expect(response.headers.get("cache-control")).toBe("no-store");
+		expect(response.headers.getSetCookie()).toEqual(["renewed=session; Path=/; HttpOnly"]);
 		expect(deps.list).toHaveBeenCalledWith("user-1");
 		expect(await response.json()).toEqual({ boards: [board], truncated: false });
 	});

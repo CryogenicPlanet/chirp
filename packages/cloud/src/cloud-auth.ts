@@ -166,7 +166,12 @@ const make = (settings: CloudAuthSettings) =>
 					: Effect.succeed(Response.json({ error: "invalid_client_ip" }, { status: 503 })),
 			getSession: (headers: Headers) =>
 				Effect.tryPromise({
-					try: () => auth.api.getSession({ headers }),
+					try: () => auth.api.getSession({ headers, query: { disableRefresh: true } }),
+					catch: (cause) => new CloudAuthError({ cause }),
+				}),
+			getSessionWithHeaders: (headers: Headers) =>
+				Effect.tryPromise({
+					try: () => auth.api.getSession({ headers, returnHeaders: true }),
 					catch: (cause) => new CloudAuthError({ cause }),
 				}),
 		};

@@ -90,7 +90,10 @@ describe("dashboard request runtime", () => {
 			);
 			const http = makeDashboardHttp({
 				...runtime,
-				getSession: async () => ({ user: { id: "owner", name: "Owner", email: "owner@example.com" } }),
+				getSession: async () => ({
+					session: { user: { id: "owner", name: "Owner", email: "owner@example.com" } },
+					headers: new Headers(),
+				}),
 				getPublicOrigin: async () => "https://cloud.test",
 			});
 			try {
