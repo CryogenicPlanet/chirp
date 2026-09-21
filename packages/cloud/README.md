@@ -64,4 +64,8 @@ bun run --filter @comms/cloud dev
 
 The dashboard runs at **http://localhost:3000**. Sign-in also requires a configured OAuth callback and a trusted proxy that supplies the configured client-IP header; copying the example alone does not set those up. The development server does not run provisioning workers. Use the [operations guide](OPERATIONS.md) for authentication setup, invitations, the complete server, Fly deployment, and recovery.
 
+`CLOUD_SECRETS_KEY` is an independent 32-byte key encoded as 64 hexadecimal characters (`openssl rand -hex 32`). Back it up privately with the control-plane database; changing or losing it prevents decrypting queued and retryable board credentials. Administrator credentials are encrypted until bootstrap is durably confirmed, then replaced atomically with board-scoped runtime credentials.
+
+For this upgrade, stop old workers before migrations 10 through 14 and deploy the new version before accepting readable slugs. Existing board identities stay unchanged. Migration 13 upgrades only legacy deployments without a tracked volume, while migration 14 converts migration 9's historical single-ciphertext table to staged bootstrap and runtime credentials. Prepared legacy credentials are converted without rotating passwords or Fly secret versions.
+
 To run a standalone board instead of Cloud, follow the [Chirp quickstart](../../README.md#start-a-board).

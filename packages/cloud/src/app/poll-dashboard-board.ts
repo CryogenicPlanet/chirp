@@ -23,6 +23,7 @@ export const pollDashboardBoard = async (input: {
 	readonly load: (signal: AbortSignal) => Promise<DashboardBoard>;
 	readonly onBoard: (board: DashboardBoard) => void;
 	readonly onError: (error: unknown) => void;
+	readonly shouldRetry?: (error: unknown) => boolean;
 }) => {
 	while (!input.signal.aborted) {
 		try {
@@ -32,8 +33,10 @@ export const pollDashboardBoard = async (input: {
 			if (board.phase !== "queued" && board.phase !== "provisioning" && board.phase !== "deleting") return;
 			await wait(2_000, input.signal);
 		} catch (error) {
-			if (!input.signal.aborted) input.onError(error);
-			return;
+			if (input.signal.aborted) return;
+			input.onError(error);
+			if (input.shouldRetry?.(error) === false) return;
+			await wait(2_000, input.signal);
 		}
 	}
 };

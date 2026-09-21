@@ -15,6 +15,7 @@ import { PostgresBootstrapError } from "../src/postgres-bootstrap.ts";
 import { boardOperations, boardPostgresSecrets } from "../src/schema.ts";
 import { Boards } from "../src/boards.ts";
 import { realPostgres, runFresh } from "./fixture.ts";
+import { encryptLegacyBootstrap } from "./fixtures/legacy-cloud-secret.ts";
 
 const url = "postgresql://admin:example-private-password@database.example.com/main?sslmode=require";
 const input = {
@@ -92,6 +93,44 @@ describe("Postgres onboarding persistence", () => {
 			Redacted.make("f".repeat(64)),
 		);
 	});
+});
+
+test("converts historical prepared credentials under the active lease without rotating passwords", async () => {
+	const key = "e".repeat(64);
+	await runFresh(
+		Effect.gen(function* () {
+			yield* migrateCloudDatabase;
+			const board = yield* (yield* Dashboard).create("owner", input);
+			const operation = yield* nextClaim("legacy-worker");
+			if (!operation.lease_token) return yield* Effect.die("Claim returned no lease token");
+			const payload = {
+				adminUrl: url,
+				bootPassword: "a".repeat(64),
+				appPassword: "b".repeat(64),
+			};
+			yield* (yield* Database)
+				.update(boardPostgresSecrets)
+				.set({
+					prepared: true,
+					bootstrap_ciphertext: encryptLegacyBootstrap(key, board.id, payload, "board"),
+					runtime_ciphertext: null,
+					fly_secrets_version: 17,
+				})
+				.where(eq(boardPostgresSecrets.board_id, board.id));
+			yield* (yield* PostgresStorage).prepare(board.id, {
+				operationId: operation.id,
+				leaseToken: operation.lease_token,
+				workerId: "legacy-worker",
+			});
+			const row = (yield* (yield* Database).select().from(boardPostgresSecrets))[0];
+			expect(row).toMatchObject({ prepared: true, bootstrap_ciphertext: null, fly_secrets_version: 17 });
+			if (!row?.runtime_ciphertext) return yield* Effect.die("Legacy conversion produced no runtime credentials");
+			const runtime = Redacted.value(yield* (yield* CloudSecrets).decryptRuntime(board.id, row.runtime_ciphertext));
+			expect(new URL(runtime.bootUrl).password).toBe(payload.bootPassword);
+			expect(new URL(runtime.appUrl).password).toBe(payload.appPassword);
+		}),
+		Redacted.make(key),
+	);
 });
 
 test("retries secret upload durably and never leaks URLs to Machine configuration", async () => {

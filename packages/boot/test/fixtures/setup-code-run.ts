@@ -75,12 +75,19 @@ const run = Effect.gen(function* () {
 			{ expires_at: second.expires_at },
 		]);
 		now += 1;
+		assert.equal(yield* auth.setupOpen, true);
+		assert.equal(output.length, logged + 1, "An expired operator code must restore a usable startup code");
+		const replacement = output.at(-1);
+		assert.ok(typeof replacement === "string");
+		const replacementCode = /code ([A-F0-9]{16})$/.exec(replacement)?.[1];
+		assert.ok(replacementCode);
 		yield* fails(auth.startSetup(second.code), "setup_code_invalid");
+		yield* auth.startSetup(replacementCode);
 		yield* fails(
 			auth.finishSetup(finalMoment.id, device.registration(finalMoment.options.challenge)),
 			"challenge_invalid",
 		);
-		assert.equal(output.length, logged, "Operator codes must not be logged, including rejection rotation");
+		const loggedAfterExpiry = output.length;
 		const crossing = yield* auth.mintSetupCode;
 		now = crossing.expires_at - 4;
 		const crossingChallenge = yield* auth.startSetup(crossing.code);
@@ -103,7 +110,7 @@ const run = Effect.gen(function* () {
 		const third = yield* auth.mintSetupCode;
 		for (let i = 0; i < 3; i++) yield* fails(auth.startSetup("wrong"), "setup_code_invalid");
 		yield* fails(auth.startSetup(third.code), "setup_code_invalid");
-		assert.equal(output.length, logged);
+		assert.equal(output.length, loggedAfterExpiry, "Unexpired operator-code rotation must stay private");
 		const fresh = yield* auth.mintSetupCode;
 		const ceremony = yield* auth.startSetup(fresh.code);
 		yield* auth.finishSetup(ceremony.id, device.registration(ceremony.options.challenge));

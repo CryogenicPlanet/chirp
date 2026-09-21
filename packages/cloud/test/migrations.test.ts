@@ -7,6 +7,9 @@ import { CloudMigrationError } from "../src/migration-ledger.ts";
 import { migrateCloudDatabase, runCloudMigrations } from "../src/migrations.ts";
 import * as foundation from "../src/migrations/0001_foundation.ts";
 import * as cloudAuth from "../src/migrations/0002_cloud_auth.ts";
+import * as postgresSecrets from "../src/migrations/0009_board_postgres_secrets.ts";
+import * as provisioningTemplateV2 from "../src/migrations/0013_provisioning_template_v2.ts";
+import * as boardPostgresSecretStages from "../src/migrations/0014_board_postgres_secret_stages.ts";
 import { cloudMigrations } from "../src/schema.ts";
 import { realPostgres, runFresh } from "./fixture.ts";
 
@@ -34,11 +37,55 @@ describe("cloud migrations", () => {
 					{ migration_id: 6, name: "provisioning_retry_budgets", compatibleSchemaVersions: [] },
 					{ migration_id: 7, name: "board_deletion", compatibleSchemaVersions: [] },
 					{ migration_id: 8, name: "invitation_limits", compatibleSchemaVersions: [] },
-					{ migration_id: 9, name: "board_postgres_secrets", compatibleSchemaVersions: [] },
+					{ migration_id: 9, name: "board_postgres_secrets", compatibleSchemaVersions: [1, 2, 3, 4, 5, 6, 7, 8] },
 					{ migration_id: 10, name: "readable_board_slugs", compatibleSchemaVersions: [] },
 					{ migration_id: 11, name: "generic_invitations", compatibleSchemaVersions: [] },
 					{ migration_id: 12, name: "board_release_channel", compatibleSchemaVersions: [11] },
+					{ migration_id: 13, name: "provisioning_template_v2", compatibleSchemaVersions: [] },
+					{ migration_id: 14, name: "board_postgres_secret_stages", compatibleSchemaVersions: [] },
 				]);
+			}),
+		);
+	});
+
+	test("upgrades the immutable migration 9 table through a forward migration", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				yield* runCloudMigrations([foundation]);
+				const database = yield* Database;
+				const sql = yield* SqlClient.SqlClient;
+				yield* postgresSecrets.effect(database);
+				yield* sql`INSERT INTO boards (id, owner_id, name, slug, storage_engine)
+					VALUES
+						('00000000-0000-4000-8000-000000000001', 'owner', 'Postgres', ${"a".repeat(32)}, 'postgres'),
+						('00000000-0000-4000-8000-000000000002', 'owner', 'Prepared', ${"b".repeat(32)}, 'postgres')`;
+				yield* sql`INSERT INTO board_postgres_secrets (board_id, ciphertext)
+					VALUES
+						('00000000-0000-4000-8000-000000000001', 'encrypted-bootstrap'),
+						('00000000-0000-4000-8000-000000000002', 'encrypted-prepared')`;
+				yield* sql`UPDATE board_postgres_secrets SET prepared = true, fly_secrets_version = 17
+					WHERE board_id = '00000000-0000-4000-8000-000000000002'`;
+				yield* database.transaction((transaction) => boardPostgresSecretStages.effect(transaction));
+				expect(yield* sql`SELECT * FROM board_postgres_secrets`).toEqual([
+					{
+						board_id: "00000000-0000-4000-8000-000000000001",
+						bootstrap_ciphertext: "encrypted-bootstrap",
+						runtime_ciphertext: null,
+						prepared: false,
+						fly_secrets_version: null,
+					},
+					{
+						board_id: "00000000-0000-4000-8000-000000000002",
+						bootstrap_ciphertext: "encrypted-prepared",
+						runtime_ciphertext: null,
+						prepared: true,
+						fly_secrets_version: 17,
+					},
+				]);
+				expect(
+					yield* sql`SELECT is_nullable FROM information_schema.columns
+						WHERE table_name = 'board_postgres_secrets' AND column_name = 'bootstrap_ciphertext'`,
+				).toEqual([{ is_nullable: "YES" }]);
 			}),
 		);
 	});
@@ -63,7 +110,7 @@ describe("cloud migrations", () => {
 				yield* migrateCloudDatabase;
 				yield* database
 					.insert(cloudMigrations)
-					.values({ migration_id: 13, name: "unknown", compatible_schema_versions: [] });
+					.values({ migration_id: 15, name: "unknown", compatible_schema_versions: [] });
 				const result = yield* Effect.exit(migrateCloudDatabase);
 				expect(Exit.isFailure(result)).toBe(true);
 			}),
@@ -198,6 +245,86 @@ describe("cloud migrations", () => {
 				yield* sql`INSERT INTO cloud_invitations (id, token_digest, email, expires_at, created_at)
 				VALUES ('generic-invite', ${"b".repeat(64)}, NULL, now() + interval '1 day', now())`;
 				expect(yield* sql`SELECT email FROM cloud_invitations WHERE id = 'generic-invite'`).toEqual([{ email: null }]);
+			}),
+		);
+	});
+
+	test("upgrades only uncreated legacy volume intent to the supported template", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				const sql = yield* SqlClient.SqlClient;
+				const boardId = "00000000-0000-4000-8000-000000000001";
+				const operationId = "00000000-0000-4000-8000-000000000002";
+				const normalizedBoardId = "00000000-0000-4000-8000-000000000003";
+				const normalizedOperationId = "00000000-0000-4000-8000-000000000004";
+				const ambiguousBoardId = "00000000-0000-4000-8000-000000000005";
+				const ambiguousOperationId = "00000000-0000-4000-8000-000000000006";
+				const slug = "a".repeat(32);
+				yield* sql`INSERT INTO boards (id, owner_id, name, slug, storage_engine)
+					VALUES (${boardId}, 'owner', 'Legacy', ${slug}, 'sqlite')`;
+				yield* sql`INSERT INTO boards (id, owner_id, name, slug, storage_engine) VALUES
+					(${normalizedBoardId}, 'owner', 'Normalized', ${"b".repeat(32)}, 'sqlite'),
+					(${ambiguousBoardId}, 'owner', 'Ambiguous', ${"c".repeat(32)}, 'sqlite')`;
+				yield* sql`INSERT INTO board_deployments (
+					board_id, state, hostname, storage_engine, region, image_ref, app_name, network_name,
+					volume_name, machine_name, volume_size_gb
+				) VALUES (
+					${boardId}, 'app_created', ${`${slug}.boards.chirp.wiki`}, 'sqlite', 'sjc',
+					${`registry.example/chirp@sha256:${"a".repeat(64)}`}, ${`chirp-${slug}`}, ${`chirp-${slug}`},
+					${`chirp_data_${slug}`}, ${`board-${slug}`}, 1
+				)`;
+				for (const [id, value] of [
+					[normalizedBoardId, "b".repeat(32)],
+					[ambiguousBoardId, "c".repeat(32)],
+				] as const)
+					yield* sql`INSERT INTO board_deployments (
+						board_id, state, hostname, storage_engine, region, image_ref, app_name, network_name,
+						volume_name, machine_name, volume_size_gb
+					) VALUES (
+						${id}, 'app_created', ${`${value}.boards.chirp.wiki`}, 'sqlite', 'sjc',
+						${`registry.example/chirp@sha256:${"a".repeat(64)}`}, ${`chirp-${value}`}, ${`chirp-${value}`},
+						'chirp_data', ${`board-${value}`}, 1
+					)`;
+				yield* sql`INSERT INTO board_operations (
+					id, board_id, kind, state, checkpoint, requested_by, idempotency_key, request_hash,
+					ambiguous_mutations
+				) VALUES (
+					${operationId}, ${boardId}, 'provision', 'queued', 'app_created', 'owner', 'legacy',
+					${"a".repeat(64)}, ARRAY['volume_create']::text[]
+				)`;
+				for (const [id, board, marker] of [
+					[normalizedOperationId, normalizedBoardId, false],
+					[ambiguousOperationId, ambiguousBoardId, true],
+				] as const) {
+					if (marker)
+						yield* sql`INSERT INTO board_operations (
+							id, board_id, kind, state, checkpoint, requested_by, idempotency_key, request_hash,
+							ambiguous_mutations
+						) VALUES (
+							${id}, ${board}, 'provision', 'queued', 'app_created', 'owner', ${id},
+							${"b".repeat(64)}, ARRAY['volume_create']::text[]
+						)`;
+					else
+						yield* sql`INSERT INTO board_operations (
+							id, board_id, kind, state, checkpoint, requested_by, idempotency_key, request_hash
+						) VALUES (
+							${id}, ${board}, 'provision', 'queued', 'app_created', 'owner', ${id}, ${"b".repeat(64)}
+						)`;
+				}
+				yield* provisioningTemplateV2.effect(yield* Database);
+				expect(
+					yield* sql`SELECT board_id, volume_name, volume_size_gb, row_version FROM board_deployments ORDER BY board_id`,
+				).toEqual([
+					{ board_id: boardId, volume_name: "chirp_data", volume_size_gb: 5, row_version: 1 },
+					{ board_id: normalizedBoardId, volume_name: "chirp_data", volume_size_gb: 5, row_version: 1 },
+					{ board_id: ambiguousBoardId, volume_name: "chirp_data", volume_size_gb: 1, row_version: 0 },
+				]);
+				expect(yield* sql`SELECT id, ambiguous_mutations FROM board_operations ORDER BY id`).toEqual([
+					{ id: operationId, ambiguous_mutations: [] },
+					{ id: normalizedOperationId, ambiguous_mutations: [] },
+					{ id: ambiguousOperationId, ambiguous_mutations: ["volume_create"] },
+				]);
 			}),
 		);
 	});

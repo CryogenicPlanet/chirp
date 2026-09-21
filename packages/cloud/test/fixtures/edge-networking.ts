@@ -16,8 +16,6 @@ export const makeNetworking = () => {
 		failAfter: Set<string>;
 		calls: string[];
 		checkCertificateCalls: number;
-		checkCertificateDelayAt: number;
-		checkCertificateDelayMs: number;
 	} = {
 		ips: [],
 		certificate: undefined,
@@ -30,8 +28,6 @@ export const makeNetworking = () => {
 		failAfter: new Set(),
 		calls: [],
 		checkCertificateCalls: 0,
-		checkCertificateDelayAt: Number.POSITIVE_INFINITY,
-		checkCertificateDelayMs: 0,
 	};
 	const call = <A>(operation: string, provider: "fly" | "cloudflare", body: () => A) =>
 		Effect.gen(function* () {
@@ -94,8 +90,6 @@ export const makeNetworking = () => {
 			checkCertificate: () =>
 				Effect.gen(function* () {
 					state.checkCertificateCalls += 1;
-					if (state.checkCertificateCalls === state.checkCertificateDelayAt)
-						yield* Effect.sleep(state.checkCertificateDelayMs);
 					return yield* flyCall("check_certificate", () => {
 						if (!state.certificate) throw new Error("Certificate not created");
 						return {

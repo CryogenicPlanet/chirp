@@ -16,6 +16,8 @@ import * as postgresSecrets from "./migrations/0009_board_postgres_secrets.ts";
 import * as readableBoardSlugs from "./migrations/0010_readable_board_slugs.ts";
 import * as genericInvitations from "./migrations/0011_generic_invitations.ts";
 import * as boardReleaseChannel from "./migrations/0012_board_release_channel.ts";
+import * as provisioningTemplateV2 from "./migrations/0013_provisioning_template_v2.ts";
+import * as boardPostgresSecretStages from "./migrations/0014_board_postgres_secret_stages.ts";
 import { cloudMigrations } from "./schema.ts";
 
 export { CloudMigrationError } from "./migration-ledger.ts";
@@ -37,6 +39,8 @@ const migrations: ReadonlyArray<Migration> = [
 	readableBoardSlugs,
 	genericInvitations,
 	boardReleaseChannel,
+	provisioningTemplateV2,
+	boardPostgresSecretStages,
 ];
 const receipts = Schema.decodeUnknownEffect(
 	Schema.Array(
