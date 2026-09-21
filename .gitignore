@@ -6,5 +6,7 @@ coverage/
 .env.*
 !.env.example
 data/
+data-*/
 .DS_Store
 .playwright-mcp/
+packages/server/src/kernel/access-policy-proposal.md
