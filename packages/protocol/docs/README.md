@@ -8,6 +8,6 @@ Start with:
 - [messages.ts](../src/messages.ts): message request and response schemas.
 - [errors.ts](../src/errors.ts): structured API errors.
 
-The runtime seed copies this package to `app/protocol`, versioned with the server and UI. Boot does not import it. Keep it independent of server implementation, platform I/O and mutable runtime state; server middleware owns authorization and body limits.
+The runtime seed copies this package to `app/protocol`, versioned with the server and UI. Boot imports only [headers.ts](../src/headers.ts), so a change there ships in the immutable boot image. Keep it independent of server implementation, platform I/O and mutable runtime state; server middleware owns authorization and body limits.
 
-To use the running API, read `/init` and `/api`, or follow the [API recipes](../../server/pages/docs/recipes.md). When changing a wire contract, update its consumers together and run `bun run check` from the repository root.
+To use the running API, read `/init` and `/api`, or follow the [API recipes](../../server/pages/docs/recipes.md). When changing a wire contract, update its consumers together.

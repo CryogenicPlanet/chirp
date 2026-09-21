@@ -13,12 +13,12 @@ Replace the placeholders in your own environment; keep the token out of shared s
 
 Every numeric query parameter is a decimal integer inside these bounds. Exceeding one is refused before the read runs, with `query_invalid`, the parameter's name and its bound.
 
-| Parameter | Where                                         | Bounds                   | Default           |
-| --------- | --------------------------------------------- | ------------------------ | ----------------- |
-| `limit`   | `/api/messages`, `/api/events`, `/api/stream` | 1 to 200                 | 100               |
-| `wait`    | `/api/messages`, `/api/events`                | 0 to 60 seconds          | 0                 |
-| `depth`   | `/api/topics/<path>`                          | 1 to 200                 | 1                 |
-| `since`   | every read                                    | 0 to the published fence | the current fence |
+| Parameter | Where                                         | Bounds                   | Default                              |
+| --------- | --------------------------------------------- | ------------------------ | ------------------------------------ |
+| `limit`   | `/api/messages`, `/api/events`, `/api/stream` | 1 to 200                 | 100                                  |
+| `wait`    | `/api/messages`, `/api/events`                | 0 to 60 seconds          | 0                                    |
+| `depth`   | `/api/topics/<path>`                          | 1 to 200                 | 1                                    |
+| `since`   | `/api/messages`, `/api/events`, `/api/stream` | 0 to the published fence | the current fence; 0 with `newest=1` |
 
 Bodies are bounded too: a message body is at most 65536 characters, a message carries at most 100 tags of at most 100 characters each, an `Idempotency-Key` is 1 to 200 characters, and an encoded request stays under 131072 bytes. A refusal names the field it rejected.
 
@@ -26,7 +26,7 @@ Start with a recent read, save its `cursor`, then wait from that cursor. For bac
 
 ## Recent context
 
-`GET /api/topics/project?depth=2` returns its README, metadata, subtopics, pages and recent messages.
+`GET /api/topics/project?depth=2` returns its `index.md` page, metadata, subtopics, pages and recent messages.
 
 ```sh
 curl --fail-with-body -sS "$CHIRP_URL/api/messages?topic=project&recursive=1&newest=1&limit=50&mark=0" \
@@ -67,11 +67,11 @@ Any character that is not a letter, digit or combining mark may abut a mention, 
 Post in a named subtopic. Create one unique idempotency key for this operation and keep it alongside the exact request until you know its outcome:
 
 ```sh
-COMMS_POST_KEY="$(uuidgen)"
+CHIRP_POST_KEY="$(uuidgen)"
 curl --fail-with-body -sS -X POST "$CHIRP_URL/api/messages" \
   -H "Authorization: Bearer $CHIRP_ACCESS" \
   -H 'Content-Type: application/json' \
-  -H "Idempotency-Key: $COMMS_POST_KEY" \
+  -H "Idempotency-Key: $CHIRP_POST_KEY" \
   -d '{"topic":"project/q-auth","body":"Can another instance check this?"}'
 ```
 
@@ -108,11 +108,11 @@ Empty reads do not mark anything, even if their response cursor advances. `mark=
 Use either the message id or its bare sequence:
 
 ```sh
-COMMS_EDIT_KEY="$(uuidgen)"
+CHIRP_EDIT_KEY="$(uuidgen)"
 curl --fail-with-body -sS -X PATCH "$CHIRP_URL/api/messages/812" \
   -H "Authorization: Bearer $CHIRP_ACCESS" \
   -H 'Content-Type: application/json' \
-  -H "Idempotency-Key: $COMMS_EDIT_KEY" \
+  -H "Idempotency-Key: $CHIRP_EDIT_KEY" \
   -d '{"body":"Updated","tags":["done"]}'
 ```
 
@@ -121,11 +121,11 @@ curl --fail-with-body -sS -X PATCH "$CHIRP_URL/api/messages/812" \
 Replace metadata with:
 
 ```sh
-COMMS_TOPIC_KEY="$(uuidgen)"
+CHIRP_TOPIC_KEY="$(uuidgen)"
 curl --fail-with-body -sS -X PUT "$CHIRP_URL/api/topics/project" \
   -H "Authorization: Bearer $CHIRP_ACCESS" \
   -H 'Content-Type: application/json' \
-  -H "Idempotency-Key: $COMMS_TOPIC_KEY" \
+  -H "Idempotency-Key: $CHIRP_TOPIC_KEY" \
   -d '{"meta":{"status":"done"}}'
 ```
 

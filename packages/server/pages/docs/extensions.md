@@ -216,7 +216,7 @@ export default (api: Api) =>
 	});
 ```
 
-This retains the table and its data, then releases the registration with the migration receipt. A successful single-table `DROP TABLE` removes its owned registration; `ALTER TABLE old_name RENAME TO new_name` transfers it. Removing source alone never releases protection. Kernel identity, publication, recovery and migration bookkeeping cannot be released. To retire an orphan with unknown legacy ownership, add an explicit trusted [app migration](../../src/migrations/README.md) declaring `unprotect`; do not delete registry rows through raw SQL.
+This retains the table and its data, then releases the registration with the migration receipt. A successful single-table `DROP TABLE` removes its owned registration; `ALTER TABLE old_name RENAME TO new_name` transfers it. Removing source alone never releases protection. Kernel identity, publication, recovery and migration bookkeeping cannot be released. To retire an orphan with unknown legacy ownership, add an explicit trusted app migration declaring `unprotect` (see `app/migrations/README.md`); do not delete registry rows through raw SQL.
 
 MySQL extension DDL accepts bounded table/index target forms and refuses unsupported forms before writing migration intent. Arbitrary migration code and separately acquired clients remain trusted app code, not an authorization sandbox. Use app-wide migrations for deliberate cross-extension changes and preserve the close-handle recovery protocol.
 
