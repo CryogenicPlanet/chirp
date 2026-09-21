@@ -10,6 +10,7 @@ export const makeNetworking = () => {
 		records: DnsRecord[];
 		ready: boolean;
 		resolved: string[];
+		aaaa: string[] | null | undefined;
 		zone: { name: string; status: string; type: string };
 		failBefore: Set<string>;
 		failAfter: Set<string>;
@@ -23,6 +24,7 @@ export const makeNetworking = () => {
 		records: [],
 		ready: true,
 		resolved: ["66.241.124.100"],
+		aaaa: null,
 		zone: { name: "chirp.wiki", status: "active", type: "full" },
 		failBefore: new Set(),
 		failAfter: new Set(),
@@ -102,7 +104,7 @@ export const makeNetworking = () => {
 							status: state.ready ? "active" : "pending_validation",
 							certificates: state.ready ? [{ source: "fly", status: "active" }] : [],
 							validation: { ownership_txt_configured: state.ready },
-							dns_records: { a: state.resolved, aaaa: null },
+							dns_records: { a: state.resolved, ...(state.aaaa === undefined ? {} : { aaaa: state.aaaa }) },
 						};
 					});
 				}),

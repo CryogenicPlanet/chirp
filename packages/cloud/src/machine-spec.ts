@@ -156,9 +156,9 @@ export const machineMatches = (machine: FlyMachine, deployment: Deployment) => {
 		portsMatch &&
 		checksMatch &&
 		exactKeys(config.guest, ["cpu_kind", "cpus", "memory_mb"]) &&
-		config.guest.cpu_kind === expected.guest.cpu_kind &&
-		config.guest.cpus === expected.guest.cpus &&
-		config.guest.memory_mb === expected.guest.memory_mb &&
+		config.guest.cpu_kind === "shared" &&
+		config.guest.cpus > 0 &&
+		config.guest.memory_mb >= 512 &&
 		exactKeys(config.stop_config, ["signal", "timeout"]) &&
 		config.stop_config.signal === expected.stop_config.signal &&
 		config.stop_config.timeout === expected.stop_config.timeout

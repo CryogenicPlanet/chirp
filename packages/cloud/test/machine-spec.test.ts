@@ -56,6 +56,21 @@ describe("managed Fly Machine intent", () => {
 		expect(machineMatches(observedMachine(), deployment)).toBe(true);
 	});
 
+	test("accepts an existing positive shared guest size after defaults change", () => {
+		const machine = observedMachine();
+		for (const guest of [
+			{ cpu_kind: "shared", cpus: 1, memory_mb: 512 },
+			{ cpu_kind: "shared", cpus: 2, memory_mb: 1024 },
+		])
+			expect(machineMatches({ ...machine, config: { ...machine.config, guest } }, deployment)).toBe(true);
+		for (const guest of [
+			{ cpu_kind: "performance", cpus: 2, memory_mb: 1024 },
+			{ cpu_kind: "shared", cpus: 0, memory_mb: 1024 },
+			{ cpu_kind: "shared", cpus: 1, memory_mb: 256 },
+		])
+			expect(machineMatches({ ...machine, config: { ...machine.config, guest } }, deployment)).toBe(false);
+	});
+
 	test("accepts validated Fly response enrichment and nullable disabled HTTPS redirects", () => {
 		const machine = observedMachine();
 		expect(

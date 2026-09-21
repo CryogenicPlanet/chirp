@@ -102,7 +102,7 @@ const runObserver = <A, E>(snapshots: ReadonlyArray<FlyVolumeSnapshot>, effect: 
 	effect.pipe(Effect.provide(backupObserverLayer.pipe(Layer.provide(flyLayer(snapshots)))));
 
 describe("BackupObserver", () => {
-	test("records only the newest completed snapshot and finishes the leased operation", async () => {
+	test("records only the newest explicitly completed snapshot and finishes the leased operation", async () => {
 		await runFresh(
 			Effect.gen(function* () {
 				const { backup, board } = yield* prepare;
@@ -110,16 +110,23 @@ describe("BackupObserver", () => {
 					[
 						{ id: "pending", status: "pending", created_at: "2026-09-20T12:00:00.000Z" },
 						{
-							id: "newest",
+							id: "missing-status",
 							created_at: "2026-09-20T11:00:00.000Z",
-							digest: "sha256:newest",
+							digest: "sha256:missing-status",
 							retention_days: 5,
 						},
 						{
-							id: "older",
+							id: "null-status",
+							status: null,
+							created_at: "2026-09-20T10:00:00.000Z",
+							digest: "sha256:null-status",
+							retention_days: 4,
+						},
+						{
+							id: "newest",
 							status: "created",
 							created_at: "2026-09-19T11:00:00.000Z",
-							digest: "sha256:older",
+							digest: "sha256:newest",
 							retention_days: 3,
 						},
 						{ id: "incomplete", status: "created", created_at: "2026-09-21T11:00:00.000Z" },
@@ -131,9 +138,9 @@ describe("BackupObserver", () => {
 				expect(deployment).toMatchObject({
 					last_snapshot_id: "newest",
 					last_snapshot_digest: "sha256:newest",
-					last_snapshot_retention_days: 5,
+					last_snapshot_retention_days: 3,
 				});
-				expect(deployment.last_snapshot_created_at?.toISOString()).toBe("2026-09-20T11:00:00.000Z");
+				expect(deployment.last_snapshot_created_at?.toISOString()).toBe("2026-09-19T11:00:00.000Z");
 				const db = yield* Database;
 				expect(
 					yield* db

@@ -431,6 +431,8 @@ describe("Provisioner", () => {
 
 	test("bounds persistent failures independently from claim attempts and releases the board slot", async () => {
 		const provider = makeFakeProvider();
+		provider.fake.getApp = () =>
+			Effect.fail(new FlyApiError({ operation: "get_app", reason: "transport", status: null }));
 		await runFresh(
 			Effect.gen(function* () {
 				yield* migrateCloudDatabase;
@@ -439,7 +441,6 @@ describe("Provisioner", () => {
 				const sql = yield* SqlClient.SqlClient;
 				const provisioner = yield* Provisioner;
 				for (let attempt = 1; attempt <= 10; attempt += 1) {
-					provider.set.failHealth();
 					const operation = yield* nextClaim("worker-1");
 					const before = yield* Clock.currentTimeMillis;
 					expect(yield* provisioner.run(operation, "worker-1")).toBe(attempt === 10 ? "blocked" : "requeued");
@@ -462,7 +463,7 @@ describe("Provisioner", () => {
 					{ state: "failed", attempt: 10, failure_count: 10, lease_token: null, last_error_code: "retry_exhausted" },
 				]);
 				expect(Option.isNone(yield* operations.claim("worker-2", 30_000))).toBe(true);
-				expect(provider.resources()).toEqual({ apps: 1, volumes: 1, machines: 1 });
+				expect(provider.resources()).toEqual({ apps: 0, volumes: 0, machines: 0 });
 				expect(
 					(yield* operations.enqueue({
 						board_id: board.id,
@@ -799,28 +800,28 @@ describe("Provisioner", () => {
 		);
 	});
 
-	test("requeues health and child-route failures instead of completing", async () => {
+	test("waits past the failure limit for edge health and child-route readiness", async () => {
 		const provider = makeFakeProvider();
-		provider.set.failHealth();
 		await runFresh(
 			Effect.gen(function* () {
 				yield* migrateCloudDatabase;
 				yield* (yield* Boards).request(request);
 				const provisioner = yield* Provisioner;
 				let operation = Option.getOrThrow(yield* (yield* Operations).claim("worker-1", 30_000));
-				let outcome = yield* provisioner.run(operation, "worker-1");
 				const sql = yield* SqlClient.SqlClient;
-				expect(outcome).toBe("requeued");
-				expect(yield* sql`SELECT state, checkpoint FROM board_operations WHERE id = ${operation.id}`).toEqual([
-					{ state: "queued", checkpoint: "machine_started" },
-				]);
+				for (let poll = 0; poll < 12; poll += 1) {
+					provider.set.failHealth();
+					expect(yield* provisioner.run(operation, `worker-${poll + 1}`)).toBe("requeued");
+					expect(
+						yield* sql`SELECT state, checkpoint, failure_count FROM board_operations WHERE id = ${operation.id}`,
+					).toEqual([{ state: "queued", checkpoint: "machine_started", failure_count: 0 }]);
+					operation = yield* nextClaim(`worker-${poll + 2}`);
+				}
 				provider.set.failChildRoute();
-				operation = yield* nextClaim("worker-2");
-				outcome = yield* provisioner.run(operation, "worker-2");
-				expect(outcome).toBe("requeued");
-				expect(yield* sql`SELECT state, checkpoint FROM board_operations WHERE id = ${operation.id}`).toEqual([
-					{ state: "queued", checkpoint: "edge_reachable" },
-				]);
+				expect(yield* provisioner.run(operation, "worker-13")).toBe("requeued");
+				expect(
+					yield* sql`SELECT state, checkpoint, failure_count FROM board_operations WHERE id = ${operation.id}`,
+				).toEqual([{ state: "queued", checkpoint: "edge_reachable", failure_count: 0 }]);
 				expect(yield* sql`SELECT COUNT(*)::int AS count FROM board_routes`).toEqual([{ count: 1 }]);
 			}).pipe(Effect.provide(provisionerFor(provider))),
 		);

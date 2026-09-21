@@ -182,7 +182,7 @@ export const ensureEdgeNetworking = <E, R, E2, R2>(
 			!checked.certificates?.some((entry) => entry.source === "fly" && entry.status === "active") ||
 			records?.a?.length !== 1 ||
 			records.a[0] !== address ||
-			(records.aaaa !== null && records.aaaa?.length !== 0)
+			(records?.aaaa ?? []).length !== 0
 		)
 			return yield* problem("pending");
 	});

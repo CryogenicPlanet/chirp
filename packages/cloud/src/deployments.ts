@@ -79,12 +79,9 @@ const make = Effect.gen(function* () {
 			["storage_engine", deployment.storage_engine, storageEngine],
 			["hostname", deployment.hostname, spec.hostname],
 			["region", deployment.region, spec.region],
-			["image_ref", deployment.image_ref, spec.image_ref],
 			["app_name", deployment.app_name, spec.app_name],
 			["network_name", deployment.network_name, spec.network_name],
-			["volume_name", deployment.volume_name, spec.volume_name],
 			["machine_name", deployment.machine_name, spec.machine_name],
-			["volume_size_gb", deployment.volume_size_gb, spec.volume_size_gb],
 		];
 		const changed = values.find(([, actual, expected]) => actual !== expected);
 		return changed

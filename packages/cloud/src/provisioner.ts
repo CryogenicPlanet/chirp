@@ -317,15 +317,17 @@ const make = (settings: ProvisioningSettings) =>
 						Effect.gen(function* () {
 							const now = yield* Clock.currentTimeMillis;
 							const observationWait = error.code === "provider_observation_pending";
+							const edgeWait = error.code === "edge_unavailable";
 							const ambiguityWait = isAmbiguity(error.code) || pending.size > 0;
-							const waitsWithoutFailure = observationWait || ambiguityWait || error.code === "retry_exhausted";
+							const waitsWithoutFailure =
+								observationWait || edgeWait || ambiguityWait || error.code === "retry_exhausted";
 							const countFailure = error.retriable && !waitsWithoutFailure;
 							const nextFailureCount = operation.failure_count + (countFailure ? 1 : 0);
 							const ageExceeded = now >= deadline;
 							if (error.retriable && !ageExceeded && (!countFailure || nextFailureCount < settings.maxFailures)) {
 								let delay: number;
 								if (ambiguityWait) delay = Math.max(60_000, settings.pollIntervalMs);
-								else if (observationWait) delay = settings.pollIntervalMs;
+								else if (observationWait || edgeWait) delay = settings.pollIntervalMs;
 								else {
 									const ceiling = Math.min(300_000, 5_000 * 2 ** Math.max(0, nextFailureCount - 1));
 									delay = Math.floor(ceiling / 2 + (yield* Random.next) * (ceiling / 2));

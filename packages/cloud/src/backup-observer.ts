@@ -12,7 +12,7 @@ export class BackupObservationError extends Data.TaggedError("BackupObservationE
 
 const verified = (snapshot: FlyVolumeSnapshot): VerifiedSnapshot | undefined => {
 	if (
-		(snapshot.status !== undefined && snapshot.status !== null && snapshot.status !== "created") ||
+		snapshot.status !== "created" ||
 		!snapshot.id ||
 		!snapshot.created_at ||
 		!snapshot.digest ||

@@ -94,6 +94,20 @@ describe("Deployments", () => {
 					workerId: "worker-1",
 				};
 				yield* deployments.ensure({ ...lease, spec });
+				const existing = yield* deployments.ensure({
+					...lease,
+					spec: {
+						...spec,
+						image_ref: `registry.example/chirp@sha256:${"b".repeat(64)}`,
+						volume_name: "new-default-volume-name",
+						volume_size_gb: 20,
+					},
+				});
+				expect(existing).toMatchObject({
+					image_ref: spec.image_ref,
+					volume_name: spec.volume_name,
+					volume_size_gb: spec.volume_size_gb,
+				});
 				const drift = yield* Effect.exit(deployments.ensure({ ...lease, spec: { ...spec, region: "iad" } }));
 				expect(Exit.isFailure(drift)).toBe(true);
 				if (Exit.isFailure(drift)) expect(drift.cause.toString()).toContain(DeploymentDrift.name);

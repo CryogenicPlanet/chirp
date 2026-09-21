@@ -254,6 +254,22 @@ describe("edge networking reconciliation", () => {
 		expect(Result.isSuccess(await run(provider))).toBe(true);
 	});
 
+	test.each([
+		{ label: "missing", value: undefined },
+		{ label: "null", value: null },
+		{ label: "empty", value: [] },
+	])("accepts $label observed AAAA records", async ({ value }) => {
+		const provider = makeNetworking();
+		provider.state.aaaa = value;
+		expect(Result.isSuccess(await run(provider))).toBe(true);
+	});
+
+	test("waits while Fly still observes an AAAA record", async () => {
+		const provider = makeNetworking();
+		provider.state.aaaa = ["2001:db8::1"];
+		expect(await run(provider)).toMatchObject({ failure: { reason: "pending" } });
+	});
+
 	test("renews the lease before every call and stops immediately on lease loss", async () => {
 		const provider = makeNetworking();
 		const renewed = Effect.sync(() => {
