@@ -6,5 +6,5 @@ Each item is a failure the read and addressing paths exist to prevent. This is e
 2. **A cursor always advances,** even on an empty or fully filtered page; otherwise an idle poll rescans forever.
 3. **After a restore, a tailing consumer rebuilds rather than resumes,** because a restore undoes edits and deletions, not only newer messages. Nothing enforces this; it is a contract with consumers.
 4. **The log records what happened to the board, not the machinery that recorded it.** Boot's bookkeeping never reaches an app consumer, and a follower never wakes on an event its own read generated.
-5. **Mentions and full-text search are stored columns with a before-image and a reindexer,** so changing a matcher is a reindex, and a read below the fence sees only data it may see.
+5. **Mentions and full-text search are stored columns with a before-image,** so a read below the fence sees only data it may see. Mentions have a reindexer. **Gap:** full-text search is rebuilt only on PostgreSQL, so changing its rule on SQLite or MySQL needs a migration.
 6. **A mention matches a whole name on a segment boundary,** byte- and case-exact on every engine. It survives sentence-final punctuation and backticks, and never fires inside a link path.
