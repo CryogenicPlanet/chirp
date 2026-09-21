@@ -8,6 +8,7 @@ const board: DashboardBoard = {
 	name: "Private board",
 	hostname: null,
 	storage_engine: "sqlite",
+	channel: "latest",
 	region: null,
 	volume_size_gb: null,
 	phase: "queued",

@@ -13,6 +13,7 @@ import { postgresStorageLayer } from "./postgres-storage.ts";
 import { databaseLayer } from "./database.ts";
 import { Deployments, deploymentsLayer } from "./deployments.ts";
 import { edgeProbeLayer } from "./edge-probe.ts";
+import { imageRegistryLayer, imageRepositorySetting, parseImageRepository } from "./image-registry.ts";
 import { flyBoardApiLayer } from "./fly-board-api.ts";
 import { Operations, operationsLayer } from "./operations.ts";
 import { Provisioner, provisionerLayer } from "./provisioner.ts";
@@ -23,8 +24,9 @@ const workerLayer = Layer.unwrap(
 		flyToken: Config.Redacted("FLY_API_TOKEN"),
 		provisioning: provisioningSettings,
 		cloudflare: cloudflareSettings,
+		repository: imageRepositorySetting.pipe(Effect.flatMap(parseImageRepository)),
 	}).pipe(
-		Effect.map(({ flyToken, provisioning, cloudflare }) => {
+		Effect.map(({ flyToken, provisioning, cloudflare, repository }) => {
 			const stores = Layer.mergeAll(boardsLayer, deploymentsLayer, operationsLayer, postgresStorageLayer).pipe(
 				Layer.provideMerge(databaseLayer),
 				Layer.provideMerge(cloudSecretsLayer),
@@ -36,6 +38,7 @@ const workerLayer = Layer.unwrap(
 				cloudflareDnsLayer(cloudflare).pipe(Layer.provide(FetchHttpClient.layer)),
 				flyBoardApiLayer({ token: flyToken }).pipe(Layer.provide(FetchHttpClient.layer)),
 				edgeProbeLayer.pipe(Layer.provide(FetchHttpClient.layer)),
+				imageRegistryLayer(repository).pipe(Layer.provide(FetchHttpClient.layer)),
 			);
 			return Layer.mergeAll(
 				provisionerLayer(provisioning),

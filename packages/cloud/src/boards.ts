@@ -21,6 +21,7 @@ const encodeRequestHash = Schema.encodeSync(
 			slug: Schema.optional(Schema.String),
 			name: Schema.String,
 			storage_engine: Schema.String,
+			channel: Schema.optional(Schema.String),
 			postgres_fingerprint: Schema.optional(Schema.String),
 		}),
 	),
@@ -75,6 +76,9 @@ const make = Effect.gen(function* () {
 								...(input.slug === undefined ? {} : { slug: input.slug }),
 								name: input.name,
 								storage_engine: input.storage_engine,
+								// Hashed only when it differs from the default, so requests recorded before
+								// channels existed still replay to the board they created.
+								...(input.channel === undefined || input.channel === "latest" ? {} : { channel: input.channel }),
 								...(fingerprint === undefined ? {} : { postgres_fingerprint: fingerprint }),
 							}),
 						),
@@ -109,6 +113,7 @@ const make = Effect.gen(function* () {
 								name: input.name,
 								slug: input.slug ?? suggestedBoardSlug(slugBytes),
 								storage_engine: input.storage_engine,
+								channel: input.channel ?? "latest",
 							})
 							.onConflictDoNothing({ target: boards.slug })
 							.returning();

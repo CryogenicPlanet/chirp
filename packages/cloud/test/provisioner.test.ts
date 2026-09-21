@@ -12,7 +12,9 @@ import { runFresh } from "./fixture.ts";
 import {
 	appFor,
 	checkpoints,
+	imageRef,
 	makeFakeProvider,
+	makeFakeRegistry,
 	nextClaim,
 	provisionerFor,
 	request,
@@ -583,7 +585,7 @@ describe("Provisioner", () => {
 					spec: {
 						hostname: `${board.slug}.${settings.boardsDomain}`,
 						region: settings.region,
-						image_ref: settings.imageRef,
+						image_ref: imageRef,
 						app_name: `chirp-${board.slug}`,
 						network_name: `chirp-${board.slug}`,
 						volume_name: "chirp_data",
@@ -698,6 +700,45 @@ describe("Provisioner", () => {
 		);
 	});
 
+	test("resolves a board's release channel once and keeps that digest on later passes", async () => {
+		const provider = makeFakeProvider();
+		const registry = makeFakeRegistry();
+		// Fail the edge once so the first pass records the deployment and requeues, forcing a second pass.
+		provider.set.failHealth();
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				const board = yield* (yield* Boards).request({ ...request, channel: "canary" });
+				const provisioner = yield* Provisioner;
+				expect(yield* provisioner.run(yield* nextClaim("worker-1"), "worker-1")).toBe("requeued");
+				expect(yield* provisioner.run(yield* nextClaim("worker-2"), "worker-2")).toBe("succeeded");
+				// A moving channel must never move a board that already has an image.
+				expect(registry.resolved).toEqual(["canary"]);
+				const deployment = Option.getOrThrow(yield* (yield* Deployments).get(board.id));
+				expect(deployment.image_ref).toBe(imageRef);
+			}).pipe(Effect.provide(provisionerFor(provider, settings, registry))),
+		);
+	});
+
+	test("retries an unresolvable release channel without recording a deployment", async () => {
+		const provider = makeFakeProvider();
+		const registry = makeFakeRegistry();
+		registry.failNext();
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				const board = yield* (yield* Boards).request(request);
+				const provisioner = yield* Provisioner;
+				expect(yield* provisioner.run(yield* nextClaim("worker-1"), "worker-1")).toBe("requeued");
+				expect(Option.isNone(yield* (yield* Deployments).get(board.id))).toBe(true);
+				expect(provider.calls.createApp).toBe(0);
+				yield* provisioner.run(yield* nextClaim("worker-2"), "worker-2");
+				expect(registry.resolved).toEqual(["latest", "latest"]);
+				expect(Option.getOrThrow(yield* (yield* Deployments).get(board.id)).image_ref).toBe(imageRef);
+			}).pipe(Effect.provide(provisionerFor(provider, settings, registry))),
+		);
+	});
+
 	test("retries a Machine start that Fly refuses while the Machine is still settling", async () => {
 		const provider = makeFakeProvider();
 		// Fly answers 412 until a Machine created with skip_launch leaves the "created" state.
@@ -782,7 +823,7 @@ describe("Provisioner", () => {
 					spec: {
 						hostname: `${board.slug}.${settings.boardsDomain}`,
 						region: settings.region,
-						image_ref: settings.imageRef,
+						image_ref: imageRef,
 						app_name: `chirp-${board.slug}`,
 						network_name: `chirp-${board.slug}`,
 						volume_name: "chirp_data",

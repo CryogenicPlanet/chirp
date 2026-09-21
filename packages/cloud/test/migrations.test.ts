@@ -37,6 +37,7 @@ describe("cloud migrations", () => {
 					{ migration_id: 9, name: "board_postgres_secrets", compatibleSchemaVersions: [] },
 					{ migration_id: 10, name: "readable_board_slugs", compatibleSchemaVersions: [] },
 					{ migration_id: 11, name: "generic_invitations", compatibleSchemaVersions: [] },
+					{ migration_id: 12, name: "board_release_channel", compatibleSchemaVersions: [11] },
 				]);
 			}),
 		);
@@ -62,7 +63,7 @@ describe("cloud migrations", () => {
 				yield* migrateCloudDatabase;
 				yield* database
 					.insert(cloudMigrations)
-					.values({ migration_id: 12, name: "unknown", compatible_schema_versions: [] });
+					.values({ migration_id: 13, name: "unknown", compatible_schema_versions: [] });
 				const result = yield* Effect.exit(migrateCloudDatabase);
 				expect(Exit.isFailure(result)).toBe(true);
 			}),

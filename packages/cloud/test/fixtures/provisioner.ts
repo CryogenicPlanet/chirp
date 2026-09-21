@@ -3,6 +3,8 @@ import { SqlClient } from "effect/unstable/sql";
 import { CloudflareDns } from "../../src/cloudflare-dns.ts";
 import type { DeploymentState } from "../../src/deployment.ts";
 import { EdgeProbe, EdgeProbeError } from "../../src/edge-probe.ts";
+import { ImageRegistry, ImageRegistryError } from "../../src/image-registry.ts";
+import type { ReleaseChannel } from "../../src/board.ts";
 import { FlyApiError, FlyBoardApi } from "../../src/fly-board-api.ts";
 import type { FlyApp, FlyMachine, FlyVolume } from "../../src/fly-model.ts";
 import { Operations } from "../../src/operations.ts";
@@ -10,10 +12,12 @@ import { provisionerLayer } from "../../src/provisioner.ts";
 import type { ProvisioningSettings } from "../../src/provisioning-settings.ts";
 import { makeNetworking } from "./edge-networking.ts";
 
+// The digest a board's release channel resolves to in these tests.
+export const imageRef = `registry.example/chirp@sha256:${"a".repeat(64)}`;
+
 export const settings: ProvisioningSettings = {
 	organization: "chirp",
 	region: "sjc",
-	imageRef: `registry.example/chirp@sha256:${"a".repeat(64)}`,
 	boardsDomain: "boards.chirp.wiki",
 	volumeSizeGb: 1,
 	maxFailures: 10,
@@ -371,15 +375,43 @@ export const makeFakeProvider = () => {
 	};
 };
 
-const providerLayer = (provider: ReturnType<typeof makeFakeProvider>) =>
+// Resolves every channel to `imageRef`, recording each request so tests can assert a board resolves
+// its channel once rather than on every provisioning pass.
+export const makeFakeRegistry = () => {
+	const resolved: Array<ReleaseChannel> = [];
+	let unavailable = false;
+	return {
+		resolved,
+		failNext: () => {
+			unavailable = true;
+		},
+		registry: {
+			resolve: (channel: ReleaseChannel) =>
+				Effect.suspend(() => {
+					resolved.push(channel);
+					if (unavailable) {
+						unavailable = false;
+						return Effect.fail(new ImageRegistryError({ channel, reason: "network" }));
+					}
+					return Effect.succeed(imageRef);
+				}),
+		},
+	};
+};
+
+const providerLayer = (provider: ReturnType<typeof makeFakeProvider>, registry: ReturnType<typeof makeFakeRegistry>) =>
 	Layer.mergeAll(
 		Layer.succeed(FlyBoardApi, provider.fake),
 		Layer.succeed(CloudflareDns, provider.networking.dns),
 		Layer.succeed(EdgeProbe, provider.edge),
+		Layer.succeed(ImageRegistry, registry.registry),
 	);
 
-export const provisionerFor = (provider: ReturnType<typeof makeFakeProvider>, config = settings) =>
-	provisionerLayer(config).pipe(Layer.provide(providerLayer(provider)));
+export const provisionerFor = (
+	provider: ReturnType<typeof makeFakeProvider>,
+	config = settings,
+	registry = makeFakeRegistry(),
+) => provisionerLayer(config).pipe(Layer.provide(providerLayer(provider, registry)));
 
 export const nextClaim = (workerId: string) =>
 	Effect.gen(function* () {

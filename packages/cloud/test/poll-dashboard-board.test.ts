@@ -7,6 +7,7 @@ const board = (phase: DashboardBoard["phase"]): DashboardBoard => ({
 	name: "Private board",
 	hostname: phase === "ready" ? "opaque.boards.chirp.wiki" : null,
 	storage_engine: "sqlite",
+	channel: "latest",
 	region: null,
 	volume_size_gb: null,
 	phase,

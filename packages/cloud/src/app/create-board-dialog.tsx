@@ -32,6 +32,7 @@ export function CreateBoardDialog({
 	const [name, setName] = useState("");
 	const [slug, setSlug] = useState("");
 	const [storage, setStorage] = useState<"sqlite" | "postgres">("sqlite");
+	const [channel, setChannel] = useState<"latest" | "canary">("latest");
 	const [error, setError] = useState<string>();
 	const [pending, setPending] = useState(false);
 	const pendingCreate = useRef<{ readonly key: string; readonly body: string } | undefined>(undefined);
@@ -43,6 +44,7 @@ export function CreateBoardDialog({
 			name: data.get("name"),
 			slug: data.get("slug"),
 			storage_engine: storage,
+			channel,
 			...(storage === "postgres" ? { postgres_admin_url: data.get("postgres_admin_url") } : {}),
 		});
 		if (pendingCreate.current?.body !== body) pendingCreate.current = { key: crypto.randomUUID(), body };
@@ -177,6 +179,35 @@ export function CreateBoardDialog({
 									</label>
 								))}
 							</div>
+						</fieldset>
+						<fieldset disabled={pending} className="grid gap-3">
+							<legend className="mb-3 font-medium">Release</legend>
+							<div className="grid grid-cols-2 gap-3">
+								{(["latest", "canary"] as const).map((track) => (
+									<label
+										key={track}
+										className={`relative cursor-pointer rounded-lg border p-4 transition-colors ${channel === track ? "border-primary/65 bg-primary/5" : "border-border hover:bg-muted/50"}`}
+									>
+										<input
+											type="radio"
+											name="channel"
+											value={track}
+											checked={channel === track}
+											onChange={() => setChannel(track)}
+											className="absolute top-4 right-4 accent-primary"
+										/>
+										<span className="block font-medium">{track === "latest" ? "Latest" : "Canary"}</span>
+										<span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+											{track === "latest"
+												? "The current release. Recommended."
+												: "The newest build from main. Less tested."}
+										</span>
+									</label>
+								))}
+							</div>
+							<p className="text-xs leading-relaxed text-muted-foreground">
+								Your board keeps the build it starts with. You can’t change this later.
+							</p>
 						</fieldset>
 						{storage === "postgres" ? (
 							<div className="grid gap-3 rounded-lg border bg-background/50 p-4">

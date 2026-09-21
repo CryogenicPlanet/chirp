@@ -70,7 +70,6 @@ describe.skipIf(!realPostgres)("production cloud runtime", () => {
 				CLOUDFLARE_ZONE_ID: "a".repeat(32),
 				FLY_ORGANIZATION: "chirp-test",
 				FLY_REGION: "sjc",
-				CHIRP_IMAGE: `registry.example/chirp@sha256:${"a".repeat(64)}`,
 				BOARDS_DOMAIN: "boards.example.com",
 				NEXT_TELEMETRY_DISABLED: "1",
 			},
