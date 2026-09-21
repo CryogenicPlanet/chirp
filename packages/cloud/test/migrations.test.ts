@@ -90,6 +90,61 @@ describe("cloud migrations", () => {
 		);
 	});
 
+	test("upgrades the current-master staged migration 9 schema without rewriting its receipt", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				const sql = yield* SqlClient.SqlClient;
+				yield* sql`DELETE FROM cloud_migrations WHERE migration_id >= 12`;
+				yield* sql`UPDATE cloud_migrations SET compatible_schema_versions = ARRAY[]::integer[] WHERE migration_id = 9`;
+				yield* sql`ALTER TABLE board_postgres_secrets DROP CONSTRAINT board_postgres_secrets_stage_check`;
+				yield* sql`ALTER TABLE board_postgres_secrets ADD CONSTRAINT board_postgres_secrets_stage_check CHECK (
+					(NOT prepared AND bootstrap_ciphertext IS NOT NULL AND runtime_ciphertext IS NULL)
+					OR (prepared AND bootstrap_ciphertext IS NULL AND runtime_ciphertext IS NOT NULL)
+				)`;
+				yield* sql`INSERT INTO boards (id, owner_id, name, slug, storage_engine)
+					VALUES
+						('00000000-0000-4000-8000-000000000001', 'owner', 'Bootstrap', ${"a".repeat(32)}, 'postgres'),
+						('00000000-0000-4000-8000-000000000002', 'owner', 'Runtime', ${"b".repeat(32)}, 'postgres')`;
+				yield* sql`INSERT INTO board_postgres_secrets (
+					board_id, bootstrap_ciphertext, runtime_ciphertext, prepared, fly_secrets_version
+				) VALUES
+					('00000000-0000-4000-8000-000000000001', 'encrypted-bootstrap', NULL, false, NULL),
+					('00000000-0000-4000-8000-000000000002', NULL, 'encrypted-runtime', true, 17)`;
+				yield* migrateCloudDatabase;
+				expect(
+					yield* sql`SELECT migration_id, compatible_schema_versions FROM cloud_migrations
+						WHERE migration_id IN (9, 12, 13) ORDER BY migration_id`,
+				).toEqual([
+					{ migration_id: 9, compatible_schema_versions: [] },
+					{ migration_id: 12, compatible_schema_versions: [] },
+					{ migration_id: 13, compatible_schema_versions: [] },
+				]);
+				expect(
+					yield* sql`SELECT board_id, bootstrap_ciphertext, runtime_ciphertext, prepared, fly_secrets_version
+						FROM board_postgres_secrets ORDER BY board_id`,
+				).toEqual([
+					{
+						board_id: "00000000-0000-4000-8000-000000000001",
+						bootstrap_ciphertext: "encrypted-bootstrap",
+						runtime_ciphertext: null,
+						prepared: false,
+						fly_secrets_version: null,
+					},
+					{
+						board_id: "00000000-0000-4000-8000-000000000002",
+						bootstrap_ciphertext: null,
+						runtime_ciphertext: "encrypted-runtime",
+						prepared: true,
+						fly_secrets_version: 17,
+					},
+				]);
+				yield* sql`UPDATE board_postgres_secrets SET prepared = true
+					WHERE board_id = '00000000-0000-4000-8000-000000000001'`;
+			}),
+		);
+	});
+
 	test("refuses a changed historical receipt", async () => {
 		await runFresh(
 			Effect.gen(function* () {
@@ -284,14 +339,13 @@ describe("cloud migrations", () => {
 					) VALUES (
 						${id}, 'app_created', ${`${value}.boards.chirp.wiki`}, 'sqlite', 'sjc',
 						${`registry.example/chirp@sha256:${"a".repeat(64)}`}, ${`chirp-${value}`}, ${`chirp-${value}`},
-						'chirp_data', ${`board-${value}`}, 1
+						${id === ambiguousBoardId ? `chirp_data_${value}` : "chirp_data"}, ${`board-${value}`}, 1
 					)`;
 				yield* sql`INSERT INTO board_operations (
-					id, board_id, kind, state, checkpoint, requested_by, idempotency_key, request_hash,
-					ambiguous_mutations
+					id, board_id, kind, state, checkpoint, requested_by, idempotency_key, request_hash
 				) VALUES (
 					${operationId}, ${boardId}, 'provision', 'queued', 'app_created', 'owner', 'legacy',
-					${"a".repeat(64)}, ARRAY['volume_create']::text[]
+					${"a".repeat(64)}
 				)`;
 				for (const [id, board, marker] of [
 					[normalizedOperationId, normalizedBoardId, false],
@@ -316,9 +370,14 @@ describe("cloud migrations", () => {
 				expect(
 					yield* sql`SELECT board_id, volume_name, volume_size_gb, row_version FROM board_deployments ORDER BY board_id`,
 				).toEqual([
-					{ board_id: boardId, volume_name: "chirp_data", volume_size_gb: 5, row_version: 1 },
-					{ board_id: normalizedBoardId, volume_name: "chirp_data", volume_size_gb: 5, row_version: 1 },
-					{ board_id: ambiguousBoardId, volume_name: "chirp_data", volume_size_gb: 1, row_version: 0 },
+					{ board_id: boardId, volume_name: "chirp_data", volume_size_gb: 1, row_version: 1 },
+					{ board_id: normalizedBoardId, volume_name: "chirp_data", volume_size_gb: 1, row_version: 0 },
+					{
+						board_id: ambiguousBoardId,
+						volume_name: `chirp_data_${"c".repeat(32)}`,
+						volume_size_gb: 1,
+						row_version: 0,
+					},
 				]);
 				expect(yield* sql`SELECT id, ambiguous_mutations FROM board_operations ORDER BY id`).toEqual([
 					{ id: operationId, ambiguous_mutations: [] },

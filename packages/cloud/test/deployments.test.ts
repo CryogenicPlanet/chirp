@@ -168,6 +168,33 @@ describe("Deployments", () => {
 		);
 	});
 
+	test("preserves an explicit uncreated volume size while normalizing legacy intent", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				yield* (yield* Boards).request(request);
+				const operation = Option.getOrThrow(yield* (yield* Operations).claim("worker-1", 30_000));
+				if (!operation.lease_token) return yield* Effect.die("Claim returned no lease token");
+				const deployments = yield* Deployments;
+				const lease = {
+					operationId: operation.id,
+					leaseToken: operation.lease_token,
+					workerId: "worker-1",
+				};
+				yield* deployments.ensure({
+					...lease,
+					spec: { ...spec, volume_name: `chirp_data_${request.slug}`, volume_size_gb: 3 },
+				});
+				yield* provisioningTemplateV2.effect(yield* Database);
+				expect(yield* deployments.ensure({ ...lease, spec: { ...spec, volume_size_gb: 3 } })).toMatchObject({
+					volume_name: "chirp_data",
+					volume_size_gb: 3,
+					row_version: 1,
+				});
+			}),
+		);
+	});
+
 	test("upgrades normalized uncreated intent after Volume ambiguity is explicitly cleared", async () => {
 		await runFresh(
 			Effect.gen(function* () {

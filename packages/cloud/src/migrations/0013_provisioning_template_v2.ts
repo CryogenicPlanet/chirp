@@ -10,25 +10,18 @@ export const effect = (database: DatabaseClient) =>
 		yield* database.execute(sql`WITH upgraded AS (
 			UPDATE board_deployments AS deployment
 			SET volume_name = 'chirp_data',
-				volume_size_gb = GREATEST(deployment.volume_size_gb, 5),
 				row_version = deployment.row_version + 1,
 				updated_at = clock_timestamp()
 			FROM boards AS board
 			WHERE deployment.board_id = board.id
 				AND deployment.volume_id IS NULL
 				AND deployment.machine_id IS NULL
-				AND (
-					deployment.volume_name = 'chirp_data_' || board.slug
-					OR (
-						deployment.volume_name = 'chirp_data'
-						AND deployment.volume_size_gb < 5
-						AND NOT EXISTS (
-							SELECT 1 FROM board_operations AS operation
-							WHERE operation.board_id = deployment.board_id
-								AND operation.kind = 'provision'
-								AND 'volume_create' = ANY(operation.ambiguous_mutations)
-						)
-					)
+				AND deployment.volume_name = 'chirp_data_' || board.slug
+				AND NOT EXISTS (
+					SELECT 1 FROM board_operations AS operation
+					WHERE operation.board_id = deployment.board_id
+						AND operation.kind = 'provision'
+						AND 'volume_create' = ANY(operation.ambiguous_mutations)
 				)
 			RETURNING deployment.board_id
 		)

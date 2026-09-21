@@ -26,6 +26,11 @@ interface Migration extends MigrationMetadata {
 	readonly effect: (database: DatabaseClient) => Effect.Effect<unknown, EffectDrizzleQueryError | SqlError>;
 }
 
+const postgresSecretsMigration: Migration = {
+	...postgresSecrets,
+	acceptedCompatibleSchemaVersions: [[]],
+};
+
 const migrations: ReadonlyArray<Migration> = [
 	foundation,
 	cloudAuth,
@@ -35,7 +40,7 @@ const migrations: ReadonlyArray<Migration> = [
 	provisioningRetryBudgets,
 	boardDeletion,
 	invitationLimits,
-	postgresSecrets,
+	postgresSecretsMigration,
 	readableBoardSlugs,
 	genericInvitations,
 	boardReleaseChannel,
