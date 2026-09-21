@@ -104,3 +104,35 @@ it("selects the owning core route for ordinary queries requiring handler validat
 		expect(selected?.envelope).toBe(false);
 	}
 });
+
+it("rejects empty named parameters without rejecting an empty terminal wildcard", async () => {
+	const matcher = FindMyWay.make<{ readonly access: "board" | "application-managed" }>();
+	matcher.on("GET", "/:name", { access: "board" });
+	matcher.on("GET", "/api/:id/end", { access: "board" });
+	for (const target of ["/", "/api//end"]) {
+		const regular = await Effect.runPromise(
+			selectRequest(matcher, HttpServerRequest.fromWeb(new Request(`http://child${target}`))),
+		);
+		expect(regular).toBeNull();
+		await expect(
+			Effect.runPromise(
+				selectRequest(
+					matcher,
+					HttpServerRequest.fromWeb(
+						new Request(`http://child${applicationIngressPath}`, { headers: { [ingressTargetHeader]: target } }),
+					),
+				),
+			),
+		).rejects.toThrow();
+	}
+	const wildcardMatcher = FindMyWay.make<{ readonly access: "application-managed" }>({
+		caseSensitive: true,
+		ignoreTrailingSlash: false,
+		ignoreDuplicateSlashes: false,
+	});
+	wildcardMatcher.on("GET", "/prefix/:bucket/*", { access: "application-managed" });
+	const wildcard = await Effect.runPromise(
+		selectRequest(wildcardMatcher, HttpServerRequest.fromWeb(new Request("http://child/prefix/docs/"))),
+	);
+	expect(wildcard?.matched.params).toEqual({ bucket: "docs", "*": "" });
+});
