@@ -47,9 +47,9 @@ export const appFor = (slug: string): FlyApp => ({
 	organization: { slug: settings.organization },
 });
 
-export const volumeFor = (slug: string): FlyVolume => ({
+export const volumeFor = (): FlyVolume => ({
 	id: "volume-id",
-	name: `chirp_data_${slug}`,
+	name: "chirp_data",
 	state: "created",
 	region: settings.region,
 	encrypted: true,
@@ -166,7 +166,7 @@ export const makeFakeProvider = () => {
 					failCreateVolumeBeforeMutation = false;
 					return yield* Effect.fail(flyUnavailable("create_volume"));
 				}
-				const volume = { ...volumeFor(input.name.replace(/^chirp_data_/, "")), name: input.name };
+				const volume = { ...volumeFor(), name: input.name };
 				volumes.push(volume);
 				if (failListVolumesAfterCreate) {
 					failListVolumesAfterCreate = false;
@@ -328,9 +328,9 @@ export const makeFakeProvider = () => {
 			failChildRoute: () => {
 				failChildRoute = true;
 			},
-			addDuplicateVolume: (slug: string) => {
-				volumes.push(volumeFor(slug));
-				volumes.push({ ...volumeFor(slug), id: "duplicate-volume-id" });
+			addDuplicateVolume: () => {
+				volumes.push(volumeFor());
+				volumes.push({ ...volumeFor(), id: "duplicate-volume-id" });
 			},
 			volume: (value: FlyVolume) => {
 				volumes.push(value);

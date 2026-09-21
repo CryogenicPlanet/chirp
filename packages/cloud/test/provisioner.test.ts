@@ -584,7 +584,7 @@ describe("Provisioner", () => {
 						image_ref: settings.imageRef,
 						app_name: `chirp-${board.slug}`,
 						network_name: `chirp-${board.slug}`,
-						volume_name: `chirp_data_${board.slug}`,
+						volume_name: "chirp_data",
 						machine_name: `board-${board.slug}`,
 						volume_size_gb: settings.volumeSizeGb,
 					},
@@ -604,7 +604,7 @@ describe("Provisioner", () => {
 				}
 				const checkpointIndex = checkpoints.indexOf(checkpoint);
 				if (checkpointIndex >= checkpoints.indexOf("app_created")) provider.set.app(appFor(board.slug));
-				if (checkpointIndex >= checkpoints.indexOf("volume_created")) provider.set.volume(volumeFor(board.slug));
+				if (checkpointIndex >= checkpoints.indexOf("volume_created")) provider.set.volume(volumeFor());
 				if (checkpointIndex >= checkpoints.indexOf("machine_created"))
 					provider.set.machine({
 						id: "machine-id",
@@ -724,7 +724,7 @@ describe("Provisioner", () => {
 				yield* migrateCloudDatabase;
 				const board = yield* (yield* Boards).request(request);
 				provider.set.app(appFor(board.slug));
-				provider.set.addDuplicateVolume(board.slug);
+				provider.set.addDuplicateVolume();
 				const operation = Option.getOrThrow(yield* (yield* Operations).claim("worker-1", 30_000));
 				const outcome = yield* (yield* Provisioner).run(operation, "worker-1");
 				const sql = yield* SqlClient.SqlClient;
@@ -758,7 +758,7 @@ describe("Provisioner", () => {
 						image_ref: settings.imageRef,
 						app_name: `chirp-${board.slug}`,
 						network_name: `chirp-${board.slug}`,
-						volume_name: `chirp_data_${board.slug}`,
+						volume_name: "chirp_data",
 						machine_name: `board-${board.slug}`,
 						volume_size_gb: settings.volumeSizeGb,
 					},

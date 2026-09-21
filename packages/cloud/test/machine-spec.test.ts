@@ -13,7 +13,7 @@ const deployment: Deployment = {
 	image_ref: `registry.example/chirp@sha256:${"a".repeat(64)}`,
 	app_name: "chirp-0123456789abcdef0123456789abcdef",
 	network_name: "chirp-0123456789abcdef0123456789abcdef",
-	volume_name: "chirp_data_0123456789abcdef0123456789abcdef",
+	volume_name: "chirp_data",
 	machine_name: "board-0123456789abcdef0123456789abcdef",
 	volume_size_gb: 1,
 	app_id: "app-id",
