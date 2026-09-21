@@ -66,7 +66,11 @@ export const layer = Layer.effect(
 						);
 						const code = yield* child.exitCode.pipe(
 							Effect.timeoutOrElse({
-								duration: operation === "install" ? "60 seconds" : "120 seconds",
+								// This bounds work whose cost depends on the host and on how many dependencies
+								// the installed app declares, not on chirp. A cold install of the seed app needs
+								// about 60 seconds on four shared CPUs, so the former 60-second install budget
+								// failed a first boot outright on smaller hosts.
+								duration: "5 minutes",
 								orElse: () => Effect.fail(new ChildError({ code: `preparation_${operation}_timeout` })),
 							}),
 						);
