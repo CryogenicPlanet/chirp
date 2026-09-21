@@ -21,6 +21,6 @@
 - server/src/main.ts launches boot; server/src/server.ts is the child entry. Keep these separate to prevent recursive spawning.
 - Pages are content in packages/server/pages/, not a package. Add a protocol package only when shared schemas are needed.
 - Services use Context.Service with a layer export in the same file. Every HttpApi endpoint needs a description.
-- repos/ is read-only reference, never imported. Upstream source snapshots and revisions are documented in repos/README.md.
+- repos/ holds upstream sources to learn style from, never to import: `effect/` for how to write good Effect, and `pi-mono/` for how to build minimal, extendable abstractions. Starting points and revisions are in repos/README.md.
 - Flag disagreements with product intent or a documented constraint rather than silently changing behavior.
 - Multiple agents can share this checkout. Stage explicit paths; never reset, clean, stash, or discard unrelated changes. Commit only when asked.
