@@ -48,8 +48,12 @@ const phase = (deployment: Deployment | undefined, operation: DashboardOperation
 const stopped = (value: DashboardPhase) => value === "blocked" || value === "deletion_blocked";
 
 // Waiting for a provider observation to settle, including a recorded ambiguous mutation, is how a
-// healthy first boot looks; it spends no failure budget and needs no operator.
-const progressing = (code: string) => code === "provider_observation_pending" || code.endsWith("_ambiguous");
+// healthy first boot looks; it spends no failure budget and needs no operator. An unreachable board
+// is the same kind of waiting: `/health` and `/init` answer 503 for the first minutes of a board's
+// life while it installs its runtime. A terminal state is classified before this, so these codes read
+// as progress only while the operation is still queued or running and the deployment is not blocked.
+const progressing = (code: string) =>
+	code === "provider_observation_pending" || code === "edge_unavailable" || code.endsWith("_ambiguous");
 
 // These codes stop provisioning the moment they are recorded, so they never read as progress even
 // if a later write has not moved the deployment yet.

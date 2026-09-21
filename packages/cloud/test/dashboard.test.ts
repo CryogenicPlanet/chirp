@@ -225,6 +225,11 @@ describe("Dashboard", () => {
 						severity: "error",
 					},
 				});
+				yield* sqlRequeue(board.id, "edge_unavailable");
+				expect(Option.getOrThrow(yield* dashboard.get("user-1", board.id))).toMatchObject({
+					phase: "blocked",
+					error: { code: "edge_unavailable", retrying: false, severity: "error" },
+				});
 			}),
 		);
 	});
@@ -260,6 +265,10 @@ describe("Dashboard", () => {
 				yield* sqlRequeue(board.id, "machine_start_ambiguous");
 				expect(Option.getOrThrow(yield* dashboard.get("user-1", board.id))).toMatchObject({
 					error: { code: "machine_start_ambiguous", retrying: true, severity: "progress" },
+				});
+				yield* sqlRequeue(board.id, "edge_unavailable");
+				expect(Option.getOrThrow(yield* dashboard.get("user-1", board.id))).toMatchObject({
+					error: { code: "edge_unavailable", retrying: true, severity: "progress" },
 				});
 				yield* sqlRequeue(board.id, "provider_unavailable");
 				expect(Option.getOrThrow(yield* dashboard.get("user-1", board.id))).toMatchObject({

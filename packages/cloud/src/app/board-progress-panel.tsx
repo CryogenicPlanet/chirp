@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Circle, Copy, RefreshCw } from "lucide-react";
+import { AlertTriangle, Check, Circle, Copy, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import type { DashboardBoard } from "../dashboard-contract.ts";
 import { boardProgress } from "./board-progress.ts";
@@ -8,6 +8,18 @@ import { Button } from "./components/ui/button.tsx";
 
 const formatDate = (value: string) =>
 	new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+
+const issueMarks = {
+	progress: "border-[#554f70] bg-accent-surface text-accent-foreground",
+	warning: "border-warning-border bg-warning-surface text-warning",
+	error: "border-destructive-border bg-destructive-surface text-destructive",
+} as const;
+
+const issueText = {
+	progress: "text-muted-foreground",
+	warning: "text-warning",
+	error: "text-destructive",
+} as const;
 
 export function BoardProgressPanel({
 	board,
@@ -97,10 +109,12 @@ export function BoardProgressPanel({
 							<li key={step.checkpoint} className="relative flex gap-3 pb-5 last:pb-0">
 								<div className="absolute top-6 bottom-0 left-[11px] w-px bg-border" />
 								<span
-									className={`relative grid size-6 shrink-0 place-items-center rounded-full border ${step.status === "confirmed" ? "border-primary/25 bg-primary/10 text-primary" : step.status === "next" ? "border-[#554f70] bg-accent-surface text-accent-foreground" : "border-border text-subtle"}`}
+									className={`relative grid size-6 shrink-0 place-items-center rounded-full border ${step.status === "confirmed" ? "border-primary/25 bg-primary/10 text-primary" : step.issue ? issueMarks[step.issue.severity] : step.status === "next" ? "border-[#554f70] bg-accent-surface text-accent-foreground" : "border-border text-subtle"}`}
 								>
 									{step.status === "confirmed" ? (
 										<Check className="size-3.5" aria-hidden="true" />
+									) : step.issue && step.issue.severity !== "progress" ? (
+										<AlertTriangle className="size-3.5" aria-hidden="true" />
 									) : (
 										<Circle className="size-2" aria-hidden="true" />
 									)}
@@ -120,16 +134,23 @@ export function BoardProgressPanel({
 													? "Status unavailable"
 													: "Pending"}
 									</p>
+									{step.issue ? (
+										<>
+											<p className={`mt-1 mb-0 text-xs leading-relaxed ${issueText[step.issue.severity]}`}>
+												{step.issue.message}
+											</p>
+											{step.issue.anchored ? null : (
+												<p className="mt-1 mb-0 text-xs leading-relaxed text-subtle">
+													Latest reported failure. A retry can fail while rechecking an earlier step, so this is not
+													necessarily where it failed.
+												</p>
+											)}
+										</>
+									) : null}
 								</div>
 							</li>
 						))}
 					</ol>
-					{board.error ? (
-						<p className="mt-5 mb-0 text-xs leading-relaxed text-muted-foreground">
-							The error above is the latest reported failure. A retry can fail while rechecking an earlier step; the
-							next unconfirmed step is not necessarily where it failed.
-						</p>
-					) : null}
 				</>
 			)}
 			{board.operation?.next_attempt_at && board.error?.retrying ? (
