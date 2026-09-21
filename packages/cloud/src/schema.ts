@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+	boolean,
 	check,
 	customType,
 	index,
@@ -16,7 +17,7 @@ import type { DeploymentState } from "./deployment.ts";
 import type { ProviderMutation } from "./operation.ts";
 
 const storageEngines = ["sqlite", "postgres", "mysql"] as const;
-const operationKinds = ["provision", "backup"] as const;
+const operationKinds = ["provision", "backup", "delete"] as const;
 const operationStates = ["queued", "running", "succeeded", "failed"] as const;
 const cCollatedChar = customType<{
 	data: string;
@@ -44,6 +45,8 @@ export const boards = pgTable(
 		name: text().notNull(),
 		slug: cCollatedChar({ length: 32 }).notNull(),
 		storage_engine: text({ enum: storageEngines }).notNull(),
+		deletion_requested_at: timestamp({ withTimezone: true }),
+		deleted_at: timestamp({ withTimezone: true }),
 		created_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
 	},
 	(table) => [
@@ -87,7 +90,10 @@ export const boardOperations = pgTable(
 	},
 	(table) => [
 		unique("board_operations_request_unique").on(table.requested_by, table.idempotency_key),
-		check("board_operations_kind_check", sql`${table.kind} IN ('provision', 'start', 'stop', 'restart', 'backup')`),
+		check(
+			"board_operations_kind_check",
+			sql`${table.kind} IN ('provision', 'start', 'stop', 'restart', 'backup', 'delete')`,
+		),
 		check("board_operations_state_check", sql`${table.state} IN ('queued', 'running', 'succeeded', 'failed')`),
 		check("board_operations_request_hash_hex", sql`${table.request_hash} ~ '^[0-9a-f]{64}$'`),
 		check("board_operations_attempt_nonnegative", sql`${table.attempt} >= 0`),
@@ -154,4 +160,13 @@ export const boardRoutes = pgTable("board_routes", {
 		.references(() => boardDeployments.board_id, { onDelete: "restrict" }),
 	app_name: text().notNull(),
 	created_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
+});
+
+export const boardPostgresSecrets = pgTable("board_postgres_secrets", {
+	board_id: uuid()
+		.primaryKey()
+		.references(() => boards.id, { onDelete: "restrict" }),
+	ciphertext: text().notNull(),
+	prepared: boolean().notNull().default(false),
+	fly_secrets_version: integer(),
 });

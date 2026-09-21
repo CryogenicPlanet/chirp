@@ -44,6 +44,7 @@ export interface CreateFlyMachine {
 	readonly name: string;
 	readonly region: string;
 	readonly config: FlyMachineConfig;
+	readonly minSecretsVersion?: number;
 }
 
 const make = (settings: FlyApiSettings) =>
@@ -208,6 +209,7 @@ const make = (settings: FlyApiSettings) =>
 					region: input.region,
 					config: input.config,
 					skip_launch: true,
+					...(input.minSecretsVersion === undefined ? {} : { min_secrets_version: input.minSecretsVersion }),
 				}).pipe(Effect.flatMap((outgoing) => json("create_machine", FlyMachine, outgoing))),
 			startMachine: (appName: string, machineId: string) =>
 				send(

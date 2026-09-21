@@ -95,4 +95,29 @@ describe("pollDashboardBoard", () => {
 		expect(onError).toHaveBeenCalledWith(failure);
 		vi.useRealTimers();
 	});
+	test("keeps checking deletion until its terminal state", async () => {
+		vi.useFakeTimers();
+		try {
+			const controller = new AbortController();
+			const load = vi
+				.fn<(_: AbortSignal) => Promise<DashboardBoard>>()
+				.mockResolvedValueOnce(board("deleting"))
+				.mockResolvedValueOnce(board("deletion_blocked"));
+			const seen: DashboardBoard[] = [];
+			const onError = vi.fn();
+			const polling = pollDashboardBoard({
+				signal: controller.signal,
+				load,
+				onBoard: (value) => seen.push(value),
+				onError,
+			});
+			await vi.advanceTimersByTimeAsync(2_000);
+			await polling;
+			expect(seen.map(({ phase }) => phase)).toEqual(["deleting", "deletion_blocked"]);
+			expect(onError).not.toHaveBeenCalled();
+			expect(load).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 });

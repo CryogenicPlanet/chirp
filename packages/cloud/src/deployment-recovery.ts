@@ -3,7 +3,7 @@ import { Crypto, Data, Effect, Schema } from "effect";
 import { Database } from "./database.ts";
 import { DeploymentState } from "./deployment.ts";
 import type { ProviderMutation } from "./operation.ts";
-import { boardDeployments, boardOperations } from "./schema.ts";
+import { boardDeployments, boardOperations, boards } from "./schema.ts";
 
 export class DeploymentRetryRefused extends Data.TaggedError("DeploymentRetryRefused")<{
 	readonly message: string;
@@ -22,6 +22,20 @@ export const retryBlockedDeployment = (input: {
 				const confirmedAbsent = new Set(input.confirmedAbsentMutations ?? []);
 				if (confirmedAbsent.size !== (input.confirmedAbsentMutations?.length ?? 0))
 					return yield* new DeploymentRetryRefused({ message: "Confirmed absent mutations must be unique" });
+				const target = (yield* database
+					.select({ board_id: boardOperations.board_id })
+					.from(boardOperations)
+					.where(eq(boardOperations.id, input.failedOperationId))
+					.limit(1))[0];
+				if (!target) return yield* new DeploymentRetryRefused({ message: "Choose a failed provisioning operation" });
+				const board = (yield* database
+					.select()
+					.from(boards)
+					.where(eq(boards.id, target.board_id))
+					.for("update")
+					.limit(1))[0];
+				if (!board || board.deletion_requested_at || board.deleted_at)
+					return yield* new DeploymentRetryRefused({ message: "Board deletion has been requested" });
 				const failed = (yield* database
 					.select({
 						id: boardOperations.id,

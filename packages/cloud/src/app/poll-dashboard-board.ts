@@ -29,7 +29,7 @@ export const pollDashboardBoard = async (input: {
 			const board = await input.load(input.signal);
 			if (input.signal.aborted) return;
 			input.onBoard(board);
-			if (board.phase !== "queued" && board.phase !== "provisioning") return;
+			if (board.phase !== "queued" && board.phase !== "provisioning" && board.phase !== "deleting") return;
 			await wait(2_000, input.signal);
 		} catch (error) {
 			if (!input.signal.aborted) input.onError(error);

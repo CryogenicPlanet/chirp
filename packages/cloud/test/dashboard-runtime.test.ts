@@ -1,8 +1,10 @@
+import { BoardDeletion } from "../src/board-deletion.ts";
 import { EffectDrizzleQueryError } from "drizzle-orm/effect-core/errors";
 import { Effect, Layer, Option } from "effect";
 import { describe, expect, test, vi } from "vitest";
 import type { DashboardBoard } from "../src/dashboard-contract.ts";
 import { makeDashboardRequestRuntime } from "../src/dashboard-runtime.ts";
+import { Invitations } from "../src/invitations.ts";
 import { Dashboard } from "../src/dashboard.ts";
 import { makeDashboardHttp } from "../src/dashboard-http.ts";
 
@@ -20,6 +22,15 @@ const board: DashboardBoard = {
 	error: null,
 };
 
+const invitationsStub = Layer.succeed(
+	Invitations,
+	Invitations.of({
+		issue: () => Effect.die("Unexpected invitation issuance"),
+		canIssue: () => Effect.succeed(false),
+		issueForOperator: () => Effect.die("Unexpected invitation issuance"),
+	}),
+);
+
 describe("dashboard request runtime", () => {
 	test("builds once for concurrent requests and awaits scoped disposal", async () => {
 		let builds = 0;
@@ -33,7 +44,7 @@ describe("dashboard request runtime", () => {
 					Effect.sync(() => {
 						builds += 1;
 						return Dashboard.of({
-							list: () => Effect.succeed({ boards: [board], truncated: false }),
+							list: () => Effect.succeed({ boards: [board], truncated: false, capabilities: { postgres: false } }),
 							get: () => Effect.succeedSome(board),
 							create: () => Effect.succeed(board),
 						});
@@ -45,6 +56,11 @@ describe("dashboard request runtime", () => {
 								closed = true;
 							});
 						}),
+				),
+			).pipe(
+				Layer.merge(invitationsStub),
+				Layer.merge(
+					Layer.succeed(BoardDeletion, BoardDeletion.of({ request: () => Effect.succeed({ deleted: true }) })),
 				),
 			),
 		);
@@ -86,6 +102,11 @@ describe("dashboard request runtime", () => {
 						get: () => fail("detail defect marker"),
 						create: () => fail("create defect marker"),
 					}),
+				).pipe(
+					Layer.merge(invitationsStub),
+					Layer.merge(
+						Layer.succeed(BoardDeletion, BoardDeletion.of({ request: () => Effect.succeed({ deleted: true }) })),
+					),
 				),
 			);
 			const http = makeDashboardHttp({
@@ -115,7 +136,8 @@ describe("dashboard request runtime", () => {
 				for (const [index, route] of ["list", "detail", "create"].entries()) {
 					const message = logged.mock.calls[index]?.join("\n");
 					expect(message).toContain(`Chirp Cloud dashboard ${route} failed`);
-					expect(message).toContain(`${route} defect marker`);
+					if (route === "create") expect(message).not.toContain(`${route} defect marker`);
+					else expect(message).toContain(`${route} defect marker`);
 				}
 			} finally {
 				await runtime.dispose();

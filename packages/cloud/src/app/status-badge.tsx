@@ -5,6 +5,8 @@ const labels: Record<DashboardPhase, string> = {
 	provisioning: "Provisioning",
 	ready: "Ready",
 	blocked: "Needs attention",
+	deleting: "Deleting",
+	deletion_blocked: "Deletion needs attention",
 };
 
 const colors: Record<DashboardPhase, string> = {
@@ -12,6 +14,8 @@ const colors: Record<DashboardPhase, string> = {
 	provisioning: "border-[#554f70] bg-accent-surface text-accent-foreground",
 	ready: "border-tag-border bg-tag-surface text-tag",
 	blocked: "border-warning-border bg-warning-surface text-warning",
+	deleting: "border-destructive-border bg-destructive-surface text-destructive",
+	deletion_blocked: "border-warning-border bg-warning-surface text-warning",
 };
 
 export function StatusBadge({ phase }: { readonly phase: DashboardPhase }) {

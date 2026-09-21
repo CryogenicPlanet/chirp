@@ -7,6 +7,8 @@ import { Deployments } from "../src/deployments.ts";
 import { migrateCloudDatabase } from "../src/migrations.ts";
 import { Operations } from "../src/operations.ts";
 import { runFresh } from "./fixture.ts";
+import { deploymentSpec } from "../src/provisioning-settings.ts";
+import { settings } from "./fixtures/provisioner.ts";
 
 const create = {
 	name: "  Private board  ",
@@ -44,7 +46,11 @@ describe("Dashboard", () => {
 				const dashboard = yield* Dashboard;
 				const board = yield* dashboard.create("user-1", create);
 				expect((yield* dashboard.list("user-1")).boards.map(({ id }) => id)).toEqual([board.id]);
-				expect(yield* dashboard.list("user-2")).toEqual({ boards: [], truncated: false });
+				expect(yield* dashboard.list("user-2")).toEqual({
+					boards: [],
+					truncated: false,
+					capabilities: { postgres: false },
+				});
 				expect(Option.isSome(yield* dashboard.get("user-1", board.id))).toBe(true);
 				expect(Option.isNone(yield* dashboard.get("user-2", board.id))).toBe(true);
 			}),
@@ -63,7 +69,11 @@ describe("Dashboard", () => {
 					expect(Exit.isFailure(result)).toBe(true);
 					if (Exit.isFailure(result)) expect(result.cause.toString()).toContain("InvalidBoardName");
 				}
-				expect(yield* dashboard.list("user-1")).toEqual({ boards: [], truncated: false });
+				expect(yield* dashboard.list("user-1")).toEqual({
+					boards: [],
+					truncated: false,
+					capabilities: { postgres: false },
+				});
 			}),
 		);
 	});
@@ -99,6 +109,16 @@ describe("Dashboard", () => {
 				const board = yield* dashboard.create("user-1", create);
 				const operation = Option.getOrThrow(yield* (yield* Operations).claim("worker-1", 30_000, "provision"));
 				if (!operation.lease_token) return yield* Effect.die("Claim returned no lease token");
+				const stored = Option.getOrThrow(yield* (yield* Boards).get("user-1", board.id));
+				yield* (yield* Deployments).ensure({
+					operationId: operation.id,
+					leaseToken: operation.lease_token,
+					workerId: "worker-1",
+					spec: deploymentSpec(stored.slug, settings),
+				});
+				const sql = yield* SqlClient.SqlClient;
+				yield* sql`UPDATE board_deployments SET state = 'blocked' WHERE board_id = ${board.id}`;
+				yield* sql`UPDATE board_operations SET checkpoint = 'volume_created' WHERE id = ${operation.id}`;
 				yield* (yield* Operations).fail({
 					id: operation.id,
 					leaseToken: operation.lease_token,
@@ -116,11 +136,17 @@ describe("Dashboard", () => {
 				const failed = Option.getOrThrow(yield* dashboard.get("user-1", board.id));
 				expect(failed).toMatchObject({
 					phase: "blocked",
+					checkpoint: "volume_created",
+					operation: { id: operation.id, state: "failed", attempt: 1, next_attempt_at: null },
 					error: { code: "provider_denied", message: "Fly rejected the request", retrying: false },
 				});
 				expect(Object.keys(failed)).not.toContain("lease_token");
 				expect(Object.keys(failed)).not.toContain("request_hash");
-				expect(yield* dashboard.list("user-1")).toEqual({ boards: [failed], truncated: false });
+				expect(yield* dashboard.list("user-1")).toEqual({
+					boards: [failed],
+					truncated: false,
+					capabilities: { postgres: false },
+				});
 			}),
 		);
 	});
@@ -219,7 +245,11 @@ describe("Dashboard", () => {
 						retention_days: 7,
 					},
 				});
-				expect(yield* dashboard.list("user-1")).toEqual({ boards: [ready], truncated: false });
+				expect(yield* dashboard.list("user-1")).toEqual({
+					boards: [ready],
+					truncated: false,
+					capabilities: { postgres: false },
+				});
 			}),
 		);
 	});

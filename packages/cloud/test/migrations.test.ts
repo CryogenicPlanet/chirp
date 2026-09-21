@@ -31,6 +31,9 @@ describe("cloud migrations", () => {
 					{ migration_id: 4, name: "provisioning_recovery", compatibleSchemaVersions: [] },
 					{ migration_id: 5, name: "provider_mutation_markers", compatibleSchemaVersions: [] },
 					{ migration_id: 6, name: "provisioning_retry_budgets", compatibleSchemaVersions: [] },
+					{ migration_id: 7, name: "board_deletion", compatibleSchemaVersions: [] },
+					{ migration_id: 8, name: "invitation_limits", compatibleSchemaVersions: [] },
+					{ migration_id: 9, name: "board_postgres_secrets", compatibleSchemaVersions: [1, 2, 3, 4, 5, 6, 7, 8] },
 				]);
 			}),
 		);
@@ -56,7 +59,7 @@ describe("cloud migrations", () => {
 				yield* migrateCloudDatabase;
 				yield* database
 					.insert(cloudMigrations)
-					.values({ migration_id: 7, name: "unknown", compatible_schema_versions: [] });
+					.values({ migration_id: 10, name: "unknown", compatible_schema_versions: [] });
 				const result = yield* Effect.exit(migrateCloudDatabase);
 				expect(Exit.isFailure(result)).toBe(true);
 			}),

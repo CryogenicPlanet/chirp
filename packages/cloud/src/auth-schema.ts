@@ -74,6 +74,12 @@ export const cloudInvitation = pgTable(
 	(table) => [index("cloud_invitations_email_idx").on(table.email)],
 );
 
+export const cloudInvitationLimits = pgTable("cloud_invitation_limits", {
+	issuer_id: text().primaryKey(),
+	window_start: bigint({ mode: "number" }).notNull(),
+	count: integer().notNull(),
+});
+
 export const passkey = pgTable(
 	"passkey",
 	{

@@ -25,7 +25,7 @@ const dependencies = () => ({
 		headers: renewedHeaders,
 	})),
 	getPublicOrigin: vi.fn(async () => "https://cloud.chirp.wiki"),
-	list: vi.fn(async () => ({ boards: [board], truncated: false })),
+	list: vi.fn(async () => ({ boards: [board], truncated: false, capabilities: { postgres: false } })),
 	get: vi.fn(async () => Option.some(board)),
 	create: vi.fn(
 		async (): Promise<
@@ -55,7 +55,7 @@ describe("dashboard HTTP", () => {
 		expect(response.headers.get("cache-control")).toBe("no-store");
 		expect(response.headers.getSetCookie()).toEqual(["renewed=session; Path=/; HttpOnly"]);
 		expect(deps.list).toHaveBeenCalledWith("user-1");
-		expect(await response.json()).toEqual({ boards: [board], truncated: false });
+		expect(await response.json()).toEqual({ boards: [board], truncated: false, capabilities: { postgres: false } });
 	});
 
 	test("returns the same 404 for missing and foreign board identifiers", async () => {

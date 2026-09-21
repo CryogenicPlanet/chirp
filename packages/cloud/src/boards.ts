@@ -1,16 +1,24 @@
-import { and, desc, eq, getTableColumns, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, isNull, sql } from "drizzle-orm";
 import { Context, Crypto, Data, Effect, Layer, Option, Schema } from "effect";
 import type { Board, RequestBoard } from "./board.ts";
 import { Database, type DatabaseClient } from "./database.ts";
 import { IdempotencyConflict } from "./operation.ts";
-import { boardOperations, boards } from "./schema.ts";
+import { CloudSecrets } from "./cloud-secrets.ts";
+import { boardOperations, boardPostgresSecrets, boards } from "./schema.ts";
 
 export const maxBoardsPerOwner = 5;
 export const maxListedBoardsPerOwner = 100;
 export class BoardQuotaExceeded extends Data.TaggedError("BoardQuotaExceeded")<{}> {}
 
 const encodeRequestHash = Schema.encodeSync(
-	Schema.fromJsonString(Schema.Struct({ owner_id: Schema.String, name: Schema.String, storage_engine: Schema.String })),
+	Schema.fromJsonString(
+		Schema.Struct({
+			owner_id: Schema.String,
+			name: Schema.String,
+			storage_engine: Schema.String,
+			postgres_fingerprint: Schema.optional(Schema.String),
+		}),
+	),
 );
 
 const hex = (bytes: Uint8Array) => {
@@ -22,6 +30,7 @@ const hex = (bytes: Uint8Array) => {
 const make = Effect.gen(function* () {
 	const database = yield* Database;
 	const crypto = yield* Crypto.Crypto;
+	const secrets = yield* CloudSecrets;
 	const findRequest = (client: DatabaseClient, requestedBy: string, idempotencyKey: string) =>
 		client
 			.select({ ...getTableColumns(boards), request_hash: boardOperations.request_hash })
@@ -36,7 +45,7 @@ const make = Effect.gen(function* () {
 				Option.match({
 					onNone: () => Effect.succeed(Option.none<Board>()),
 					onSome: (found) => {
-						if (found.request_hash !== requestHash)
+						if (found.deleted_at !== null || found.request_hash !== requestHash)
 							return new IdempotencyConflict({
 								requestedBy: input.requested_by,
 								idempotencyKey: input.idempotency_key,
@@ -50,6 +59,7 @@ const make = Effect.gen(function* () {
 	return {
 		request: (input: RequestBoard) =>
 			Effect.gen(function* () {
+				const fingerprint = input.postgres_admin_url ? yield* secrets.fingerprint(input.postgres_admin_url) : undefined;
 				const requestHash = hex(
 					yield* crypto.digest(
 						"SHA-256",
@@ -58,6 +68,7 @@ const make = Effect.gen(function* () {
 								owner_id: input.owner_id,
 								name: input.name,
 								storage_engine: input.storage_engine,
+								...(fingerprint === undefined ? {} : { postgres_fingerprint: fingerprint }),
 							}),
 						),
 					),
@@ -69,6 +80,7 @@ const make = Effect.gen(function* () {
 					crypto.randomUUIDv7,
 					crypto.randomBytes(16),
 				]);
+				const ciphertext = input.postgres_admin_url ? yield* secrets.prepare(id, input.postgres_admin_url) : undefined;
 				const create = database.transaction((transaction) =>
 					Effect.gen(function* () {
 						yield* transaction.execute(
@@ -79,7 +91,7 @@ const make = Effect.gen(function* () {
 						const owned = yield* transaction
 							.select({ id: boards.id })
 							.from(boards)
-							.where(eq(boards.owner_id, input.owner_id))
+							.where(and(eq(boards.owner_id, input.owner_id), isNull(boards.deleted_at)))
 							.limit(maxBoardsPerOwner);
 						if (owned.length >= maxBoardsPerOwner) return yield* new BoardQuotaExceeded();
 						const created = yield* transaction
@@ -94,6 +106,8 @@ const make = Effect.gen(function* () {
 							.returning();
 						const board = created[0];
 						if (!board) return yield* Effect.die("Board insert returned no row");
+						if (ciphertext !== undefined)
+							yield* transaction.insert(boardPostgresSecrets).values({ board_id: id, ciphertext });
 						yield* transaction.insert(boardOperations).values({
 							id: operationId,
 							board_id: id,
@@ -119,21 +133,21 @@ const make = Effect.gen(function* () {
 			database
 				.select()
 				.from(boards)
-				.where(and(eq(boards.owner_id, ownerId), eq(boards.id, id)))
+				.where(and(eq(boards.owner_id, ownerId), eq(boards.id, id), isNull(boards.deleted_at)))
 				.limit(1)
 				.pipe(Effect.map((found) => Option.fromNullishOr(found[0]))),
 		getById: (id: string) =>
 			database
 				.select()
 				.from(boards)
-				.where(eq(boards.id, id))
+				.where(and(eq(boards.id, id), isNull(boards.deleted_at)))
 				.limit(1)
 				.pipe(Effect.map((found) => Option.fromNullishOr(found[0]))),
 		list: (ownerId: string) =>
 			database
 				.select()
 				.from(boards)
-				.where(eq(boards.owner_id, ownerId))
+				.where(and(eq(boards.owner_id, ownerId), isNull(boards.deleted_at)))
 				.orderBy(desc(boards.created_at), desc(boards.id))
 				.limit(maxListedBoardsPerOwner),
 	};

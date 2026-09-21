@@ -1,3 +1,4 @@
+import { type BoardDeletion, boardDeletionLayer } from "../src/board-deletion.ts";
 import * as PgClient from "@effect/sql-pg/PgClient";
 import * as PgliteClient from "@effect/sql-pglite/PgliteClient";
 import { sql } from "drizzle-orm";
@@ -6,6 +7,9 @@ import * as PgliteDrizzle from "drizzle-orm/effect-pglite";
 import { Crypto, Effect, Layer, Redacted } from "effect";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
 import { type Boards, boardsLayer } from "../src/boards.ts";
+import { type CloudSecrets, cloudSecretsLayerWithKey } from "../src/cloud-secrets.ts";
+import { type PostgresStorage, postgresStorageLayer } from "../src/postgres-storage.ts";
+import { FlySecrets } from "../src/fly-secrets.ts";
 import { Database } from "../src/database.ts";
 import { type Deployments, deploymentsLayer } from "../src/deployments.ts";
 import { type Dashboard, dashboardLayer } from "../src/dashboard.ts";
@@ -38,11 +42,23 @@ export const cryptoLayer = Layer.succeed(
 	}),
 );
 
-const testLayer = dashboardLayer.pipe(
-	Layer.provideMerge(Layer.mergeAll(boardsLayer, deploymentsLayer, invitationsLayer, operationsLayer)),
-	Layer.provideMerge(databaseLayer),
-	Layer.provideMerge(cryptoLayer),
-);
+const testLayer = (key?: Redacted.Redacted<string>) =>
+	dashboardLayer.pipe(
+		Layer.provideMerge(
+			Layer.mergeAll(
+				boardDeletionLayer,
+				boardsLayer,
+				deploymentsLayer,
+				invitationsLayer,
+				operationsLayer,
+				postgresStorageLayer,
+			),
+		),
+		Layer.provideMerge(databaseLayer),
+		Layer.provideMerge(cloudSecretsLayerWithKey(key)),
+		Layer.provideMerge(Layer.succeed(FlySecrets, { ensure: () => Effect.die("unexpected Fly secrets request") })),
+		Layer.provideMerge(cryptoLayer),
+	);
 
 export const realPostgres = databaseUrl !== undefined;
 
@@ -50,15 +66,27 @@ export const runFresh = <A, E>(
 	effect: Effect.Effect<
 		A,
 		E,
-		Boards | Crypto.Crypto | Dashboard | Database | Deployments | Invitations | Operations | SqlClient.SqlClient
+		| BoardDeletion
+		| CloudSecrets
+		| PostgresStorage
+		| FlySecrets
+		| Boards
+		| Crypto.Crypto
+		| Dashboard
+		| Database
+		| Deployments
+		| Invitations
+		| Operations
+		| SqlClient.SqlClient
 	>,
+	key?: Redacted.Redacted<string>,
 ) =>
 	Effect.runPromise(
 		Effect.gen(function* () {
 			const database = yield* Database;
 			yield* database.execute(sql`DROP TABLE IF EXISTS passkey, "rateLimit", account, session, verification,
-				"user", cloud_invitations, board_routes, board_deployments, board_operations, boards,
+				"user", cloud_invitation_limits, cloud_invitations, board_postgres_secrets, board_routes, board_deployments, board_operations, boards,
 				cloud_migrations CASCADE`);
 			return yield* effect;
-		}).pipe(Effect.provide(testLayer)),
+		}).pipe(Effect.provide(testLayer(key))),
 	);

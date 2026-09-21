@@ -6,7 +6,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Context, Crypto, Data, DateTime, Effect, Layer, Redacted } from "effect";
 import { Pool, types as pgTypes } from "pg";
 import { authSchema } from "./auth-schema.ts";
-import type { CloudAuthSettings } from "./auth-settings.ts";
+import type { CloudAuthSettings, OAuthProvider } from "./auth-settings.ts";
 import { hasAuthoritativeClientIp } from "./client-ip-boundary.ts";
 import { checkInvitation, InvitationPolicyError } from "./invitation-policy.ts";
 import { invitationPlugin } from "./invitation-plugin.ts";
@@ -69,6 +69,7 @@ const make = (settings: CloudAuthSettings) =>
 				transaction: true,
 			}),
 			trustedOrigins: [settings.publicOrigin],
+			onAPIError: { errorURL: `${settings.publicOrigin}/auth/error` },
 			advanced: {
 				disableOriginCheck: false,
 				disableCSRFCheck: false,
@@ -96,18 +97,26 @@ const make = (settings: CloudAuthSettings) =>
 			},
 			rateLimit: { enabled: true, storage: "database" },
 			socialProviders: {
-				github: {
-					clientId: settings.githubClientId,
-					clientSecret: Redacted.value(settings.githubClientSecret),
-					disableImplicitSignUp: true,
-					requireEmailVerification: true,
-				},
-				google: {
-					clientId: settings.googleClientId,
-					clientSecret: Redacted.value(settings.googleClientSecret),
-					disableImplicitSignUp: true,
-					requireEmailVerification: true,
-				},
+				...(settings.github
+					? {
+							github: {
+								clientId: settings.github.clientId,
+								clientSecret: Redacted.value(settings.github.clientSecret),
+								disableImplicitSignUp: true,
+								requireEmailVerification: true,
+							},
+						}
+					: {}),
+				...(settings.google
+					? {
+							google: {
+								clientId: settings.google.clientId,
+								clientSecret: Redacted.value(settings.google.clientSecret),
+								disableImplicitSignUp: true,
+								requireEmailVerification: true,
+							},
+						}
+					: {}),
 			},
 			account: {
 				encryptOAuthTokens: true,
@@ -155,7 +164,12 @@ const make = (settings: CloudAuthSettings) =>
 				}),
 			],
 		});
+		const providers: ReadonlyArray<OAuthProvider> = [
+			...(settings.github ? ["github" as const] : []),
+			...(settings.google ? ["google" as const] : []),
+		];
 		return {
+			providers,
 			publicOrigin: settings.publicOrigin,
 			handle: (request: Request) =>
 				hasAuthoritativeClientIp(request.headers, settings.clientIpHeader)

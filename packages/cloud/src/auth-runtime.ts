@@ -1,12 +1,13 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Layer, ManagedRuntime } from "effect";
-import type { CloudAuthSettings } from "./auth-settings.ts";
+import type { CloudAuthSettings, OAuthProvider } from "./auth-settings.ts";
 import { cloudAuthSettings } from "./auth-settings.ts";
 import { CloudAuth, cloudAuthLayer } from "./cloud-auth.ts";
 import { makeDashboardRequestRuntime } from "./dashboard-runtime.ts";
 
 export interface AuthRequestRuntime {
 	readonly dashboard: ReturnType<typeof makeDashboardRequestRuntime>;
+	readonly getProviders: () => Promise<ReadonlyArray<OAuthProvider>>;
 	readonly getPublicOrigin: () => Promise<string>;
 	readonly handle: (request: Request) => Promise<Response>;
 	readonly getSession: (headers: Headers) => Promise<AuthSession | null>;
@@ -31,6 +32,7 @@ export const makeAuthRequestRuntime = <E>(settings: Effect.Effect<CloudAuthSetti
 	);
 	return {
 		dashboard,
+		getProviders: () => runtime.runPromise(CloudAuth.use((auth) => Effect.succeed(auth.providers))),
 		getPublicOrigin: () => runtime.runPromise(CloudAuth.use((auth) => Effect.succeed(auth.publicOrigin))),
 		handle: (request: Request) =>
 			runtime
@@ -57,6 +59,7 @@ const live = (globalThis.chirpCloudAuthRuntime ??= makeAuthRequestRuntime(cloudA
 export const handleAuthRequest = live.handle;
 export const getAuthSession = live.getSession;
 export const getAuthSessionWithHeaders = live.getSessionWithHeaders;
+export const getAuthProviders = live.getProviders;
 export const getAuthPublicOrigin = live.getPublicOrigin;
 export const dashboardRequestRuntime = live.dashboard;
 export const disposeCloudRequestRuntime = async () => {

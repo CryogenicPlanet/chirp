@@ -1,14 +1,19 @@
 import { Config, Data, Effect, Redacted } from "effect";
 
+export type OAuthProvider = "github" | "google";
+
+interface OAuthCredentials {
+	readonly clientId: string;
+	readonly clientSecret: Redacted.Redacted;
+}
+
 export interface CloudAuthSettings {
 	readonly databaseUrl: Redacted.Redacted;
 	readonly publicOrigin: string;
 	readonly authSecret: Redacted.Redacted;
 	readonly clientIpHeader: string;
-	readonly githubClientId: string;
-	readonly githubClientSecret: Redacted.Redacted;
-	readonly googleClientId: string;
-	readonly googleClientSecret: Redacted.Redacted;
+	readonly github: OAuthCredentials | undefined;
+	readonly google: OAuthCredentials | undefined;
 }
 
 export class AuthConfigurationError extends Data.TaggedError("AuthConfigurationError")<{
@@ -21,10 +26,10 @@ export const cloudAuthSettings = Effect.gen(function* () {
 		publicUrl: Config.URL("BETTER_AUTH_URL"),
 		authSecret: Config.Redacted("BETTER_AUTH_SECRET"),
 		clientIpHeader: Config.String("CLOUD_CLIENT_IP_HEADER"),
-		githubClientId: Config.String("GITHUB_CLIENT_ID"),
-		githubClientSecret: Config.Redacted("GITHUB_CLIENT_SECRET"),
-		googleClientId: Config.String("GOOGLE_CLIENT_ID"),
-		googleClientSecret: Config.Redacted("GOOGLE_CLIENT_SECRET"),
+		githubClientId: Config.String("GITHUB_CLIENT_ID").pipe(Config.withDefault("")),
+		githubClientSecret: Config.Redacted("GITHUB_CLIENT_SECRET").pipe(Config.withDefault(Redacted.make(""))),
+		googleClientId: Config.String("GOOGLE_CLIENT_ID").pipe(Config.withDefault("")),
+		googleClientSecret: Config.Redacted("GOOGLE_CLIENT_SECRET").pipe(Config.withDefault(Redacted.make(""))),
 	});
 	if (values.publicUrl.pathname !== "/" || values.publicUrl.search || values.publicUrl.hash)
 		return yield* new AuthConfigurationError({ message: "BETTER_AUTH_URL must be an origin without a path" });
@@ -44,21 +49,24 @@ export const cloudAuthSettings = Effect.gen(function* () {
 	const clientIpHeader = values.clientIpHeader.trim().toLowerCase();
 	if (!/^[a-z0-9-]+$/.test(clientIpHeader))
 		return yield* new AuthConfigurationError({ message: "CLOUD_CLIENT_IP_HEADER must be one HTTP header name" });
-	if (
-		!values.githubClientId.trim() ||
-		!Redacted.value(values.githubClientSecret).trim() ||
-		!values.googleClientId.trim() ||
-		!Redacted.value(values.googleClientSecret).trim()
-	)
-		return yield* new AuthConfigurationError({ message: "OAuth provider credentials must not be empty" });
+	const credentials = (provider: OAuthProvider, clientId: string, clientSecret: Redacted.Redacted) =>
+		Effect.gen(function* () {
+			const hasId = clientId.trim().length > 0;
+			const hasSecret = Redacted.value(clientSecret).trim().length > 0;
+			if (hasId !== hasSecret)
+				return yield* new AuthConfigurationError({ message: `${provider} requires both client ID and client secret` });
+			return hasId ? { clientId, clientSecret } : undefined;
+		});
+	const github = yield* credentials("github", values.githubClientId, values.githubClientSecret);
+	const google = yield* credentials("google", values.googleClientId, values.googleClientSecret);
+	if (!github && !google)
+		return yield* new AuthConfigurationError({ message: "At least one OAuth provider must be configured" });
 	return {
 		databaseUrl: values.databaseUrl,
 		publicOrigin: values.publicUrl.origin,
 		authSecret: values.authSecret,
 		clientIpHeader,
-		githubClientId: values.githubClientId,
-		githubClientSecret: values.githubClientSecret,
-		googleClientId: values.googleClientId,
-		googleClientSecret: values.googleClientSecret,
+		github,
+		google,
 	} satisfies CloudAuthSettings;
 });

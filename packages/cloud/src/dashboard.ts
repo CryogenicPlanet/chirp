@@ -1,7 +1,9 @@
-import { desc, eq, getTableColumns } from "drizzle-orm";
-import { Context, Data, Effect, Layer, Option } from "effect";
+import { and, desc, eq, getTableColumns, inArray, isNull } from "drizzle-orm";
+import { Config, Context, Data, Effect, Layer, Option, Redacted } from "effect";
 import type { Board } from "./board.ts";
 import { Boards, maxListedBoardsPerOwner } from "./boards.ts";
+import { CloudSecrets } from "./cloud-secrets.ts";
+import { validatePostgresUrl } from "./postgres-bootstrap.ts";
 import { Database } from "./database.ts";
 import type { CreateDashboardBoard, DashboardBoard, DashboardPhase } from "./dashboard-contract.ts";
 import type { Deployment } from "./deployment.ts";
@@ -10,11 +12,26 @@ import type { Operation } from "./operation.ts";
 import { Operations } from "./operations.ts";
 import { boardDeployments, boardOperations, boards as boardTable } from "./schema.ts";
 
+export class InvalidStorageConfiguration extends Data.TaggedError("InvalidStorageConfiguration")<{}> {}
+export class PostgresUnavailable extends Data.TaggedError("PostgresUnavailable")<{}> {}
+
 export class InvalidBoardName extends Data.TaggedError("InvalidBoardName")<{}> {}
 
-type DashboardOperation = Pick<Operation, "checkpoint" | "last_error_code" | "last_error_message" | "state">;
+type DashboardOperation = Pick<
+	Operation,
+	| "id"
+	| "attempt"
+	| "updated_at"
+	| "available_at"
+	| "kind"
+	| "checkpoint"
+	| "last_error_code"
+	| "last_error_message"
+	| "state"
+>;
 
 const phase = (deployment: Deployment | undefined, operation: DashboardOperation | undefined): DashboardPhase => {
+	if (operation?.kind === "delete") return operation.state === "failed" ? "deletion_blocked" : "deleting";
 	if (operation?.state === "failed") return "blocked";
 	if (!deployment) return operation?.state === "running" ? "provisioning" : "queued";
 	if (deployment.state === "blocked") return "blocked";
@@ -28,12 +45,24 @@ const view = (
 ): DashboardBoard => ({
 	id: board.id,
 	name: board.name,
-	hostname: deployment?.state === "provisioned" ? deployment.hostname : null,
+	hostname: operation?.kind !== "delete" && deployment?.state === "provisioned" ? deployment.hostname : null,
 	storage_engine: board.storage_engine,
 	region: deployment?.region ?? null,
 	volume_size_gb: deployment?.volume_size_gb ?? null,
 	phase: phase(deployment, operation),
-	checkpoint: deployment?.state ?? operation?.checkpoint ?? "requested",
+	checkpoint:
+		operation?.kind === "delete" || deployment?.state === "blocked"
+			? (operation?.checkpoint ?? "requested")
+			: (deployment?.state ?? operation?.checkpoint ?? "requested"),
+	operation: operation
+		? {
+				id: operation.id,
+				state: operation.state,
+				attempt: operation.attempt,
+				updated_at: operation.updated_at.toISOString(),
+				next_attempt_at: operation.state === "queued" ? operation.available_at.toISOString() : null,
+			}
+		: null,
 	created_at: board.created_at.toISOString(),
 	last_backup:
 		board.storage_engine === "sqlite" &&
@@ -59,23 +88,30 @@ const view = (
 
 const make = Effect.gen(function* () {
 	const boards = yield* Boards;
+	const secrets = yield* CloudSecrets;
+	const allowLocal = yield* Config.Boolean("CLOUD_POSTGRES_ALLOW_LOCAL").pipe(Config.withDefault(false));
 	const deployments = yield* Deployments;
 	const operations = yield* Operations;
 	const database = yield* Database;
 	const latestProvision = database
 		.selectDistinctOn([boardOperations.board_id], {
 			board_id: boardOperations.board_id,
+			id: boardOperations.id,
+			attempt: boardOperations.attempt,
+			updated_at: boardOperations.updated_at,
+			available_at: boardOperations.available_at,
+			kind: boardOperations.kind,
 			state: boardOperations.state,
 			checkpoint: boardOperations.checkpoint,
 			last_error_code: boardOperations.last_error_code,
 			last_error_message: boardOperations.last_error_message,
 		})
 		.from(boardOperations)
-		.where(eq(boardOperations.kind, "provision"))
+		.where(inArray(boardOperations.kind, ["provision", "delete"]))
 		.orderBy(boardOperations.board_id, desc(boardOperations.created_at), desc(boardOperations.id))
 		.as("latest_provision");
 	const decorate = (board: Board) =>
-		Effect.all([deployments.get(board.id), operations.latest(board.id, "provision")]).pipe(
+		Effect.all([deployments.get(board.id), operations.latestLifecycle(board.id)]).pipe(
 			Effect.map(([deployment, operation]) =>
 				view(board, Option.getOrUndefined(deployment), Option.getOrUndefined(operation)),
 			),
@@ -87,6 +123,11 @@ const make = Effect.gen(function* () {
 					board: getTableColumns(boardTable),
 					deployment: getTableColumns(boardDeployments),
 					operation: {
+						id: latestProvision.id,
+						attempt: latestProvision.attempt,
+						updated_at: latestProvision.updated_at,
+						available_at: latestProvision.available_at,
+						kind: latestProvision.kind,
 						state: latestProvision.state,
 						checkpoint: latestProvision.checkpoint,
 						last_error_code: latestProvision.last_error_code,
@@ -96,7 +137,7 @@ const make = Effect.gen(function* () {
 				.from(boardTable)
 				.leftJoin(boardDeployments, eq(boardDeployments.board_id, boardTable.id))
 				.leftJoin(latestProvision, eq(latestProvision.board_id, boardTable.id))
-				.where(eq(boardTable.owner_id, ownerId))
+				.where(and(eq(boardTable.owner_id, ownerId), isNull(boardTable.deleted_at)))
 				.orderBy(desc(boardTable.created_at), desc(boardTable.id))
 				.limit(maxListedBoardsPerOwner + 1)
 				.pipe(
@@ -105,6 +146,7 @@ const make = Effect.gen(function* () {
 							.slice(0, maxListedBoardsPerOwner)
 							.map(({ board, deployment, operation }) => view(board, deployment ?? undefined, operation ?? undefined)),
 						truncated: rows.length > maxListedBoardsPerOwner,
+						capabilities: { postgres: secrets.enabled },
 					})),
 				),
 		get: (ownerId: string, boardId: string) =>
@@ -120,10 +162,17 @@ const make = Effect.gen(function* () {
 			Effect.gen(function* () {
 				const name = input.name.trim();
 				if (name.length < 1 || name.length > 80) return yield* new InvalidBoardName();
+				const storageEngine = input.storage_engine ?? "sqlite";
+				if (storageEngine === "postgres" && !secrets.enabled) return yield* new PostgresUnavailable();
+				if ((storageEngine === "postgres") !== Boolean(input.postgres_admin_url))
+					return yield* new InvalidStorageConfiguration();
+				const adminUrl = input.postgres_admin_url ? Redacted.make(input.postgres_admin_url) : undefined;
+				if (adminUrl) yield* validatePostgresUrl(adminUrl, allowLocal);
 				const board = yield* boards.request({
 					owner_id: ownerId,
 					name,
-					storage_engine: "sqlite",
+					storage_engine: storageEngine,
+					...(adminUrl ? { postgres_admin_url: adminUrl } : {}),
 					requested_by: ownerId,
 					idempotency_key: input.idempotency_key,
 				});

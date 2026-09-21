@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { Layers3 } from "lucide-react";
+import { InviteDialog } from "./invite-dialog.tsx";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { AuthButtons } from "./auth-buttons.tsx";
 
@@ -15,14 +17,8 @@ function Wordmark({ compact = false }: { readonly compact?: boolean }) {
 		<span
 			className={`inline-flex items-center gap-2 font-medium tracking-[-0.035em] ${compact ? "text-[19px]" : "text-2xl"}`}
 		>
-			<svg
-				aria-hidden="true"
-				className={`${compact ? "size-[19px]" : "size-[23px]"} text-[#ed9b83]`}
-				viewBox="0 0 24 24"
-			>
-				<path d="M4 14.5V8l5-4 6 3.5L20 7l-3 3v6.5L12 21l-8-6.5Z" fill="currentColor" />
-				<path d="m15 7.5 5-.5-3 3-2-2.5Z" fill="#161b1d" />
-				<circle cx="12.5" cy="8.5" fill="#161b1d" r="1" />
+			<svg aria-hidden="true" className={compact ? "size-6" : "size-8"} viewBox="0 0 48 48">
+				<image href="/favicon.svg" width="48" height="48" />
 			</svg>
 			<span>
 				chirp<span className="text-primary">.</span>
@@ -109,21 +105,21 @@ export function DashboardShell({ children, user }: { readonly children: ReactNod
 					>
 						<Wordmark />
 					</Link>
-					<p className="mt-[5px] mr-0 mb-[30px] ml-[31px] font-mono text-[10px] tracking-[0.03em] text-subtle">
-						private managed boards
-					</p>
+					<p className="mt-[5px] mr-0 mb-[30px] ml-[31px] font-mono text-[10px] tracking-[0.03em] text-subtle">Cloud</p>
 				</div>
 				<nav aria-label="Cloud navigation" className="grid gap-[3px]">
 					<Link
-						className="rounded-sm bg-background px-2.5 py-[9px] text-[13px] text-foreground no-underline hover:bg-background hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+						className="flex items-center gap-2 rounded-md bg-muted/70 px-2.5 py-[9px] text-[13px] text-foreground no-underline hover:bg-background hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
 						href="/"
 						onClick={closeNavigation}
 					>
+						<Layers3 className="size-4 text-primary" />
 						Boards
 					</Link>
 				</nav>
-				<div className="mt-auto border-t border-border pt-[18px] [&_button]:min-h-8 [&_button]:px-2.5 [&_button]:py-[7px]">
-					{user ? <AuthButtons user={user} /> : null}
+				<div className="mt-auto grid gap-4 pt-6">
+					<InviteDialog />
+					<div className="border-t pt-3">{user ? <AuthButtons user={user} /> : null}</div>
 				</div>
 			</aside>
 			<main

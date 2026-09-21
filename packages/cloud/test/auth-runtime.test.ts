@@ -14,10 +14,8 @@ const settings: CloudAuthSettings = {
 	publicOrigin: "https://cloud.test",
 	authSecret: Redacted.make("test-auth-secret-with-at-least-32-characters"),
 	clientIpHeader: "fly-client-ip",
-	githubClientId: "github-client",
-	githubClientSecret: Redacted.make("github-secret"),
-	googleClientId: "google-client",
-	googleClientSecret: Redacted.make("google-secret"),
+	github: { clientId: "github-client", clientSecret: Redacted.make("github-secret") },
+	google: { clientId: "google-client", clientSecret: Redacted.make("google-secret") },
 };
 
 describe.skipIf(!realPostgres)("authentication request runtime", () => {

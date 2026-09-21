@@ -56,7 +56,7 @@ const decodeCreateRequest = async (request: Request) => {
 		}
 		const body = decodeJson(new TextDecoder().decode(bytes));
 		if (typeof body !== "object" || body === null || Array.isArray(body)) return null;
-		if (Object.keys(body).some((key) => key !== "name")) return null;
+		if (Object.keys(body).some((key) => !["name", "storage_engine", "postgres_admin_url"].includes(key))) return null;
 		return Schema.decodeUnknownSync(DashboardCreateRequest)(body);
 	} catch {
 		return null;
@@ -93,9 +93,11 @@ export const makeDashboardHttp = (dependencies: DashboardHttpDependencies) => ({
 		const body = await decodeCreateRequest(request);
 		if (!body || body.name.trim().length < 1 || body.name.trim().length > 80)
 			return error(400, "invalid_request", session.headers);
+		if ((body.storage_engine === "postgres") !== Boolean(body.postgres_admin_url))
+			return error(400, "invalid_request", session.headers);
 		try {
 			const result = await dependencies.create(session.ownerId, {
-				name: body.name,
+				...body,
 				idempotency_key: idempotencyKey,
 			});
 			if (!result.ok)
@@ -115,8 +117,8 @@ export const makeDashboardHttp = (dependencies: DashboardHttpDependencies) => ({
 					})(),
 				},
 			);
-		} catch (cause) {
-			await Effect.runPromise(Effect.logError("Chirp Cloud dashboard create failed", cause));
+		} catch {
+			await Effect.runPromise(Effect.logError("Chirp Cloud dashboard create failed"));
 			return error(503, "dashboard_unavailable", session.headers);
 		}
 	},

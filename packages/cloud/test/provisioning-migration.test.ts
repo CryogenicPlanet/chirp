@@ -1,7 +1,6 @@
-import { DateTime, Effect, Exit } from "effect";
+import { Crypto, DateTime, Effect, Exit } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import { describe, expect, test } from "vitest";
-import { Boards } from "../src/boards.ts";
 import { Database } from "../src/database.ts";
 import { migrateCloudDatabase } from "../src/migrations.ts";
 import * as foundation from "../src/migrations/0001_foundation.ts";
@@ -28,10 +27,23 @@ const legacy = Effect.gen(function* () {
 			compatible_schema_versions: [...migration.compatibleSchemaVersions],
 		});
 	}
-	yield* sql`ALTER TABLE board_operations ADD COLUMN ambiguous_mutations TEXT[] NOT NULL DEFAULT '{}'::text[]`;
-	yield* sql`ALTER TABLE board_operations ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0`;
 	return sql;
 });
+
+// Seed the historical schema directly; current repositories intentionally require the current schema.
+const legacyBoard = (key: string) =>
+	Effect.gen(function* () {
+		const sql = yield* SqlClient.SqlClient;
+		const crypto = yield* Crypto.Crypto;
+		const id = yield* crypto.randomUUIDv7;
+		const operationId = yield* crypto.randomUUIDv7;
+		const slug = id.replaceAll("-", "");
+		yield* sql`INSERT INTO boards (id, owner_id, name, slug, storage_engine)
+		VALUES (${id}, ${request.owner_id}, ${request.name}, ${slug}, 'sqlite')`;
+		yield* sql`INSERT INTO board_operations (id, board_id, kind, state, requested_by, idempotency_key, request_hash)
+		VALUES (${operationId}, ${id}, 'provision', 'queued', ${request.requested_by}, ${key}, ${"a".repeat(64)})`;
+		return { id, slug };
+	});
 
 describe("provisioning recovery migration", () => {
 	test("maps live and blocked checkpoints without losing identities, snapshot records, or operation history", async () => {
@@ -39,7 +51,7 @@ describe("provisioning recovery migration", () => {
 			Effect.gen(function* () {
 				const sql = yield* legacy;
 				for (const state of ["runtime_secrets_written", "blocked"]) {
-					const board = yield* (yield* Boards).request({ ...request, idempotency_key: state });
+					const board = yield* legacyBoard(state);
 					yield* sql`INSERT INTO board_deployments (board_id, state, hostname, storage_engine, region, image_ref,
 					app_name, network_name, volume_name, machine_name, volume_size_gb, app_id, volume_id,
 					last_snapshot_id, last_snapshot_digest, last_snapshot_created_at, last_snapshot_retention_days)
@@ -54,8 +66,6 @@ describe("provisioning recovery migration", () => {
 				}
 				const before = yield* sql`SELECT board_id, app_id, volume_id, last_snapshot_id, last_snapshot_digest,
 				last_snapshot_created_at::text, last_snapshot_retention_days FROM board_deployments ORDER BY board_id`;
-				yield* sql`ALTER TABLE board_operations DROP COLUMN ambiguous_mutations`;
-				yield* sql`ALTER TABLE board_operations DROP COLUMN failure_count`;
 				yield* migrateCloudDatabase;
 				yield* migrateCloudDatabase;
 				expect(
@@ -99,7 +109,7 @@ describe("provisioning recovery migration", () => {
 		await runFresh(
 			Effect.gen(function* () {
 				const sql = yield* legacy;
-				const board = yield* (yield* Boards).request({ ...request, idempotency_key: "legacy-running" });
+				const board = yield* legacyBoard("legacy-running");
 				yield* sql`INSERT INTO board_deployments (board_id, state, hostname, storage_engine, region, image_ref,
 					app_name, network_name, volume_name, machine_name, volume_size_gb, app_id, volume_id, machine_id)
 					VALUES (${board.id}, 'machine_started', ${board.slug}, 'sqlite', 'sjc', ${settings.imageRef},
@@ -108,8 +118,6 @@ describe("provisioning recovery migration", () => {
 					lease_token = '00000000-0000-4000-8000-000000000001', lease_owner = 'stopped-old-worker',
 					lease_expires_at = clock_timestamp() - interval '1 second'
 					WHERE board_id = ${board.id}`;
-				yield* sql`ALTER TABLE board_operations DROP COLUMN ambiguous_mutations`;
-				yield* sql`ALTER TABLE board_operations DROP COLUMN failure_count`;
 				yield* migrateCloudDatabase;
 				expect(yield* sql`SELECT ambiguous_mutations FROM board_operations WHERE board_id = ${board.id}`).toEqual([
 					{
@@ -124,7 +132,7 @@ describe("provisioning recovery migration", () => {
 		await runFresh(
 			Effect.gen(function* () {
 				const sql = yield* legacy;
-				const board = yield* (yield* Boards).request({ ...request, idempotency_key: "legacy-retry" });
+				const board = yield* legacyBoard("legacy-retry");
 				yield* sql`INSERT INTO board_deployments (board_id, state, hostname, storage_engine, region, image_ref,
 					app_name, network_name, volume_name, machine_name, volume_size_gb, app_id, volume_id)
 					VALUES (${board.id}, 'blocked', ${board.slug}, 'sqlite', 'sjc', ${settings.imageRef},
@@ -139,8 +147,6 @@ describe("provisioning recovery migration", () => {
 				SELECT '00000000-0000-4000-8000-000000000002', board_id, kind, 'queued', checkpoint,
 					'operator:deployment-retry', id::text, request_hash
 				FROM board_operations WHERE board_id = ${board.id}`;
-				yield* sql`ALTER TABLE board_operations DROP COLUMN ambiguous_mutations`;
-				yield* sql`ALTER TABLE board_operations DROP COLUMN failure_count`;
 				yield* migrateCloudDatabase;
 				expect(
 					yield* sql`SELECT requested_by, ambiguous_mutations FROM board_operations
@@ -157,10 +163,8 @@ describe("provisioning recovery migration", () => {
 		await runFresh(
 			Effect.gen(function* () {
 				const sql = yield* legacy;
-				yield* (yield* Boards).request(request);
+				yield* legacyBoard(request.idempotency_key);
 				yield* sql`UPDATE board_operations SET checkpoint = 'runtime_secrets_written'`;
-				yield* sql`ALTER TABLE board_operations DROP COLUMN ambiguous_mutations`;
-				yield* sql`ALTER TABLE board_operations DROP COLUMN failure_count`;
 				yield* sql`ALTER TABLE board_deployments RENAME CONSTRAINT board_deployments_state_check TO unexpected_state_check`;
 				expect(Exit.isFailure(yield* Effect.exit(migrateCloudDatabase))).toBe(true);
 				expect(yield* sql`SELECT checkpoint FROM board_operations`).toEqual([

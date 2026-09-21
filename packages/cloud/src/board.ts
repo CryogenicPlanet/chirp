@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { type Redacted, Schema } from "effect";
 
 export const StorageEngine = Schema.Literals(["sqlite", "postgres", "mysql"]);
 export type StorageEngine = typeof StorageEngine.Type;
@@ -20,4 +20,4 @@ export const RequestBoard = Schema.Struct({
 	requested_by: Schema.String,
 	idempotency_key: Schema.String,
 });
-export type RequestBoard = typeof RequestBoard.Type;
+export type RequestBoard = typeof RequestBoard.Type & { readonly postgres_admin_url?: Redacted.Redacted<string> };

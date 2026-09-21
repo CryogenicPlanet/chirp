@@ -1,25 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { DashboardBoardResponse, type DashboardBoard } from "../../../dashboard-contract.ts";
 import { dashboardErrorMessage, readDashboardResponse } from "../../dashboard-response.ts";
 import { type CloudClientUser, DashboardShell } from "../../dashboard-shell.tsx";
 import { pollDashboardBoard } from "../../poll-dashboard-board.ts";
+import { DeleteBoardDialog } from "../../delete-board-dialog.tsx";
+import { BoardProgressPanel } from "../../board-progress-panel.tsx";
 import { StatusBadge } from "../../status-badge.tsx";
 
-const checkpointLabels: Readonly<Record<string, string>> = {
-	requested: "Waiting for a provisioning worker",
-	storage_configuration_verified: "Storage configuration verified",
-	app_created: "Fly application created",
-	volume_created: "Persistent volume created",
-	machine_created: "Board machine created",
-	machine_started: "Board machine started",
-	edge_reachable: "Fly edge is reachable",
-	child_route_observed: "Board route verified",
-	provisioned: "Provisioning complete",
-	blocked: "Provisioning needs attention",
-};
+class BoardNotFound extends Error {}
+
 const storageLabels = { sqlite: "Managed SQLite", postgres: "External PostgreSQL", mysql: "External MySQL" } as const;
 
 const formatDate = (value: string) =>
@@ -34,6 +27,8 @@ export function BoardDetail({
 	readonly boardId: string;
 	readonly sessionUser: CloudClientUser | null;
 }) {
+	const router = useRouter();
+	const deletionObserved = useRef(false);
 	const [board, setBoard] = useState<DashboardBoard>();
 	const [error, setError] = useState<string>();
 	const [pollVersion, setPollVersion] = useState(0);
@@ -44,6 +39,7 @@ export function BoardDetail({
 				cache: "no-store",
 				signal: signal ?? null,
 			});
+			if (response.status === 404) throw new BoardNotFound();
 			return (await readDashboardResponse(response, DashboardBoardResponse)).board;
 		},
 		[boardId],
@@ -56,11 +52,22 @@ export function BoardDetail({
 		void pollDashboardBoard({
 			signal: controller.signal,
 			load,
-			onBoard: setBoard,
-			onError: (cause) => setError(dashboardErrorMessage(cause)),
+			onBoard: (value) => {
+				deletionObserved.current = value.phase === "deleting";
+				setBoard(value);
+			},
+			onError: (cause) => {
+				if (cause instanceof BoardNotFound) {
+					if (deletionObserved.current) router.replace("/");
+					else {
+						setBoard(undefined);
+						setError("This board was not found.");
+					}
+				} else setError(dashboardErrorMessage(cause));
+			},
 		});
 		return () => controller.abort();
-	}, [load, pollVersion, sessionUser]);
+	}, [load, pollVersion, sessionUser, router]);
 
 	const refresh = () => {
 		setError(undefined);
@@ -130,12 +137,19 @@ export function BoardDetail({
 									{board.name}
 								</h1>
 								<p className="mt-2 mb-0 leading-normal text-muted-foreground [overflow-wrap:anywhere]">
-									{board.hostname ?? "A private hostname will appear after provisioning."}
+									{board.hostname ?? "Your board address will appear when setup is complete."}
 								</p>
 							</div>
 							<div className="flex flex-wrap items-center justify-start gap-2 min-[761px]:justify-end">
 								<StatusBadge phase={board.phase} />
-								{board.hostname ? (
+								<DeleteBoardDialog
+									board={board}
+									onDeleted={() => {
+										deletionObserved.current = true;
+										refresh();
+									}}
+								/>
+								{board.hostname && board.phase === "ready" ? (
 									<a
 										className="inline-flex min-h-9 items-center justify-center whitespace-nowrap rounded-md border border-transparent bg-primary px-3.5 py-2 text-[13px] font-medium leading-none text-primary-foreground no-underline hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
 										href={`https://${board.hostname}`}
@@ -157,35 +171,14 @@ export function BoardDetail({
 							</p>
 							<p className="m-0">{board.error.message}</p>
 							<p className="mt-1.5 mb-0 text-muted-foreground">
-								{board.error.retrying
-									? "Provisioning will retry automatically."
-									: "Refresh after the underlying issue is resolved. No new operation will be created."}
+								{board.error.retrying ? "We’ll retry automatically." : "Contact your Cloud administrator for help."}
 							</p>
 						</div>
 					) : null}
-					<div className="grid gap-3 min-[901px]:grid-cols-2">
-						<section aria-labelledby="provisioning" className="rounded-md border border-border bg-card p-5 shadow-card">
-							<p className="m-0 font-mono text-[11px] font-medium tracking-[0.08em] text-subtle uppercase">
-								Provisioning
-							</p>
-							<h2 className="mt-[7px] mb-0 text-lg leading-tight font-normal text-balance" id="provisioning">
-								{checkpointLabels[board.checkpoint] ?? board.checkpoint.replaceAll("_", " ")}
-							</h2>
-							<p className="mt-1.5 mb-0 leading-normal text-muted-foreground">
-								{board.phase === "queued" || board.phase === "provisioning"
-									? "This page checks for progress every two seconds."
-									: board.phase === "ready"
-										? "The generated board route has been observed and published."
-										: "Provisioning stopped with a persisted error."}
-							</p>
-							<button
-								className="mt-[18px] inline-flex min-h-[30px] cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-input bg-card px-2.5 py-1.5 text-xs font-medium leading-none text-foreground hover:border-primary hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-								onClick={refresh}
-								type="button"
-							>
-								Refresh status
-							</button>
-						</section>
+					<div className="grid items-start gap-3 min-[901px]:grid-cols-2 min-[901px]:grid-rows-[auto_1fr]">
+						<div className="min-[901px]:row-span-2">
+							<BoardProgressPanel board={board} onRefresh={refresh} />
+						</div>
 						<section
 							aria-labelledby="configuration"
 							className="rounded-md border border-border bg-card p-5 shadow-card"
@@ -211,24 +204,21 @@ export function BoardDetail({
 								) : null}
 							</dl>
 						</section>
-						<section
-							aria-labelledby="backup"
-							className="rounded-md border border-border bg-card p-5 shadow-card min-[901px]:col-span-full"
-						>
+						<section aria-labelledby="backup" className="rounded-md border border-border bg-card p-5 shadow-card">
 							<p className="m-0 font-mono text-[11px] font-medium tracking-[0.08em] text-subtle uppercase">
 								Data protection
 							</p>
 							<h2 className="mt-[7px] mb-0 text-lg leading-tight font-normal text-balance" id="backup">
-								Last verified backup
+								Latest snapshot
 							</h2>
 							{board.storage_engine !== "sqlite" ? (
 								<p className="mt-1.5 mb-0 leading-normal text-muted-foreground">
-									Backup verification is managed outside Chirp Cloud for this board.
+									Manage backups with your database provider.
 								</p>
 							) : board.last_backup ? (
 								<dl className="mt-[18px] mb-0 grid min-[761px]:grid-cols-2 min-[761px]:gap-x-7">
 									<div className="grid grid-cols-[minmax(120px,0.65fr)_minmax(0,1fr)] gap-5 border-t border-border py-2.5 max-[460px]:grid-cols-1 max-[460px]:gap-1">
-										<dt className="text-subtle">Observed</dt>
+										<dt className="text-subtle">Created</dt>
 										<dd className="m-0 text-foreground [overflow-wrap:anywhere]">
 											{formatDate(board.last_backup.created_at)}
 										</dd>
@@ -247,9 +237,7 @@ export function BoardDetail({
 									</div>
 								</dl>
 							) : (
-								<p className="mt-1.5 mb-0 leading-normal text-muted-foreground">
-									No completed snapshot has been observed yet.
-								</p>
+								<p className="mt-1.5 mb-0 leading-normal text-muted-foreground">No completed snapshots yet.</p>
 							)}
 						</section>
 					</div>

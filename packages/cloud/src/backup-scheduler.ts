@@ -18,6 +18,8 @@ const make = Effect.gen(function* () {
 				.where(
 					and(
 						eq(boardDeployments.state, "provisioned"),
+						isNull(boards.deletion_requested_at),
+						isNull(boards.deleted_at),
 						eq(boardDeployments.storage_engine, "sqlite"),
 						or(
 							isNull(boardDeployments.last_snapshot_created_at),
@@ -50,7 +52,10 @@ const make = Effect.gen(function* () {
 					})
 					.pipe(
 						Effect.map((operation) => operation.state === "queued"),
-						Effect.catchTag("OperationAlreadyActive", () => Effect.succeed(false)),
+						Effect.catchTags({
+							OperationAlreadyActive: () => Effect.succeed(false),
+							BoardNotFound: () => Effect.succeed(false),
+						}),
 					);
 				if (inserted) scheduled += 1;
 			}

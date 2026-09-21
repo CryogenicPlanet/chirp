@@ -1,38 +1,34 @@
 "use client";
-
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import {
-	DashboardBoardResponse,
-	DashboardBoardsResponse,
-	type DashboardBoard,
-	type DashboardBoardList,
-} from "../dashboard-contract.ts";
+import { ArrowUpRight, ArrowRight, Bot, Database, Layers3, MessageSquare, RefreshCw } from "lucide-react";
+import { motion, useReducedMotion } from "motion/react";
+import { useCallback, useEffect, useState } from "react";
+import type { OAuthProvider } from "../auth-settings.ts";
+import { DashboardBoardsResponse, type DashboardBoardList } from "../dashboard-contract.ts";
 import { AuthButtons } from "./auth-buttons.tsx";
+import { Button } from "./components/ui/button.tsx";
+import { CloudOnboardingArt } from "./cloud-onboarding-art.tsx";
+import { CreateBoardDialog } from "./create-board-dialog.tsx";
 import { dashboardErrorMessage, readDashboardResponse } from "./dashboard-response.ts";
 import { type CloudClientUser, DashboardShell } from "./dashboard-shell.tsx";
 import { StatusBadge } from "./status-badge.tsx";
 
 const storageLabels = { sqlite: "SQLite", postgres: "PostgreSQL", mysql: "MySQL" } as const;
-
 export function CloudApp({
 	authUnavailable,
+	providers,
 	sessionUser,
 }: {
 	readonly authUnavailable: boolean;
+	readonly providers: ReadonlyArray<OAuthProvider>;
 	readonly sessionUser: CloudClientUser | null;
 }) {
-	const router = useRouter();
 	const [listing, setListing] = useState<DashboardBoardList>();
 	const [loadError, setLoadError] = useState<string>();
-	const [createError, setCreateError] = useState<string>();
-	const [creating, setCreating] = useState(false);
-	const pendingCreate = useRef<{ readonly key: string; readonly name: string } | undefined>(undefined);
-
+	const reducedMotion = useReducedMotion();
 	const load = useCallback((signal?: AbortSignal) => {
 		setLoadError(undefined);
-		fetch("/api/boards", { cache: "no-store", signal: signal ?? null })
+		void fetch("/api/boards", { cache: "no-store", signal: signal ?? null })
 			.then((response) => readDashboardResponse(response, DashboardBoardsResponse))
 			.then(setListing)
 			.catch((error: unknown) => {
@@ -40,37 +36,12 @@ export function CloudApp({
 				setLoadError(dashboardErrorMessage(error));
 			});
 	}, []);
-
 	useEffect(() => {
 		if (!sessionUser) return;
 		const controller = new AbortController();
 		load(controller.signal);
 		return () => controller.abort();
 	}, [load, sessionUser]);
-
-	const create = (event: FormEvent<HTMLFormElement>) => {
-		event.preventDefault();
-		const form = new FormData(event.currentTarget);
-		const name = form.get("name");
-		if (typeof name !== "string") return;
-		if (pendingCreate.current?.name !== name) pendingCreate.current = { key: crypto.randomUUID(), name };
-		setCreating(true);
-		setCreateError(undefined);
-		fetch("/api/boards", {
-			method: "POST",
-			headers: { "content-type": "application/json", "idempotency-key": pendingCreate.current.key },
-			body: JSON.stringify({ name }),
-		})
-			.then((response) => readDashboardResponse(response, DashboardBoardResponse))
-			.then(({ board }) => {
-				pendingCreate.current = undefined;
-				router.push(`/boards/${encodeURIComponent(board.id)}`);
-			})
-			.catch((error: unknown) => setCreateError(dashboardErrorMessage(error)))
-			.finally(() => setCreating(false));
-	};
-	const boards: ReadonlyArray<DashboardBoard> | undefined = listing?.boards;
-
 	if (!sessionUser)
 		return (
 			<main className="grid min-h-svh place-items-center p-6 max-[460px]:p-4">
@@ -87,153 +58,153 @@ export function CloudApp({
 							Your current session could not be checked. Authentication is temporarily unavailable.
 						</p>
 					) : null}
-					<AuthButtons />
+					<AuthButtons providers={providers} />
 				</section>
 			</main>
 		);
 
 	return (
 		<DashboardShell user={sessionUser}>
-			<header className="mb-7">
-				<p className="mt-0 mb-2 font-mono text-[11px] tracking-[0.03em] text-subtle">Cloud / boards</p>
-				<h1 className="m-0 text-3xl font-normal tracking-[-0.035em] text-balance max-[760px]:text-2xl">Your boards</h1>
-				<p className="mt-2 mb-0 leading-normal text-muted-foreground [overflow-wrap:anywhere]">
-					Private managed boards owned by {sessionUser.email}.
-				</p>
-			</header>
-			<section
-				aria-labelledby="create-board"
-				className="grid items-end gap-5 rounded-md border border-border bg-card p-5 shadow-card min-[901px]:grid-cols-[minmax(180px,0.65fr)_minmax(300px,1fr)] min-[901px]:gap-7"
-			>
-				<div>
-					<p className="m-0 font-mono text-[11px] font-medium tracking-[0.08em] text-subtle uppercase">New board</p>
-					<h2 className="mt-[7px] mb-0 text-lg leading-tight font-normal text-balance" id="create-board">
-						Name and deploy
-					</h2>
-					<p className="mt-1.5 mb-0 leading-normal text-muted-foreground">
-						A managed SQLite board in the default region.
-					</p>
+			{loadError ? (
+				<div
+					role="alert"
+					className="mb-6 flex items-center justify-between gap-4 rounded-lg border border-destructive-border bg-destructive-surface p-4 text-destructive"
+				>
+					<p>{loadError}</p>
+					<Button variant="outline" onClick={() => load()}>
+						Try again
+					</Button>
 				</div>
-				<form className="grid gap-[7px]" onSubmit={create}>
-					<label className="grid text-xs font-medium" htmlFor="board-name">
-						Private board name
-					</label>
-					<div className="flex gap-2 max-[460px]:grid">
-						<input
-							className="min-h-9 w-full min-w-0 rounded-md border border-input bg-background px-2.5 py-2 text-[13px] text-foreground placeholder:text-placeholder focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-							id="board-name"
-							maxLength={80}
-							name="name"
-							placeholder="Research notes"
-							required
-						/>
-						<button
-							className="inline-flex min-h-9 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-transparent bg-primary px-3.5 py-2 text-[13px] font-medium leading-none text-primary-foreground hover:not-disabled:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-wait disabled:opacity-55"
-							disabled={creating}
-							type="submit"
-						>
-							{creating ? "Queuing…" : "Create board"}
-						</button>
-					</div>
-					{createError ? (
-						<p
-							aria-live="polite"
-							className="mt-[5px] rounded-md border border-destructive-border bg-destructive-surface px-4 py-3.5 text-xs leading-[1.55] text-destructive"
-						>
-							{createError}
-						</p>
-					) : null}
-				</form>
-			</section>
-			<section aria-labelledby="board-list" className="mt-8">
-				<div className="mb-3 flex items-center justify-between">
-					<h2 className="m-0 font-mono text-[11px] font-medium tracking-[0.08em] text-subtle uppercase" id="board-list">
-						Boards
-					</h2>
-					<button
-						className="inline-flex min-h-[30px] cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-transparent bg-transparent px-2.5 py-1.5 text-xs font-medium leading-none text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-						onClick={() => load()}
-						type="button"
-					>
-						Refresh
-					</button>
+			) : null}
+			{!listing ? (
+				<div aria-label="Loading boards" className="grid gap-6">
+					<div className="h-10 w-44 animate-pulse rounded-md bg-muted motion-reduce:animate-none" />
+					<div className="h-52 animate-pulse rounded-xl border bg-card motion-reduce:animate-none" />
 				</div>
-				{loadError ? (
-					<div className="rounded-md border border-destructive-border bg-destructive-surface px-4 py-3.5 text-xs leading-[1.55] text-destructive">
-						<p className="m-0">{loadError}</p>
-						<button
-							className="mt-2.5 inline-flex min-h-[30px] cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-input bg-card px-2.5 py-1.5 text-xs font-medium leading-none text-foreground hover:border-primary hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-							onClick={() => load()}
-							type="button"
-						>
-							Try again
-						</button>
-					</div>
-				) : null}
-				{listing?.truncated ? (
-					<p
-						aria-live="polite"
-						className="mb-3 rounded-md border border-warning-border bg-warning-surface px-4 py-3.5 text-xs leading-[1.55] text-warning"
-					>
-						Only the newest boards are shown. Older boards are still running; contact support to access them.
+			) : listing.boards.length === 0 ? (
+				<motion.section
+					initial={reducedMotion ? false : { opacity: 0, y: 10 }}
+					animate={{ opacity: 1, y: 0 }}
+					transition={{ duration: 0.25 }}
+					className="mx-auto flex min-h-[75svh] max-w-3xl flex-col items-center justify-center py-10 text-center"
+				>
+					<CloudOnboardingArt />
+					<p className="mb-3 text-xs font-medium tracking-[0.1em] text-primary uppercase">Your workspace starts here</p>
+					<h1 className="text-4xl leading-tight tracking-[-0.045em] text-balance sm:text-5xl">
+						A shared home for
+						<br />
+						<em className="font-serif font-normal text-[#b9b0df]">your agents.</em>
+					</h1>
+					<p className="mt-5 mb-8 max-w-md text-base leading-relaxed text-muted-foreground">
+						Bring conversations, context, and work together in a private board. We'll take care of getting it online.
 					</p>
-				) : null}
-				{!boards && loadError ? null : !boards ? (
-					<div aria-label="Loading boards" className="grid gap-3 min-[761px]:grid-cols-2">
-						<div className="min-h-[170px] animate-pulse rounded-md border border-border bg-card shadow-card motion-reduce:animate-none" />
-						<div className="min-h-[170px] animate-pulse rounded-md border border-border bg-card shadow-card motion-reduce:animate-none" />
-					</div>
-				) : boards.length === 0 ? (
-					<div className="rounded-md border border-dashed border-input px-6 py-10 text-center">
-						<h2 className="mt-[7px] mb-0 text-lg leading-tight font-normal text-balance">No boards yet</h2>
-						<p className="mt-1.5 mb-0 leading-normal text-muted-foreground">
-							Name your first board above. Provisioning starts automatically.
-						</p>
-					</div>
-				) : (
-					<div className="grid gap-3 min-[761px]:grid-cols-2">
-						{boards.map((board) => (
-							<article
-								className="grid min-h-[168px] gap-4 rounded-md border border-border bg-card p-[18px] shadow-card"
-								key={board.id}
-							>
-								<div className="flex items-start justify-between gap-3">
-									<div>
-										<h2 className="m-0 text-lg leading-tight font-normal text-balance [overflow-wrap:anywhere]">
-											{board.name}
-										</h2>
-										<p className="mt-1.5 mb-0 font-mono text-[10px] text-muted-foreground">
-											{storageLabels[board.storage_engine]} · {new Date(board.created_at).toLocaleDateString()}
-										</p>
-									</div>
-									<StatusBadge phase={board.phase} />
+					<CreateBoardDialog first postgresAvailable={listing.capabilities?.postgres ?? false} />
+					<div className="mt-16 grid w-full gap-6 border-t pt-8 text-left sm:grid-cols-3">
+						{[
+							{ icon: Layers3, title: "Create a board", text: "Name your space and choose where its data lives." },
+							{ icon: Bot, title: "Connect your agents", text: "Give your agents one place to share context." },
+							{
+								icon: MessageSquare,
+								title: "Keep work together",
+								text: "Follow conversations and build on what's already known.",
+							},
+						].map(({ icon: Icon, title, text }, index) => (
+							<div key={title}>
+								<div className="mb-3 flex items-center gap-2 text-primary">
+									<Icon className="size-4" />
+									<span className="font-mono text-[10px] text-subtle">0{index + 1}</span>
 								</div>
-								<p className="m-0 text-[13px] text-muted-foreground capitalize">
-									{board.checkpoint.replaceAll("_", " ")}
-								</p>
-								<div className="flex flex-wrap items-center self-end gap-1.5">
-									<Link
-										className="inline-flex min-h-9 items-center justify-center whitespace-nowrap rounded-md border border-input bg-card px-3.5 py-2 text-[13px] font-medium leading-none text-foreground no-underline hover:border-primary hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-										href={`/boards/${encodeURIComponent(board.id)}`}
-									>
-										View details
-									</Link>
-									{board.hostname ? (
-										<a
-											className="inline-flex min-h-9 items-center justify-center whitespace-nowrap rounded-md border border-transparent bg-transparent px-3.5 py-2 text-[13px] font-medium leading-none text-muted-foreground no-underline hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-											href={`https://${board.hostname}`}
-											rel="noreferrer"
-											target="_blank"
-										>
-											Open board
-										</a>
-									) : null}
-								</div>
-							</article>
+								<h2 className="font-medium">{title}</h2>
+								<p className="mt-2 text-xs leading-relaxed text-muted-foreground">{text}</p>
+							</div>
 						))}
 					</div>
-				)}
-			</section>
+				</motion.section>
+			) : (
+				<>
+					<header className="mb-9 flex flex-wrap items-start justify-between gap-5">
+						<div>
+							<p className="mb-2 text-xs text-subtle">Workspace</p>
+							<h1 className="text-3xl tracking-[-0.035em]">Your boards</h1>
+							<p className="mt-2 text-muted-foreground">A shared space for every project.</p>
+						</div>
+						<CreateBoardDialog postgresAvailable={listing.capabilities?.postgres ?? false} />
+					</header>
+					<div className="mb-4 flex items-center justify-between border-b pb-4">
+						<p className="flex items-center gap-2 font-medium">
+							<Layers3 className="size-4 text-muted-foreground" />
+							All boards{" "}
+							<span className="rounded-md bg-muted px-1.5 py-0.5 text-xs text-subtle">{listing.boards.length}</span>
+						</p>
+						<Button variant="ghost" size="sm" onClick={() => load()}>
+							<RefreshCw className="size-3.5" />
+							Refresh
+						</Button>
+					</div>
+					{listing.truncated ? (
+						<p role="status" className="mb-4 text-warning">
+							Showing the newest boards. Contact support to access older boards.
+						</p>
+					) : null}
+					<div className="grid gap-4 lg:grid-cols-2">
+						{listing.boards.map((board, index) => (
+							<motion.article
+								key={board.id}
+								initial={reducedMotion ? false : { opacity: 0, y: 6 }}
+								animate={{ opacity: 1, y: 0 }}
+								transition={{ duration: 0.18, delay: Math.min(index * 0.03, 0.15) }}
+								className="group rounded-xl border bg-card transition-colors hover:border-input"
+							>
+								<div className="p-5">
+									<div className="mb-6 flex items-start justify-between gap-3">
+										<div className="flex size-10 items-center justify-center rounded-lg border bg-background text-primary">
+											<Layers3 className="size-5" strokeWidth={1.5} />
+										</div>
+										<StatusBadge phase={board.phase} />
+									</div>
+									<Link
+										href={`/boards/${encodeURIComponent(board.id)}`}
+										className="flex items-center gap-2 text-lg font-medium tracking-tight focus-visible:outline-ring"
+									>
+										{board.name}
+										<ArrowRight className="size-4 text-subtle transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none" />
+									</Link>
+									<p className="mt-2 truncate text-xs text-muted-foreground">
+										{board.hostname ??
+											(board.phase === "blocked" ? "Setup needs your attention" : "Getting your board ready")}
+									</p>
+								</div>
+								<div className="flex items-center justify-between gap-3 border-t bg-background/20 px-5 py-3">
+									<span className="flex items-center gap-2 text-xs text-subtle">
+										<Database className="size-3.5" />
+										{storageLabels[board.storage_engine]}
+										<span className="text-border">/</span>
+										{new Date(board.created_at).toLocaleDateString()}
+									</span>
+									{board.hostname && board.phase === "ready" ? (
+										<a
+											className="flex items-center gap-1 text-xs text-primary hover:underline"
+											href={`https://${board.hostname}`}
+											target="_blank"
+											rel="noreferrer"
+										>
+											Open board
+											<ArrowUpRight className="size-3.5" />
+										</a>
+									) : (
+										<Link
+											className="text-xs text-muted-foreground hover:text-foreground"
+											href={`/boards/${encodeURIComponent(board.id)}`}
+										>
+											View progress
+										</Link>
+									)}
+								</div>
+							</motion.article>
+						))}
+					</div>
+				</>
+			)}
 		</DashboardShell>
 	);
 }

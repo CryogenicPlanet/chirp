@@ -16,11 +16,14 @@ import type { FlyApp, FlyMachine, FlyVolume } from "./fly-model.ts";
 import { machineConfig, machineMatches } from "./machine-spec.ts";
 import { InvalidLeaseDuration, LeaseLost, type Operation, type ProviderMutation } from "./operation.ts";
 import { Operations } from "./operations.ts";
+import { PostgresStorage } from "./postgres-storage.ts";
 import { deploymentSpec, type ProvisioningSettings } from "./provisioning-settings.ts";
 
 export class ProvisioningError extends Data.TaggedError("ProvisioningError")<{
 	readonly code:
 		| "storage_configuration_unsupported"
+		| "postgres_configuration_failed"
+		| "postgres_secrets_failed"
 		| "provider_unavailable"
 		| "provider_ambiguous"
 		| "app_create_ambiguous"
@@ -429,7 +432,34 @@ const make = (settings: ProvisioningSettings) =>
 							}
 							switch (deployment.state) {
 								case "requested": {
-									if (deployment.storage_engine !== "sqlite")
+									if (deployment.storage_engine === "postgres") {
+										const storage = yield* PostgresStorage;
+										yield* storage.prepare(board.id, lease).pipe(
+											Effect.raceFirst(beforeProvider.pipe(Effect.andThen(Effect.sleep("20 seconds")), Effect.forever)),
+											Effect.catchTags({
+												PostgresBootstrapError: (error) =>
+													Effect.fail(
+														issue(
+															"postgres_configuration_failed",
+															error.reason === "connection_failed",
+															`PostgreSQL setup failed: ${error.reason}`,
+														),
+													),
+												CloudSecretsError: () =>
+													Effect.fail(
+														issue(
+															"postgres_configuration_failed",
+															false,
+															"PostgreSQL credentials could not be decrypted",
+														),
+													),
+												PostgresStorageError: () =>
+													Effect.fail(
+														issue("storage_configuration_unsupported", false, "PostgreSQL credentials are missing"),
+													),
+											}),
+										);
+									} else if (deployment.storage_engine !== "sqlite")
 										return yield* issue(
 											"storage_configuration_unsupported",
 											false,
@@ -475,6 +505,32 @@ const make = (settings: ProvisioningSettings) =>
 									break;
 								}
 								case "app_created": {
+									if (deployment.storage_engine === "postgres") {
+										const storage = yield* PostgresStorage;
+										yield* storage.stage(board.id, deployment.app_name, lease).pipe(
+											Effect.raceFirst(beforeProvider.pipe(Effect.andThen(Effect.sleep("20 seconds")), Effect.forever)),
+											Effect.catchTags({
+												FlySecretsError: () =>
+													Effect.fail(
+														issue("postgres_secrets_failed", true, "Database secrets could not be verified at Fly"),
+													),
+												PostgresBootstrapError: () =>
+													Effect.fail(
+														issue("postgres_configuration_failed", false, "PostgreSQL configuration is invalid"),
+													),
+												CloudSecretsError: () =>
+													Effect.fail(
+														issue(
+															"postgres_configuration_failed",
+															false,
+															"PostgreSQL credentials could not be decrypted",
+														),
+													),
+												PostgresStorageError: () =>
+													Effect.fail(issue("postgres_configuration_failed", false, "PostgreSQL setup is incomplete")),
+											}),
+										);
+									}
 									const listed = yield* observed(fly.listVolumes(deployment.app_name), beforeProvider);
 									let matching = listed.filter(
 										(volume) => volume.name === deployment.volume_name && volume.region === deployment.region,
@@ -526,6 +582,17 @@ const make = (settings: ProvisioningSettings) =>
 									break;
 								}
 								case "volume_created": {
+									let minSecretsVersion: number | undefined;
+									if (deployment.storage_engine === "postgres") {
+										const storage = yield* PostgresStorage;
+										minSecretsVersion = yield* storage
+											.assertReady(board.id)
+											.pipe(
+												Effect.catchTag("PostgresStorageError", () =>
+													Effect.fail(issue("postgres_configuration_failed", false, "PostgreSQL setup is incomplete")),
+												),
+											);
+									}
 									if (!deployment.volume_id) return yield* issue("provider_drift", false, "Fly Volume ID is missing");
 									const found = yield* observed(
 										fly.getVolume(deployment.app_name, deployment.volume_id),
@@ -572,6 +639,7 @@ const make = (settings: ProvisioningSettings) =>
 												name: deployment.machine_name,
 												region: deployment.region,
 												config: machineConfig(deployment),
+												...(minSecretsVersion === undefined ? {} : { minSecretsVersion }),
 											})
 											.pipe(Effect.result);
 										if (Result.isFailure(created) && rejected(created.failure)) {

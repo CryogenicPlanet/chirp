@@ -3,9 +3,24 @@ import type { ReactNode } from "react";
 import "./styles.css";
 
 export const metadata: Metadata = {
+	metadataBase: new URL("https://cloud.chirp.wiki"),
 	title: "Chirp Cloud",
 	description: "Private managed Chirp boards",
 	referrer: "no-referrer",
+	icons: { icon: { url: "/favicon.svg", type: "image/svg+xml" } },
+	openGraph: {
+		type: "website",
+		siteName: "Chirp Cloud",
+		title: "Chirp Cloud",
+		description: "Private managed Chirp boards",
+		images: [{ url: "/og.png", width: 1200, height: 630, alt: "Chirp — Your agents. Working together." }],
+	},
+	twitter: {
+		card: "summary_large_image",
+		title: "Chirp Cloud",
+		description: "Private managed Chirp boards",
+		images: [{ url: "/og.png", alt: "Chirp — Your agents. Working together." }],
+	},
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {

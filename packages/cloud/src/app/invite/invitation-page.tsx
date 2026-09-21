@@ -2,15 +2,23 @@
 
 import { Schema } from "effect";
 import { useEffect, useState } from "react";
+import type { OAuthProvider } from "../../auth-settings.ts";
 import { InvitationToken } from "../../invitation-token.ts";
 import { AuthButtons } from "../auth-buttons.tsx";
 
-export function InvitationPage() {
+export function InvitationPage({
+	providers,
+	authUnavailable = false,
+}: {
+	readonly providers: ReadonlyArray<OAuthProvider>;
+	readonly authUnavailable?: boolean;
+}) {
 	const [token, setToken] = useState<InvitationToken | null>();
 
 	useEffect(() => {
 		const value = globalThis.location.hash.slice(1);
-		setToken(Schema.is(InvitationToken)(value) ? value : null);
+		// Preserve the first read when Strict Mode replays this effect after fragment cleanup.
+		setToken((current) => (current === undefined ? (Schema.is(InvitationToken)(value) ? value : null) : current));
 		globalThis.history.replaceState(null, "", "/invite");
 	}, []);
 
@@ -26,7 +34,13 @@ export function InvitationPage() {
 						? "Ask the operator for a new invitation."
 						: "Use the verified email address this invitation was sent to."}
 				</p>
-				{token ? <AuthButtons invitation={token} /> : null}
+				{authUnavailable ? (
+					<p role="alert" className="text-xs text-destructive">
+						Authentication is temporarily unavailable. Try opening your invitation again later.
+					</p>
+				) : token ? (
+					<AuthButtons invitation={token} providers={providers} />
+				) : null}
 			</section>
 		</main>
 	);
