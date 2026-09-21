@@ -7,6 +7,7 @@ import { Context, Crypto, Data, DateTime, Effect, Layer, Redacted } from "effect
 import { Pool, types as pgTypes } from "pg";
 import { authSchema } from "./auth-schema.ts";
 import type { CloudAuthSettings } from "./auth-settings.ts";
+import { hasAuthoritativeClientIp } from "./client-ip-boundary.ts";
 import { checkInvitation, InvitationPolicyError } from "./invitation-policy.ts";
 import { invitationPlugin } from "./invitation-plugin.ts";
 
@@ -19,6 +20,13 @@ const hex = (bytes: Uint8Array) => {
 	for (const byte of bytes) encoded += byte.toString(16).padStart(2, "0");
 	return encoded;
 };
+
+const hostOnlyCookieAttributes = {
+	secure: true,
+	httpOnly: true,
+	sameSite: "lax",
+	path: "/",
+} as const;
 
 const make = (settings: CloudAuthSettings) =>
 	Effect.gen(function* () {
@@ -70,7 +78,19 @@ const make = (settings: CloudAuthSettings) =>
 				cookies: {
 					session_token: {
 						name: "__Host-chirp-cloud.session_token",
-						attributes: { secure: true, httpOnly: true, sameSite: "lax", path: "/" },
+						attributes: hostOnlyCookieAttributes,
+					},
+					oauth_state: {
+						name: "__Host-chirp-cloud.oauth_state",
+						attributes: hostOnlyCookieAttributes,
+					},
+					dont_remember: {
+						name: "__Host-chirp-cloud.dont_remember",
+						attributes: hostOnlyCookieAttributes,
+					},
+					"better-auth-passkey": {
+						name: "__Host-chirp-cloud.passkey_challenge",
+						attributes: hostOnlyCookieAttributes,
 					},
 				},
 			},
@@ -137,10 +157,12 @@ const make = (settings: CloudAuthSettings) =>
 		});
 		return {
 			handle: (request: Request) =>
-				Effect.tryPromise({
-					try: () => auth.handler(request),
-					catch: (cause) => new CloudAuthError({ cause }),
-				}),
+				hasAuthoritativeClientIp(request.headers, settings.clientIpHeader)
+					? Effect.tryPromise({
+							try: () => auth.handler(request),
+							catch: (cause) => new CloudAuthError({ cause }),
+						})
+					: Effect.succeed(Response.json({ error: "invalid_client_ip" }, { status: 503 })),
 			getSession: (headers: Headers) =>
 				Effect.tryPromise({
 					try: () => auth.api.getSession({ headers }),

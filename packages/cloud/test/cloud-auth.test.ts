@@ -22,13 +22,38 @@ const settings: CloudAuthSettings = {
 
 const authLayer = cloudAuthLayer(settings).pipe(Layer.provideMerge(cryptoLayer));
 const json = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
-const handle = (request: Request) =>
+const rawHandle = (request: Request) =>
 	Effect.runPromise(CloudAuth.use((auth) => auth.handle(request)).pipe(Effect.provide(authLayer)));
+const handle = (request: Request) => {
+	const headers = new Headers(request.headers);
+	if (!headers.has(settings.clientIpHeader)) headers.set(settings.clientIpHeader, "192.0.2.10");
+	return rawHandle(new Request(request, { headers }));
+};
 const cookies = (response: Response) =>
 	response.headers
 		.getSetCookie()
 		.map((cookie) => cookie.split(";", 1)[0])
 		.join("; ");
+const expectHostOnlyCookie = (response: Response, name: string) => {
+	const cookie = response.headers.getSetCookie().find((value) => value.startsWith(`${name}=`));
+	expect(cookie).toBeDefined();
+	expect(cookie).toContain("Path=/");
+	expect(cookie).toContain("Secure");
+	expect(cookie).toContain("HttpOnly");
+	expect(cookie).not.toContain("Domain=");
+	return cookie;
+};
+const signedCookieValue = async (value: string) => {
+	const key = await crypto.subtle.importKey(
+		"raw",
+		new TextEncoder().encode(Redacted.value(settings.authSecret)),
+		{ name: "HMAC", hash: "SHA-256" },
+		false,
+		["sign"],
+	);
+	const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value));
+	return encodeURIComponent(`${value}.${Buffer.from(signature).toString("base64")}`);
+};
 
 describe.skipIf(!realPostgres)("CloudAuth", () => {
 	afterEach(() => vi.unstubAllGlobals());
@@ -65,6 +90,27 @@ describe.skipIf(!realPostgres)("CloudAuth", () => {
 		expect(untrusted.status).toBe(403);
 	});
 
+	test("rejects requests without one authoritative client address", async () => {
+		await runFresh(migrateCloudDatabase);
+		for (const value of [undefined, "", "192.0.2.1, 198.51.100.2", "not-an-address", "fe80::1%eth0"]) {
+			const response = await rawHandle(
+				new Request(
+					"https://cloud.test/api/auth/get-session",
+					value === undefined ? undefined : { headers: { "fly-client-ip": value } },
+				),
+			);
+			expect(response.status).toBe(503);
+			expect(await response.json()).toEqual({ error: "invalid_client_ip" });
+		}
+		const control = new Pool({ connectionString: databaseUrl });
+		try {
+			const stored = await control.query<{ readonly count: string }>('SELECT count(*) AS count FROM "rateLimit"');
+			expect(stored.rows[0]?.count).toBe("0");
+		} finally {
+			await control.end();
+		}
+	});
+
 	test("starts an explicit invited OAuth sign-up and preserves the response cookies", async () => {
 		await runFresh(migrateCloudDatabase);
 		const invitation = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ";
@@ -82,6 +128,7 @@ describe.skipIf(!realPostgres)("CloudAuth", () => {
 		);
 		expect(response.status).toBe(200);
 		expect(response.headers.getSetCookie()).not.toEqual([]);
+		expectHostOnlyCookie(response, "__Host-chirp-cloud.oauth_state");
 		expect(await response.json()).toMatchObject({ redirect: true });
 		const control = new Pool({ connectionString: databaseUrl });
 		try {
@@ -128,24 +175,22 @@ describe.skipIf(!realPostgres)("CloudAuth", () => {
 			}),
 		);
 		const startBody = Schema.decodeUnknownSync(Schema.Struct({ url: Schema.String }))(await started.json());
+		expectHostOnlyCookie(started, "__Host-chirp-cloud.oauth_state");
 		const state = new URL(startBody.url).searchParams.get("state");
 		expect(state).not.toBeNull();
 		const callback = await handle(
 			new Request(`https://cloud.test/api/auth/callback/github?code=test-code&state=${state}`, {
-				headers: { cookie: cookies(started) },
+				headers: {
+					cookie: `${cookies(started)}; __Host-chirp-cloud.dont_remember=${await signedCookieValue("true")}`,
+				},
 			}),
 		);
 		expect(callback.status).toBe(302);
 		expect(callback.headers.get("location")).toBe("/");
 		const sessionCookies = cookies(callback);
-		const sessionCookie = callback.headers
-			.getSetCookie()
-			.find((cookie) => cookie.startsWith("__Host-chirp-cloud.session_token="));
-		expect(sessionCookie).toBeDefined();
-		expect(sessionCookie).toContain("Path=/");
-		expect(sessionCookie).toContain("Secure");
-		expect(sessionCookie).toContain("HttpOnly");
-		expect(sessionCookie).not.toContain("Domain=");
+		const sessionCookie = expectHostOnlyCookie(callback, "__Host-chirp-cloud.session_token");
+		expect(sessionCookie).not.toContain("Max-Age=");
+		expectHostOnlyCookie(callback, "__Host-chirp-cloud.dont_remember");
 		const session = await handle(
 			new Request("https://cloud.test/api/auth/get-session", { headers: { cookie: sessionCookies } }),
 		);
@@ -162,6 +207,7 @@ describe.skipIf(!realPostgres)("CloudAuth", () => {
 		const registrationOptions = Schema.decodeUnknownSync(Schema.Struct({ challenge: Schema.String }))(
 			await registrationOptionsResponse.json(),
 		);
+		expectHostOnlyCookie(registrationOptionsResponse, "__Host-chirp-cloud.passkey_challenge");
 		const registered = await handle(
 			new Request("https://cloud.test/api/auth/passkey/verify-registration", {
 				method: "POST",
@@ -181,6 +227,7 @@ describe.skipIf(!realPostgres)("CloudAuth", () => {
 		const authenticationOptions = Schema.decodeUnknownSync(Schema.Struct({ challenge: Schema.String }))(
 			await authenticationOptionsResponse.json(),
 		);
+		expectHostOnlyCookie(authenticationOptionsResponse, "__Host-chirp-cloud.passkey_challenge");
 		const assertion = key.assertion(authenticationOptions.challenge, 1, "https://cloud.test", "cloud.test");
 		const authenticate = () =>
 			handle(
@@ -253,6 +300,7 @@ describe.skipIf(!realPostgres)("CloudAuth", () => {
 							"content-type": "application/json",
 							origin: "https://cloud.test",
 							"fly-client-ip": "192.0.2.1",
+							"x-forwarded-for": `203.0.113.${attempt + 1}`,
 						},
 						body: json({ provider: "github", callbackURL: "/" }),
 					}),
@@ -286,7 +334,11 @@ describe.skipIf(!realPostgres)("CloudAuth", () => {
 			await Effect.runPromise(
 				Effect.gen(function* () {
 					const auth = yield* CloudAuth;
-					expect((yield* auth.handle(new Request("https://cloud.test/api/auth/get-session"))).status).toBe(200);
+					const sessionRequest = () =>
+						new Request("https://cloud.test/api/auth/get-session", {
+							headers: { "fly-client-ip": "192.0.2.10" },
+						});
+					expect((yield* auth.handle(sessionRequest())).status).toBe(200);
 					const backend = yield* Effect.promise(() =>
 						control.query<{ readonly pid: number }>(
 							"SELECT pid FROM pg_stat_activity WHERE datname = current_database() AND application_name = 'chirp-cloud-auth' ORDER BY backend_start DESC LIMIT 1",
@@ -299,7 +351,7 @@ describe.skipIf(!realPostgres)("CloudAuth", () => {
 					);
 					expect(terminated.rows[0]?.terminated).toBe(true);
 					yield* Effect.sleep("100 millis");
-					expect((yield* auth.handle(new Request("https://cloud.test/api/auth/get-session"))).status).toBe(200);
+					expect((yield* auth.handle(sessionRequest())).status).toBe(200);
 				}).pipe(Effect.provide(authLayer)),
 			);
 		} finally {

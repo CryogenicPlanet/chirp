@@ -30,7 +30,7 @@ describe.skipIf(!realPostgres)("production cloud runtime", () => {
 				...process.env,
 				NODE_ENV: "production",
 				PORT: String(port),
-				HOST: "127.0.0.1",
+				HOST: "0.0.0.0",
 				CLOUD_DATABASE_URL: databaseUrl,
 				BETTER_AUTH_URL: `http://127.0.0.1:${port}`,
 				BETTER_AUTH_SECRET: "production-test-auth-secret-with-32-characters",
@@ -54,17 +54,35 @@ describe.skipIf(!realPostgres)("production cloud runtime", () => {
 			let ready = false;
 			for (let attempt = 0; attempt < 100 && !ready; attempt += 1) {
 				await new Promise((resolve) => setTimeout(resolve, 50));
-				ready = await fetch(`http://127.0.0.1:${port}/`).then(
+				ready = await fetch(`http://127.0.0.1:${port}/`, {
+					headers: { "fly-client-ip": "192.0.2.10" },
+				}).then(
 					(response) => response.status === 200,
 					() => false,
 				);
 			}
 			expect(ready, output).toBe(true);
-			expect((await fetch(`http://127.0.0.1:${port}/api/auth/get-session`)).status).toBe(200);
+			expect(
+				(
+					await fetch(`http://127.0.0.1:${port}/api/auth/get-session`, {
+						headers: { "fly-client-ip": "192.0.2.10" },
+					})
+				).status,
+			).toBe(200);
+			expect(
+				await fetch(`http://[::1]:${port}/`, {
+					headers: { "fly-client-ip": "203.0.113.1" },
+				}).then(
+					() => true,
+					() => false,
+				),
+			).toBe(false);
 			await lock.query("BEGIN");
 			await lock.query("LOCK TABLE verification IN ACCESS EXCLUSIVE MODE");
 			const pending = Array.from({ length: 24 }, () =>
-				fetch(`http://127.0.0.1:${port}/api/auth/passkey/generate-authenticate-options`),
+				fetch(`http://127.0.0.1:${port}/api/auth/passkey/generate-authenticate-options`, {
+					headers: { "fly-client-ip": "192.0.2.10" },
+				}),
 			);
 			let connections = 0;
 			for (let attempt = 0; attempt < 40 && connections < 8; attempt += 1) {
@@ -79,7 +97,9 @@ describe.skipIf(!realPostgres)("production cloud runtime", () => {
 			expect((await Promise.all(pending)).every((response) => response.status === 200)).toBe(true);
 			await lock.query("BEGIN");
 			await lock.query("LOCK TABLE verification IN ACCESS EXCLUSIVE MODE");
-			const inFlight = fetch(`http://127.0.0.1:${port}/api/auth/passkey/generate-authenticate-options`);
+			const inFlight = fetch(`http://127.0.0.1:${port}/api/auth/passkey/generate-authenticate-options`, {
+				headers: { "fly-client-ip": "192.0.2.10" },
+			});
 			let waiting = 0;
 			for (let attempt = 0; attempt < 40 && waiting === 0; attempt += 1) {
 				await new Promise((resolve) => setTimeout(resolve, 50));

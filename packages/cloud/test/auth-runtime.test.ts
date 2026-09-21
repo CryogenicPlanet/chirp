@@ -25,11 +25,23 @@ describe.skipIf(!realPostgres)("authentication request runtime", () => {
 		const monitor = new Pool({ connectionString: databaseUrl, max: 2 });
 		const lock = await monitor.connect();
 		try {
-			expect((await runtime.handle(new Request("https://cloud.test/api/auth/get-session"))).status).toBe(200);
+			expect(
+				(
+					await runtime.handle(
+						new Request("https://cloud.test/api/auth/get-session", {
+							headers: { "fly-client-ip": "192.0.2.10" },
+						}),
+					)
+				).status,
+			).toBe(200);
 			await lock.query("BEGIN");
 			await lock.query("LOCK TABLE verification IN ACCESS EXCLUSIVE MODE");
 			const pending = Array.from({ length: 24 }, () =>
-				runtime.handle(new Request("https://cloud.test/api/auth/passkey/generate-authenticate-options")),
+				runtime.handle(
+					new Request("https://cloud.test/api/auth/passkey/generate-authenticate-options", {
+						headers: { "fly-client-ip": "192.0.2.10" },
+					}),
+				),
 			);
 			let connections = 0;
 			for (let attempt = 0; attempt < 20 && connections < 8; attempt += 1) {

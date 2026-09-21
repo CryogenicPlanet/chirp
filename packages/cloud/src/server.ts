@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { Config, Effect } from "effect";
 import next from "next";
 import { disposeAuthRequestRuntime } from "./auth-runtime.ts";
+import { isIpv4BindAddress, isProxyTransport } from "./client-ip-boundary.ts";
 
 const { hostname, port } = await Effect.runPromise(
 	Config.all({
@@ -9,10 +10,16 @@ const { hostname, port } = await Effect.runPromise(
 		port: Config.Port("PORT").pipe(Config.withDefault(3000)),
 	}),
 );
+if (!isIpv4BindAddress(hostname)) throw new Error("HOST must be an IPv4 address");
 const app = next({ dev: false, hostname, port });
 await app.prepare();
 const handler = app.getRequestHandler();
 const server = createServer((request, response) => {
+	if (!isProxyTransport(request.socket.remoteAddress)) {
+		response.writeHead(403);
+		response.end("Forbidden");
+		return;
+	}
 	void handler(request, response).catch(() => {
 		if (!response.headersSent) response.writeHead(500);
 		response.end("Internal Server Error");
