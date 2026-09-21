@@ -17,7 +17,6 @@
 - Keep direct dependencies exact; use Bun workspaces, never Turbo.
 - Use Effect v4 and its platform services for runtime I/O. Wire layers in main.ts or server.ts.
 - Use strict, erasable TypeScript. No any, unchecked casts, ts-ignore, namespace, enum, or parameter properties. Runtime dynamic imports are allowed only in `packages/server/src/kernel/ext.ts` and `packages/server/src/kernel/migrations.ts`; ordinary dependencies use static imports.
-- Keep one concept per file, approximately 400 lines maximum. No generic utils/helpers/lib directories.
 - Keep tests in packages/<name>/test/ mirroring src/. No barrel exports except package entry points.
 - Workspace dependency direction is ui launcher -> server -> boot. Boot never imports server. Browser source never imports server or boot.
 - Server test fixtures may import boot source/test internals to exercise the real cross-store recovery boundary. This exception applies only under packages/server/test/fixtures/; production import rules stay strict.
