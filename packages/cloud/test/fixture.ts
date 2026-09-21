@@ -7,6 +7,7 @@ import { Crypto, Effect, Layer, Redacted } from "effect";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
 import { type Boards, boardsLayer } from "../src/boards.ts";
 import { Database } from "../src/database.ts";
+import { type Invitations, invitationsLayer } from "../src/invitations.ts";
 import { type Operations, operationsLayer } from "../src/operations.ts";
 
 const databaseUrl = process.env.CLOUD_TEST_DATABASE_URL;
@@ -22,7 +23,7 @@ const sqlLayer = databaseUrl
 const databaseLayer = databaseUrl
 	? Layer.effect(Database, PgDrizzle.makeWithDefaults()).pipe(Layer.provideMerge(sqlLayer))
 	: Layer.effect(Database, PgliteDrizzle.makeWithDefaults()).pipe(Layer.provideMerge(sqlLayer));
-const cryptoLayer = Layer.succeed(
+export const cryptoLayer = Layer.succeed(
 	Crypto.Crypto,
 	Crypto.make({
 		randomBytes: (size) => globalThis.crypto.getRandomValues(new Uint8Array(size)),
@@ -35,18 +36,21 @@ const cryptoLayer = Layer.succeed(
 	}),
 );
 
-const testLayer = Layer.mergeAll(boardsLayer, operationsLayer).pipe(
+const testLayer = Layer.mergeAll(boardsLayer, invitationsLayer, operationsLayer).pipe(
 	Layer.provideMerge(databaseLayer),
 	Layer.provideMerge(cryptoLayer),
 );
 
 export const realPostgres = databaseUrl !== undefined;
 
-export const runFresh = <A, E>(effect: Effect.Effect<A, E, Boards | Database | Operations | SqlClient.SqlClient>) =>
+export const runFresh = <A, E>(
+	effect: Effect.Effect<A, E, Boards | Database | Invitations | Operations | SqlClient.SqlClient>,
+) =>
 	Effect.runPromise(
 		Effect.gen(function* () {
 			const database = yield* Database;
-			yield* database.execute(sql`DROP TABLE IF EXISTS board_operations, boards, cloud_migrations CASCADE`);
+			yield* database.execute(sql`DROP TABLE IF EXISTS passkey, "rateLimit", account, session, verification,
+				"user", cloud_invitations, board_operations, boards, cloud_migrations CASCADE`);
 			return yield* effect;
 		}).pipe(Effect.provide(testLayer)),
 	);
