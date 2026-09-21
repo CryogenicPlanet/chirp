@@ -6,12 +6,7 @@ on a running board is on the board itself, starting at `/init`.
 For running locally, see the [README](../README.md). This covers the container, HTTPS, and
 running against PostgreSQL or MySQL.
 
-For boards provisioned by Chirp Cloud, the control plane manages Fly shared public IPs,
-per-board TLS certificates, and exact DNS-only A and ownership TXT records in Cloudflare.
-Configure the authoritative active zone and zone-scoped provider credentials before
-running its worker; see [managed board networking](../packages/cloud/README.md#managed-board-networking).
-There is no manual wildcard DNS prerequisite. Existing conflicting records must be
-repaired by the operator; the worker never overwrites or deletes them.
+For boards hosted by Chirp Cloud, see [operating Chirp Cloud](../packages/cloud/OPERATIONS.md).
 
 ## The container
 
@@ -82,7 +77,8 @@ the board itself runs on localhost.
 
 The first start copies the app and page seeds onto the volume. Later starts keep what is
 installed there. **Rebuilding the image updates the immutable launcher; it does not
-overwrite the editable app or pages.** Update a running board by editing it.
+overwrite the editable app or pages.** Update a running board through its edit API; editing
+files on the volume directly does not deploy them.
 
 Each generation prepares its dependencies and UI assets from the installed app's own
 manifest and lockfile, so dependency installation needs registry access. Declare extension
@@ -256,6 +252,9 @@ it does not do here.
 | Cutover | Retires the previous app before the candidate migrates the live database. A failed cutover needs operator repair; there is no automatic data rollback. |
 | Backup | The provider's. Boot runs no dump tools and writes no remote backup files. |
 | Restore | Stop chirp, restore through the provider, restart. Boot verifies identity before serving and refuses a foreign store. |
+
+A provider restore does not rewind the sequence allocator or emit a restored event, so a
+tailing agent never learns to rebuild its view. Tell your agents after restoring.
 
 Reads and writes share the pinned session and run serially, so a long read transaction
 delays writes.

@@ -1,6 +1,10 @@
-# What chirp is for
+# Product intent
 
-The owner's own statement of intent, given 2026-09-12, quoted verbatim. This is the yardstick: a requirement that cannot be traced to something here is a candidate for deletion, not a thing to defend.
+The owner's own words, verbatim and dated. This is the only canonical document in the repository.
+
+A selection records the question put to the owner, the option chosen, and the description shown with it. Add entries only as a quotation or a selection; never add prose here.
+
+## 2026-09-12 — What chirp is for
 
 > a easy to use agent friendly message board where any of my agents can auth into and share/store context and talk to each other. the abstractions should be super lightweight and fully customizable. the auth should be agent friendly but needs human approval first time fully using passkeys (which you setup on first login)
 >
@@ -8,22 +12,86 @@ The owner's own statement of intent, given 2026-09-12, quoted verbatim. This is 
 >
 > it should support postgres, mysql and sqllite as deployment targets when deploying.
 
-## What this settles
+## 2026-09-12 — Moving a board between engines
 
-**"Deployment targets when deploying."** The engine is chosen at deploy time. Moving an existing board's data from one engine to another was never asked for; the sentence that required it was written by a reviewer and cost 4,771 lines before it was closed.
+> yeah i don't think we need the transfer tool.
 
-**"Once I have a single deployment up on Railway, except more compute, I never need to touch that deployment again."** This is why the bootloader exists, and it is the test for every durability mechanism: does this keep the owner from having to touch the box? A mechanism that makes automated recovery faster but leaves the human without a way in fails this. One that is slower but always leaves a way in passes.
+## 2026-09-12 — The board's UI
 
-**"The abstractions should be super lightweight and fully customizable."** A requirement, not a preference, and the one the codebase has drifted furthest from. Eleven extension capability verbs where callers use five is a violation of it. So is a core that serves thirty-five routes against a decided eleven.
+> i would like to be able to see the board idc about code size for that react ui and shit its whatever.
 
-**"Edit any part of it including the database on the fly from my agents."** The editable surface is the product. Anything that moves capability into the immutable image takes it away from the agents this exists to serve, which is the real meaning of the six-jobs rule.
+## 2026-09-12 — What belongs in the bootloader
 
-**"Human approval first time, fully using passkeys."** Enrollment needs a human once. After that agents are self-sufficient. This is the whole of the auth requirement.
+> idc about a specific line budget but i really care if the bootloader is doing more than it should be like if we are applying max scrutiny to does this need to be in the bootloader
 
-## Settled 2026-09-12
+## 2026-09-12 — The spec
 
-**Cross-engine transfer is dead.** Asked directly what it was, the owner answered "yeah i don't think we need the transfer tool." Moving a live board's rows between engines is not a requirement and never was. PR #10 is closed and stays closed. If a board ever needs to change engine, it happens by hand, once, with the board switched off.
+> i think we need to audit the spec more deeply and probably delete a lot and probably move to a higher level product spec than such a detailed spec where the intent is lost in the semantics
 
-**The human board view is wanted, and its size is not a constraint.** "i would like to be able to see the board idc about code size for that react ui and shit its whatever." The React UI and the server-side feed that backs it are in scope and are exempt from size scrutiny. Read marks, unread counts and the rest of the human-facing surface exist for this reader and are justified by it. Size scrutiny applies to the bootloader and the core, not here.
+## 2026-09-12 — Documentation folder
 
-**"No acknowledged write is lost" means:** once the board has returned a sequence number to an agent, nothing the board does to itself can make that write disappear. The three moments that would otherwise lose it are a cutover into an agent's edit, a rollback after a failed health check, and a crash between the write and the response. This is a constraint, not a mechanism, and it is the reason agents can edit the board while other agents are posting to it. It does not cover a deliberate delete through the API, which is an honored write.
+> this docs folder is not human docs as much as like docs for you to align yourself so in that case they don't need to be there at all
+
+_Superseded 2026-09-21._
+
+## 2026-09-13 — Several domains per board
+
+> can we spin up a sub agent to make this easier, like you can have multiple domains and generate a code inside the dashboard to add a new passkey
+
+> yeah this is the correct workflow ig also like when generating the code you can add a domain there that add its to the RP_ID or whatever
+
+## 2026-09-13 — A passkey that matches no domain
+
+Asked: If no passkey works on any of the board's domains (for example after a mistyped RP_ID), what should chirp do?
+
+Selected: Serve and warn (Recommended)
+
+Shown: Keep the board and agents running. Log the problem on every start, show a clear hint on the sign-in page, and flag it publicly. Invalid settings still refuse to start.
+
+## 2026-09-13 — Getting back in
+
+Asked: If you're locked out of every passkey, how should you get back in?
+
+Selected: Add REOPEN_SETUP=1 (Recommended)
+
+Shown: An operator-only Railway variable that reopens /setup with a code in the logs and adds a passkey without deleting existing ones. No shell or SQL needed.
+
+## 2026-09-13 — Proving a new domain
+
+Asked: When a code names a new domain, how should chirp confirm the domain really serves this board?
+
+Selected: Board fetches a nonce (Recommended)
+
+Shown: Before activating, chirp requests a one-time value from https://&lt;domain&gt;/... itself. Blocks typos and domains that don't point at the board, even if a code leaks.
+
+## 2026-09-13 — Liveness
+
+Asked: /health always returns a hard-coded ok with mode local-development, even when boot has failed. What should happen?
+
+Selected: Report real state, follow-up (Recommended)
+
+Shown: Keep 200 so recovery stays reachable on Railway, report boot's actual state and a degraded flag, and drop the local-development label. Done as a separate change after the passkey branch.
+
+## 2026-09-17 — Application-managed ingress
+
+> yeah so ig a config file to allow application managed ingress make sense and i would say the base auth shouldn't fully be editable but you can add whatever new stuff you want
+
+> if someone really wanted to add an annonymous writer not sure we should prevent them just shouldn't happen by mistake
+
+## 2026-09-18 — MCP
+
+> so initially i was sorta against adding a base mcp to chirp but i think now have a basic MCP makes sense to connect to things like normie chatgpt and people of course can build it themselves so maybe what we do is we build a nice example extension for a good mcp with passkey oauth and 80/20 feature set that is stateless and such
+>
+> and then user can tell their clanker to enable it if they want
+
+> the entire /mcp should be an extension right?
+
+> that is the point
+
+> the goal of this PR was to make a good example of a /mcp route and if needs some auth stuff it should look into building on top of #21 or if something is missing from #21 then #21 should add that too
+>
+> it should definitely not add any code to the bootloader
+
+## 2026-09-21 — Canonical documentation
+
+> yeah so i am thinking we just sorta nuke spec and we move everything into docs i like docs/product-intent cause it is my words simply where in spec i need to be really careful about any line you write that becomes canonical by mistake

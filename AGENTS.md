@@ -9,13 +9,14 @@
 - Test server transactions, outbox delivery, cursors, and authorization with focused behavior tests. Keep UI testing minimal: a few critical user-flow smoke checks and visual inspection; no blanket component snapshots or tests of styling, trivial glue, or framework behavior.
 - Use subagents for bounded build, discovery, and review work. Parallelize independent work with explicit file ownership; use isolated worktrees for concurrent writers. In one checkout, use one writer at a time and parallel read-only scouts/reviewers.
 - The lead agent owns integration and acceptance. Keep shared interfaces small, review meaningful changes with a fresh agent, and remove unnecessary complexity before calling a slice done.
-- Read the relevant product intent and decisions before changing behaviour. Keep product intent (the experience and boundaries), decisions (choices, reasons, provenance, and open questions), and research (evidence and alternatives) separate. SPEC.md records existing board guarantees and constraints; it is not the mandatory home for every product decision or research finding. Its section 8 locates runtime contracts. Read each file in full before editing it, and the package docs/README.md before package work.
+- `docs/product-intent.md` is the only canonical document: the owner's words, verbatim. Add to it only a quotation or a recorded selection, never prose. Everything else is explanation, not requirement. Read each file in full before editing it, and the package docs/README.md before package work.
+- Mechanism is documented where it lives: routes at `GET /api`, schemas in the migration ladders, headers in `packages/protocol/src/headers.ts`, and why boot and the server are shaped as they are in `packages/{boot,server}/docs/constraints.md`.
 - Distinguish implemented behavior from planned documentation. Check the current code before claiming a feature is available.
-- Keep design documents concise and purpose-specific. The product-intent, decisions, and research split under docs/cloud/ is intentional; do not collapse it into a canonical spec or delete it to satisfy a documentation-location rule. Record decision provenance honestly; missing quotations are a provenance gap, not a reason to erase the record. Routine contributor instructions belong here or beside the code, operator guidance in README.md or docs/deploy.md, and running-board guidance in packages/server/pages/.
+- Keep design documents concise and purpose-specific. The intent, decisions, and research split under docs/cloud/ is intentional; do not collapse or delete it to satisfy a documentation-location rule. Record decision provenance honestly; missing quotations are a provenance gap, not a reason to erase the record. Routine contributor instructions belong here or beside the code, operator guidance in README.md or docs/deploy.md, and running-board guidance in packages/server/pages/.
 - Run `bun run check` after code changes. Tests are separate; run relevant tests when adding behavior.
 - Keep direct dependencies exact; use Bun workspaces, never Turbo.
 - Use Effect v4 and its platform services for runtime I/O. Wire layers in main.ts or server.ts.
-- Use strict, erasable TypeScript. No any, unchecked casts, ts-ignore, namespace, enum, or parameter properties. Runtime dynamic imports are allowed in the extension and editable migration loaders specified in SPEC.md; ordinary dependencies should use static imports.
+- Use strict, erasable TypeScript. No any, unchecked casts, ts-ignore, namespace, enum, or parameter properties. Runtime dynamic imports are allowed only in `packages/server/src/kernel/ext.ts` and `packages/server/src/kernel/migrations.ts`; ordinary dependencies use static imports.
 - Keep one concept per file, approximately 400 lines maximum. No generic utils/helpers/lib directories.
 - Keep tests in packages/<name>/test/ mirroring src/. No barrel exports except package entry points.
 - Workspace dependency direction is ui launcher -> server -> boot. Boot never imports server. Browser source never imports server or boot.
@@ -24,5 +25,5 @@
 - Pages are content in packages/server/pages/, not a package. Add a protocol package only when shared schemas are needed.
 - Services use Context.Service with a layer export in the same file. Every HttpApi endpoint needs a description.
 - repos/ is read-only reference, never imported. Upstream source snapshots and revisions are documented in repos/README.md.
-- Flag disagreements with the spec rather than silently changing behavior.
+- Flag disagreements with product intent or a documented constraint rather than silently changing behavior.
 - Multiple agents can share this checkout. Stage explicit paths; never reset, clean, stash, or discard unrelated changes. Commit only when asked.
