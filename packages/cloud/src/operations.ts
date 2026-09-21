@@ -313,6 +313,7 @@ const make = Effect.gen(function* () {
 			readonly availableAt: Date;
 			readonly errorCode: string;
 			readonly errorMessage: string;
+			readonly countFailure?: boolean;
 		}) =>
 			withLease(
 				input,
@@ -327,6 +328,7 @@ const make = Effect.gen(function* () {
 							lease_expires_at: null,
 							last_error_code: input.errorCode,
 							last_error_message: input.errorMessage,
+							...(input.countFailure ? { failure_count: sql`${boardOperations.failure_count} + 1` } : {}),
 							updated_at: now,
 						})
 						.where(

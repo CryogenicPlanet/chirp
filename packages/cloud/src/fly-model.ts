@@ -24,29 +24,48 @@ export const FlyAppCreated = Schema.Struct({ id: Schema.String, created_at: Sche
 export const FlyIpAssignment = Schema.Struct({
 	ip: Schema.String,
 	shared: Schema.Boolean,
-	egress: Schema.optionalKey(Schema.Boolean),
+	egress: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
 });
 export type FlyIpAssignment = typeof FlyIpAssignment.Type;
 export const FlyIpAssignments = Schema.Struct({ ips: Schema.Array(FlyIpAssignment) });
 export const FlyCertificate = Schema.Struct({
 	hostname: Schema.String,
-	configured: Schema.Boolean,
-	acme_requested: Schema.Boolean,
-	status: Schema.String,
-	certificates: Schema.Array(Schema.Struct({ source: Schema.String, status: Schema.String })),
-	validation: Schema.Struct({ ownership_txt_configured: Schema.Boolean }),
-	dns_requirements: Schema.Struct({
-		a: Schema.Array(Schema.String),
-		ownership: Schema.Struct({ name: Schema.String, app_value: Schema.String }),
-	}),
+	configured: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
+	acme_requested: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
+	status: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	certificates: Schema.optionalKey(
+		Schema.NullOr(Schema.Array(Schema.Struct({ source: Schema.String, status: Schema.String }))),
+	),
+	validation: Schema.optionalKey(
+		Schema.NullOr(Schema.Struct({ ownership_txt_configured: Schema.optionalKey(Schema.NullOr(Schema.Boolean)) })),
+	),
+	dns_requirements: Schema.optionalKey(
+		Schema.NullOr(
+			Schema.Struct({
+				a: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.String))),
+				ownership: Schema.optionalKey(
+					Schema.NullOr(
+						Schema.Struct({
+							name: Schema.optionalKey(Schema.NullOr(Schema.String)),
+							app_value: Schema.optionalKey(Schema.NullOr(Schema.String)),
+						}),
+					),
+				),
+			}),
+		),
+	),
 });
 export type FlyCertificate = typeof FlyCertificate.Type;
 export const FlyCertificateCheck = Schema.Struct({
 	...FlyCertificate.fields,
-	dns_records: Schema.Struct({
-		a: Schema.NullOr(Schema.Array(Schema.String)),
-		aaaa: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.String))),
-	}),
+	dns_records: Schema.optionalKey(
+		Schema.NullOr(
+			Schema.Struct({
+				a: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.String))),
+				aaaa: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.String))),
+			}),
+		),
+	),
 });
 
 export const FlyVolume = Schema.Struct({

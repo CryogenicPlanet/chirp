@@ -9,6 +9,7 @@ import * as cloudAuth from "./migrations/0002_cloud_auth.ts";
 import * as flyProvisioning from "./migrations/0003_fly_provisioning.ts";
 import * as provisioningRecovery from "./migrations/0004_provisioning_recovery.ts";
 import * as providerMutationMarkers from "./migrations/0005_provider_mutation_markers.ts";
+import * as provisioningRetryBudgets from "./migrations/0006_provisioning_retry_budgets.ts";
 import { cloudMigrations } from "./schema.ts";
 
 export { CloudMigrationError } from "./migration-ledger.ts";
@@ -23,6 +24,7 @@ const migrations: ReadonlyArray<Migration> = [
 	flyProvisioning,
 	provisioningRecovery,
 	providerMutationMarkers,
+	provisioningRetryBudgets,
 ];
 const receipts = Schema.decodeUnknownEffect(
 	Schema.Array(

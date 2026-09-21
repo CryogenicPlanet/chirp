@@ -50,6 +50,7 @@ export const retryBlockedDeployment = (input: {
 						id: boardOperations.id,
 						state: boardOperations.state,
 						attempt: boardOperations.attempt,
+						failure_count: boardOperations.failure_count,
 						ambiguous_mutations: boardOperations.ambiguous_mutations,
 					})
 					.from(boardOperations)
@@ -64,6 +65,7 @@ export const retryBlockedDeployment = (input: {
 					if (
 						existing.state === "queued" &&
 						existing.attempt === 0 &&
+						existing.failure_count === 0 &&
 						(existing.ambiguous_mutations.length !== remainingMutations.length ||
 							existing.ambiguous_mutations.some((mutation) => !remainingMutations.includes(mutation)))
 					)

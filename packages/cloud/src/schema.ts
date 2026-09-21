@@ -70,6 +70,7 @@ export const boardOperations = pgTable(
 		request_hash: cCollatedChar({ length: 64 }).notNull(),
 		available_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
 		attempt: integer().notNull().default(0),
+		failure_count: integer().notNull().default(0),
 		lease_token: uuid(),
 		lease_owner: text(),
 		lease_expires_at: timestamp({ withTimezone: true }),
@@ -90,6 +91,7 @@ export const boardOperations = pgTable(
 		check("board_operations_state_check", sql`${table.state} IN ('queued', 'running', 'succeeded', 'failed')`),
 		check("board_operations_request_hash_hex", sql`${table.request_hash} ~ '^[0-9a-f]{64}$'`),
 		check("board_operations_attempt_nonnegative", sql`${table.attempt} >= 0`),
+		check("board_operations_failure_count_nonnegative", sql`${table.failure_count} >= 0`),
 		check(
 			"board_operations_ambiguous_mutations_known",
 			sql`array_position(${table.ambiguous_mutations}, NULL) IS NULL AND ${table.ambiguous_mutations} <@ ARRAY[

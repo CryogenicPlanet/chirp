@@ -117,6 +117,7 @@ describe("Operations", () => {
 				});
 				expect(requeued.checkpoint).toBe("app_created");
 				expect(requeued.state).toBe("queued");
+				expect(requeued.failure_count).toBe(0);
 			}),
 		);
 	});
@@ -148,9 +149,11 @@ describe("Operations", () => {
 					availableAt: yield* DateTime.nowAsDate,
 					errorCode: "provider_unavailable",
 					errorMessage: "Observe before retry",
+					countFailure: true,
 				});
 				const recovered = Option.getOrThrow(yield* operations.claim("worker-2", 30_000));
 				expect(new Set(recovered.ambiguous_mutations)).toEqual(new Set(["edge_a_record", "machine_start"]));
+				expect(recovered.failure_count).toBe(1);
 				if (!recovered.lease_token) return yield* Effect.die("Claim returned no lease token");
 				yield* operations.clearAmbiguousMutation({
 					id: recovered.id,
@@ -165,6 +168,38 @@ describe("Operations", () => {
 						.from(boardOperations)
 						.where(eq(boardOperations.id, first.id)))[0]?.markers,
 				).toEqual(["edge_a_record"]);
+			}),
+		);
+	});
+
+	test("refuses success while a provider mutation is unresolved", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				yield* (yield* Boards).request(boardRequest);
+				const operations = yield* Operations;
+				const claimed = Option.getOrThrow(yield* operations.claim("worker-1", 30_000));
+				if (!claimed.lease_token) return yield* Effect.die("Claim returned no lease token");
+				yield* operations.markAmbiguousMutation({
+					id: claimed.id,
+					leaseToken: claimed.lease_token,
+					workerId: "worker-1",
+					mutation: "edge_certificate",
+				});
+				expect(
+					Exit.isFailure(yield* Effect.exit(operations.succeed(claimed.id, claimed.lease_token, "worker-1"))),
+				).toBe(true);
+				const database = yield* Database;
+				expect((yield* database.select({ state: boardOperations.state }).from(boardOperations))[0]?.state).toBe(
+					"running",
+				);
+				yield* operations.clearAmbiguousMutation({
+					id: claimed.id,
+					leaseToken: claimed.lease_token,
+					workerId: "worker-1",
+					mutation: "edge_certificate",
+				});
+				yield* operations.succeed(claimed.id, claimed.lease_token, "worker-1");
 			}),
 		);
 	});

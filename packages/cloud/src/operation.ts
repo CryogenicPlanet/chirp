@@ -28,6 +28,7 @@ export const Operation = Schema.Struct({
 	request_hash: Schema.String,
 	available_at: Schema.DateFromString,
 	attempt: Schema.Int,
+	failure_count: Schema.Int,
 	lease_token: Schema.NullOr(Schema.String),
 	lease_owner: Schema.NullOr(Schema.String),
 	lease_expires_at: Schema.NullOr(Schema.DateFromString),

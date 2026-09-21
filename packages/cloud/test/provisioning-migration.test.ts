@@ -29,6 +29,7 @@ const legacy = Effect.gen(function* () {
 		});
 	}
 	yield* sql`ALTER TABLE board_operations ADD COLUMN ambiguous_mutations TEXT[] NOT NULL DEFAULT '{}'::text[]`;
+	yield* sql`ALTER TABLE board_operations ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0`;
 	return sql;
 });
 
@@ -54,6 +55,7 @@ describe("provisioning recovery migration", () => {
 				const before = yield* sql`SELECT board_id, app_id, volume_id, last_snapshot_id, last_snapshot_digest,
 				last_snapshot_created_at::text, last_snapshot_retention_days FROM board_deployments ORDER BY board_id`;
 				yield* sql`ALTER TABLE board_operations DROP COLUMN ambiguous_mutations`;
+				yield* sql`ALTER TABLE board_operations DROP COLUMN failure_count`;
 				yield* migrateCloudDatabase;
 				yield* migrateCloudDatabase;
 				expect(
@@ -65,10 +67,22 @@ describe("provisioning recovery migration", () => {
 					{ state: "volume_created" },
 				]);
 				expect(
-					yield* sql`SELECT checkpoint, attempt, state, ambiguous_mutations FROM board_operations ORDER BY state`,
+					yield* sql`SELECT checkpoint, attempt, failure_count, state, ambiguous_mutations FROM board_operations ORDER BY state`,
 				).toEqual([
-					{ checkpoint: "volume_created", attempt: 3, state: "failed", ambiguous_mutations: ["machine_create"] },
-					{ checkpoint: "volume_created", attempt: 3, state: "queued", ambiguous_mutations: ["machine_create"] },
+					{
+						checkpoint: "volume_created",
+						attempt: 3,
+						failure_count: 0,
+						state: "failed",
+						ambiguous_mutations: ["machine_create"],
+					},
+					{
+						checkpoint: "volume_created",
+						attempt: 3,
+						failure_count: 0,
+						state: "queued",
+						ambiguous_mutations: ["machine_create"],
+					},
 				]);
 				expect(
 					yield* sql`SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema()
@@ -95,6 +109,7 @@ describe("provisioning recovery migration", () => {
 					lease_expires_at = clock_timestamp() - interval '1 second'
 					WHERE board_id = ${board.id}`;
 				yield* sql`ALTER TABLE board_operations DROP COLUMN ambiguous_mutations`;
+				yield* sql`ALTER TABLE board_operations DROP COLUMN failure_count`;
 				yield* migrateCloudDatabase;
 				expect(yield* sql`SELECT ambiguous_mutations FROM board_operations WHERE board_id = ${board.id}`).toEqual([
 					{
@@ -125,6 +140,7 @@ describe("provisioning recovery migration", () => {
 					'operator:deployment-retry', id::text, request_hash
 				FROM board_operations WHERE board_id = ${board.id}`;
 				yield* sql`ALTER TABLE board_operations DROP COLUMN ambiguous_mutations`;
+				yield* sql`ALTER TABLE board_operations DROP COLUMN failure_count`;
 				yield* migrateCloudDatabase;
 				expect(
 					yield* sql`SELECT requested_by, ambiguous_mutations FROM board_operations
@@ -144,6 +160,7 @@ describe("provisioning recovery migration", () => {
 				yield* (yield* Boards).request(request);
 				yield* sql`UPDATE board_operations SET checkpoint = 'runtime_secrets_written'`;
 				yield* sql`ALTER TABLE board_operations DROP COLUMN ambiguous_mutations`;
+				yield* sql`ALTER TABLE board_operations DROP COLUMN failure_count`;
 				yield* sql`ALTER TABLE board_deployments RENAME CONSTRAINT board_deployments_state_check TO unexpected_state_check`;
 				expect(Exit.isFailure(yield* Effect.exit(migrateCloudDatabase))).toBe(true);
 				expect(yield* sql`SELECT checkpoint FROM board_operations`).toEqual([

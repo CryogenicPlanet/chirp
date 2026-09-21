@@ -94,6 +94,25 @@ describe("Cloudflare DNS API contract", () => {
 		},
 	);
 
+	test("distinguishes interrupted response bodies from unsupported decoded shapes", async () => {
+		const interrupted = await run(Effect.result(CloudflareDns.use((dns) => dns.getZone)), (request) => {
+			const stream = new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.error(new Error("connection reset"));
+				},
+			});
+			return Effect.succeed(
+				HttpClientResponse.fromWeb(request, new Response(stream, { headers: { "content-type": "application/json" } })),
+			);
+		});
+		expect(interrupted).toMatchObject({ failure: { reason: "transport", status: 200 } });
+
+		const unsupported = await run(Effect.result(CloudflareDns.use((dns) => dns.getZone)), (request) =>
+			Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ success: true, result: { name: 42 } }))),
+		);
+		expect(unsupported).toMatchObject({ failure: { reason: "decode", status: 200 } });
+	});
+
 	test.each([
 		{ success: false, errors: [{ message: "secret-error" }], result: [] },
 		{ success: true, result: [] },

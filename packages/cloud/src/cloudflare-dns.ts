@@ -58,7 +58,12 @@ const make = (settings: CloudflareSettings) =>
 							response.status >= 200 && response.status < 300
 								? HttpClientResponse.schemaBodyJson(schema)(response).pipe(
 										Effect.mapError(
-											() => new CloudflareApiError({ operation, reason: "decode", status: response.status }),
+											(error) =>
+												new CloudflareApiError({
+													operation,
+													reason: error._tag === "SchemaError" ? "decode" : "transport",
+													status: response.status,
+												}),
 										),
 									)
 								: Effect.fail(new CloudflareApiError({ operation, reason: "status", status: response.status })),

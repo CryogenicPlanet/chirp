@@ -45,6 +45,9 @@ export const machineConfig = (deployment: Deployment): FlyMachineConfig => ({
 const exactKeys = (value: Readonly<Record<string, unknown>>, keys: ReadonlyArray<string>) =>
 	Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 
+const onlyKeys = (value: Readonly<Record<string, unknown>>, keys: ReadonlyArray<string>) =>
+	Object.keys(value).every((key) => keys.includes(key));
+
 const sameRecord = (actual: Readonly<Record<string, string>>, expected: Readonly<Record<string, string>>) =>
 	exactKeys(actual, Object.keys(expected)) && Object.entries(expected).every(([key, value]) => actual[key] === value);
 
@@ -63,7 +66,7 @@ export const machineMatches = (machine: FlyMachine, deployment: Deployment) => {
 			const expectedPort = expectedService.ports.find((candidate) => candidate.port === port.port);
 			return (
 				expectedPort !== undefined &&
-				exactKeys(port, ["port", "handlers", ...(port.force_https == null ? [] : ["force_https"])]) &&
+				onlyKeys(port, ["port", "handlers", "force_https"]) &&
 				(port.force_https ?? false) === (expectedPort.force_https ?? false) &&
 				port.handlers.length === expectedPort.handlers.length &&
 				new Set(port.handlers).size === port.handlers.length &&
@@ -91,6 +94,10 @@ export const machineMatches = (machine: FlyMachine, deployment: Deployment) => {
 			);
 		});
 	const normalizedAutostop = service?.autostop === true || service?.autostop === "stop" ? "stop" : service?.autostop;
+	const platformVersion = config.metadata.fly_platform_version;
+	const mountName = mount?.name;
+	const mountSize = mount?.size_gb;
+	const mountEncrypted = mount?.encrypted;
 	return (
 		machine.name === deployment.machine_name &&
 		machine.region === deployment.region &&
@@ -111,7 +118,9 @@ export const machineMatches = (machine: FlyMachine, deployment: Deployment) => {
 		) &&
 		config.image === expected.image &&
 		sameRecord(config.env, expected.env) &&
-		sameRecord(config.metadata, expected.metadata) &&
+		Object.entries(expected.metadata).every(([key, value]) => config.metadata[key] === value) &&
+		onlyKeys(config.metadata, [...Object.keys(expected.metadata), "fly_platform_version"]) &&
+		(platformVersion === undefined || typeof platformVersion === "string") &&
 		(config.auto_destroy ?? false) === false &&
 		(config.init == null || Object.keys(config.init).length === 0) &&
 		config.restart != null &&
@@ -122,7 +131,10 @@ export const machineMatches = (machine: FlyMachine, deployment: Deployment) => {
 		config.mounts.length === 1 &&
 		mount?.volume === deployment.volume_id &&
 		mount.path === "/data" &&
-		exactKeys(mount, ["volume", "path"]) &&
+		onlyKeys(mount, ["volume", "path", "name", "size_gb", "encrypted"]) &&
+		(mountName === undefined || mountName === deployment.volume_name) &&
+		(mountSize === undefined || (typeof mountSize === "number" && mountSize >= deployment.volume_size_gb)) &&
+		(mountEncrypted === undefined || mountEncrypted === true) &&
 		config.services.length === 1 &&
 		service !== undefined &&
 		exactKeys(service, [

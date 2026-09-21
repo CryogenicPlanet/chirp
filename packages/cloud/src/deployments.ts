@@ -274,7 +274,13 @@ const make = Effect.gen(function* () {
 					return updated.value;
 				}),
 			),
-		block: (input: DeploymentLease & { readonly errorCode: string; readonly errorMessage: string }) =>
+		block: (
+			input: DeploymentLease & {
+				readonly errorCode: string;
+				readonly errorMessage: string;
+				readonly countFailure?: boolean;
+			},
+		) =>
 			db.transaction(() =>
 				Effect.gen(function* () {
 					const locked = yield* lease(input, "provision");
@@ -299,6 +305,7 @@ const make = Effect.gen(function* () {
 							lease_expires_at: null,
 							last_error_code: input.errorCode,
 							last_error_message: input.errorMessage,
+							...(input.countFailure ? { failure_count: sql`${boardOperations.failure_count} + 1` } : {}),
 							updated_at: now,
 							finished_at: now,
 						})

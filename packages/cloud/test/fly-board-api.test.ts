@@ -62,6 +62,13 @@ const observedMachine = {
 	...machine,
 	config: {
 		...config,
+		metadata: { ...config.metadata, fly_platform_version: "v2" },
+		mounts: config.mounts.map((mount) => ({
+			...mount,
+			name: "chirp_data_board",
+			size_gb: 1,
+			encrypted: true,
+		})),
 		init: {},
 		dns: {},
 		services: config.services.map((service) => ({
@@ -69,7 +76,11 @@ const observedMachine = {
 			autostop: true,
 			min_machines_running: null,
 			force_instance_key: null,
-			ports: service.ports.map((port) => ({ ...port, handlers: [...port.handlers].reverse() })),
+			ports: service.ports.map((port) => ({
+				...port,
+				handlers: [...port.handlers].reverse(),
+				force_https: null,
+			})),
 		})),
 	},
 };
@@ -120,6 +131,96 @@ describe("FlyBoardApi", () => {
 				);
 			},
 		);
+	});
+
+	test("distinguishes interrupted response bodies from unsupported decoded shapes", async () => {
+		const interrupted = await run(
+			Effect.result(FlyBoardApi.use((api) => api.listIpAssignments("chirp-board"))),
+			(request) => {
+				const stream = new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.error(new Error("connection reset"));
+					},
+				});
+				return Effect.succeed(
+					HttpClientResponse.fromWeb(
+						request,
+						new Response(stream, { headers: { "content-type": "application/json" } }),
+					),
+				);
+			},
+		);
+		expect(interrupted).toMatchObject({ failure: { reason: "transport", status: 200 } });
+
+		const unsupported = await run(
+			Effect.result(FlyBoardApi.use((api) => api.listIpAssignments("chirp-board"))),
+			(request) => Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ ips: [{ private: true }] }))),
+		);
+		expect(unsupported).toMatchObject({ failure: { reason: "decode", status: 200 } });
+	});
+
+	test("decodes documented pending certificate fields and incomplete nullable readiness", async () => {
+		const documented = {
+			hostname: "board.boards.chirp.wiki",
+			configured: false,
+			acme_requested: true,
+			status: "pending_validation",
+			dns_provider: "enom",
+			rate_limited_until: null,
+			certificates: [],
+			validation: {
+				dns_configured: false,
+				alpn_configured: false,
+				http_configured: false,
+				ownership_txt_configured: false,
+			},
+			dns_requirements: {
+				a: ["66.241.124.100"],
+				aaaa: ["2a09:8280:1::1"],
+				cname: "chirp-board.fly.dev",
+				ownership: {
+					name: "_fly-ownership.board.boards.chirp.wiki",
+					app_value: "app-123",
+					org_value: "org-123",
+				},
+			},
+			validation_errors: [],
+		};
+		for (const response of [
+			documented,
+			{
+				hostname: documented.hostname,
+				configured: null,
+				acme_requested: null,
+				status: null,
+				certificates: null,
+				validation: null,
+				dns_requirements: null,
+			},
+		]) {
+			const decoded = await run(
+				FlyBoardApi.use((api) => api.createCertificate("app", documented.hostname)),
+				(request) => Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(response))),
+			);
+			expect(decoded.hostname).toBe(documented.hostname);
+		}
+		const assignment = await run(
+			FlyBoardApi.use((api) => api.allocateSharedIp("app")),
+			(request) =>
+				Effect.succeed(
+					HttpClientResponse.fromWeb(
+						request,
+						Response.json({
+							ip: "66.241.124.100",
+							shared: true,
+							egress: null,
+							created_at: "2026-09-21T00:00:00Z",
+							region: "global",
+						}),
+					),
+				),
+		);
+		expect(assignment).toEqual({ ip: "66.241.124.100", shared: true, egress: null });
 	});
 
 	test("uses current Machines REST IP and certificate contracts", async () => {

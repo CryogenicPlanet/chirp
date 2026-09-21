@@ -7,6 +7,9 @@ export interface ProvisioningSettings {
 	readonly imageRef: string;
 	readonly boardsDomain: string;
 	readonly volumeSizeGb: number;
+	readonly maxFailures: number;
+	readonly maxOperationAgeMs: number;
+	readonly pollIntervalMs: number;
 }
 
 export class ProvisioningConfigurationError extends Data.TaggedError("ProvisioningConfigurationError")<{
@@ -25,6 +28,22 @@ const checked = (settings: ProvisioningSettings) =>
 			return yield* new ProvisioningConfigurationError({ message: "BOARDS_DOMAIN is invalid" });
 		if (!Number.isSafeInteger(settings.volumeSizeGb) || settings.volumeSizeGb < 1)
 			return yield* new ProvisioningConfigurationError({ message: "FLY_VOLUME_SIZE_GB must be a positive integer" });
+		if (!Number.isSafeInteger(settings.maxFailures) || settings.maxFailures < 1)
+			return yield* new ProvisioningConfigurationError({
+				message: "PROVISIONING_MAX_FAILURES must be a positive integer",
+			});
+		if (!Number.isSafeInteger(settings.maxOperationAgeMs) || settings.maxOperationAgeMs < 1)
+			return yield* new ProvisioningConfigurationError({
+				message: "PROVISIONING_MAX_AGE_MS must be a positive integer",
+			});
+		if (!Number.isSafeInteger(settings.pollIntervalMs) || settings.pollIntervalMs < 1)
+			return yield* new ProvisioningConfigurationError({
+				message: "PROVISIONING_POLL_INTERVAL_MS must be a positive integer",
+			});
+		if (settings.pollIntervalMs > settings.maxOperationAgeMs)
+			return yield* new ProvisioningConfigurationError({
+				message: "PROVISIONING_POLL_INTERVAL_MS must not exceed PROVISIONING_MAX_AGE_MS",
+			});
 		return settings;
 	});
 
@@ -34,6 +53,9 @@ export const provisioningSettings = Config.all({
 	imageRef: Config.String("CHIRP_IMAGE"),
 	boardsDomain: Config.String("BOARDS_DOMAIN").pipe(Config.withDefault("boards.chirp.wiki")),
 	volumeSizeGb: Config.Int("FLY_VOLUME_SIZE_GB").pipe(Config.withDefault(1)),
+	maxFailures: Config.Int("PROVISIONING_MAX_FAILURES").pipe(Config.withDefault(10)),
+	maxOperationAgeMs: Config.Int("PROVISIONING_MAX_AGE_MS").pipe(Config.withDefault(86_400_000)),
+	pollIntervalMs: Config.Int("PROVISIONING_POLL_INTERVAL_MS").pipe(Config.withDefault(30_000)),
 }).pipe(Effect.flatMap(checked));
 
 export const deploymentSpec = (slug: string, settings: ProvisioningSettings): DeploymentSpec => ({

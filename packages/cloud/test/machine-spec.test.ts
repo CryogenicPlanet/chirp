@@ -56,6 +56,32 @@ describe("managed Fly Machine intent", () => {
 		expect(machineMatches(observedMachine(), deployment)).toBe(true);
 	});
 
+	test("accepts validated Fly response enrichment and nullable disabled HTTPS redirects", () => {
+		const machine = observedMachine();
+		expect(
+			machineMatches(
+				{
+					...machine,
+					config: {
+						...machine.config,
+						metadata: { ...machine.config.metadata, fly_platform_version: "v2" },
+						mounts: machine.config.mounts.map((mount) => ({
+							...mount,
+							name: deployment.volume_name,
+							size_gb: deployment.volume_size_gb,
+							encrypted: true,
+						})),
+						services: machine.config.services.map((service) => ({
+							...service,
+							ports: service.ports.map((port) => (port.port === 443 ? { ...port, force_https: null } : port)),
+						})),
+					},
+				},
+				deployment,
+			),
+		).toBe(true);
+	});
+
 	test("rejects extra environment, metadata, and configuration", () => {
 		const machine = observedMachine();
 		expect(
@@ -71,6 +97,20 @@ describe("managed Fly Machine intent", () => {
 			),
 		).toBe(false);
 		expect(machineMatches({ ...machine, config: { ...machine.config, processes: ["app"] } }, deployment)).toBe(false);
+		for (const enrichment of [
+			{ name: "other-volume", size_gb: deployment.volume_size_gb, encrypted: true },
+			{ name: deployment.volume_name, size_gb: 0, encrypted: true },
+			{ name: deployment.volume_name, size_gb: deployment.volume_size_gb, encrypted: false },
+		])
+			expect(
+				machineMatches(
+					{
+						...machine,
+						config: { ...machine.config, mounts: machine.config.mounts.map((mount) => ({ ...mount, ...enrichment })) },
+					},
+					deployment,
+				),
+			).toBe(false);
 		expect(
 			machineMatches(
 				{

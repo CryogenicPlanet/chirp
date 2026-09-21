@@ -14,6 +14,9 @@ export const makeNetworking = () => {
 		failBefore: Set<string>;
 		failAfter: Set<string>;
 		calls: string[];
+		checkCertificateCalls: number;
+		checkCertificateDelayAt: number;
+		checkCertificateDelayMs: number;
 	} = {
 		ips: [],
 		certificate: undefined,
@@ -24,6 +27,9 @@ export const makeNetworking = () => {
 		failBefore: new Set(),
 		failAfter: new Set(),
 		calls: [],
+		checkCertificateCalls: 0,
+		checkCertificateDelayAt: Number.POSITIVE_INFINITY,
+		checkCertificateDelayMs: 0,
 	};
 	const call = <A>(operation: string, provider: "fly" | "cloudflare", body: () => A) =>
 		Effect.gen(function* () {
@@ -84,16 +90,21 @@ export const makeNetworking = () => {
 					return state.certificate;
 				}),
 			checkCertificate: () =>
-				flyCall("check_certificate", () => {
-					if (!state.certificate) throw new Error("Certificate not created");
-					return {
-						...state.certificate,
-						configured: state.ready,
-						status: state.ready ? "active" : "pending_validation",
-						certificates: state.ready ? [{ source: "fly", status: "active" }] : [],
-						validation: { ownership_txt_configured: state.ready },
-						dns_records: { a: state.resolved },
-					};
+				Effect.gen(function* () {
+					state.checkCertificateCalls += 1;
+					if (state.checkCertificateCalls === state.checkCertificateDelayAt)
+						yield* Effect.sleep(state.checkCertificateDelayMs);
+					return yield* flyCall("check_certificate", () => {
+						if (!state.certificate) throw new Error("Certificate not created");
+						return {
+							...state.certificate,
+							configured: state.ready,
+							status: state.ready ? "active" : "pending_validation",
+							certificates: state.ready ? [{ source: "fly", status: "active" }] : [],
+							validation: { ownership_txt_configured: state.ready },
+							dns_records: { a: state.resolved, aaaa: null },
+						};
+					});
 				}),
 		},
 		dns: {

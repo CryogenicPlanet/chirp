@@ -16,6 +16,9 @@ export const settings: ProvisioningSettings = {
 	imageRef: `registry.example/chirp@sha256:${"a".repeat(64)}`,
 	boardsDomain: "boards.chirp.wiki",
 	volumeSizeGb: 1,
+	maxFailures: 10,
+	maxOperationAgeMs: 86_400_000,
+	pollIntervalMs: 30_000,
 };
 
 export const request = {
@@ -73,6 +76,9 @@ export const makeFakeProvider = () => {
 	let failCreateApp = false;
 	let failCreateAppBeforeMutation = false;
 	let rejectCreateApp = false;
+	let failAppReadAfterRejectedCreate = false;
+	let failAppRead = false;
+	let createAppDelayMs = 0;
 	let failCreateVolume = false;
 	let failListVolumesAfterCreate = false;
 	let failCreateVolumeBeforeMutation = false;
@@ -91,6 +97,10 @@ export const makeFakeProvider = () => {
 		...networking.fly,
 		getApp: (name: string) =>
 			Effect.gen(function* () {
+				if (failAppRead) {
+					failAppRead = false;
+					return yield* flyUnavailable("get_app");
+				}
 				if (decodeAppRead) {
 					decodeAppRead = false;
 					return yield* new FlyApiError({ operation: "get_app", reason: "decode", status: 200 });
@@ -109,12 +119,17 @@ export const makeFakeProvider = () => {
 		createApp: (input: { readonly name: string; readonly organization: string; readonly network: string }) =>
 			Effect.gen(function* () {
 				calls.createApp += 1;
+				if (createAppDelayMs > 0) yield* Effect.sleep(createAppDelayMs);
 				if (failCreateAppBeforeMutation) {
 					failCreateAppBeforeMutation = false;
 					return yield* new FlyApiError({ operation: "create_app", reason: "transport", status: null });
 				}
 				if (rejectCreateApp) {
 					rejectCreateApp = false;
+					if (failAppReadAfterRejectedCreate) {
+						failAppReadAfterRejectedCreate = false;
+						failAppRead = true;
+					}
 					return yield* new FlyApiError({ operation: "create_app", reason: "status", status: 400 });
 				}
 				app = { id: "app-id", name: input.name, network: input.network, organization: { slug: input.organization } };
@@ -280,6 +295,13 @@ export const makeFakeProvider = () => {
 			},
 			rejectCreateApp: () => {
 				rejectCreateApp = true;
+			},
+			rejectCreateAppAndReadback: () => {
+				rejectCreateApp = true;
+				failAppReadAfterRejectedCreate = true;
+			},
+			delayCreateApp: (milliseconds: number) => {
+				createAppDelayMs = milliseconds;
 			},
 			failCreateVolume: () => {
 				failCreateVolume = true;

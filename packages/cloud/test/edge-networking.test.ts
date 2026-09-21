@@ -1,6 +1,6 @@
 import { Effect, Layer, Result } from "effect";
 import { describe, expect, test } from "vitest";
-import { CloudflareDns } from "../src/cloudflare-dns.ts";
+import { CloudflareApiError, CloudflareDns } from "../src/cloudflare-dns.ts";
 import { type EdgeMutation, ensureEdgeNetworking } from "../src/edge-networking.ts";
 import { FlyApiError, FlyBoardApi } from "../src/fly-board-api.ts";
 import { makeNetworking } from "./fixtures/edge-networking.ts";
@@ -35,17 +35,52 @@ describe("edge networking reconciliation", () => {
 		expect(provider.state.calls.some((call) => call.startsWith("create") || call === "allocate_ip")).toBe(false);
 	});
 
-	test.each([403, 409, 429, 503])(
+	test.each([403, 404, 409, 429, 503])(
 		"classifies allocation HTTP %s without blindly repeating the mutation",
 		async (status) => {
 			const provider = makeNetworking();
 			provider.fly.allocateSharedIp = () =>
 				Effect.fail(new FlyApiError({ operation: "allocate_ip", reason: "status", status }));
 			expect(await run(provider)).toMatchObject({
-				failure: { reason: status === 403 ? "rejected" : "ambiguous", mutation: status === 403 ? null : "ip" },
+				failure: {
+					reason: status === 403 ? "rejected" : status === 404 ? "pending" : "ambiguous",
+					mutation: status === 403 ? null : "ip",
+				},
 			});
-			expect(provider.state.calls).toEqual(["list_ips", "list_ips"]);
+			expect(provider.state.calls).toEqual(status === 403 ? ["list_ips"] : ["list_ips", "list_ips"]);
 			expect(provider.state.records).toEqual([]);
+		},
+	);
+
+	test.each(["ip", "certificate", "a_record", "txt_record"] as const)(
+		"preserves a definite $mutation rejection when its readback would fail",
+		async (mutation) => {
+			const provider = makeNetworking();
+			let observation = "list_ips";
+			if (mutation === "ip")
+				provider.fly.allocateSharedIp = () => {
+					provider.state.failBefore.add(observation);
+					return Effect.fail(new FlyApiError({ operation: "allocate_ip", reason: "status", status: 403 }));
+				};
+			else if (mutation === "certificate") {
+				provider.state.ips = [{ ip: "66.241.124.100", shared: true }];
+				observation = "get_certificate";
+				provider.fly.createCertificate = () => {
+					provider.state.failBefore.add(observation);
+					return Effect.fail(new FlyApiError({ operation: "create_certificate", reason: "status", status: 403 }));
+				};
+			} else {
+				const createRecord = provider.dns.createRecord;
+				const rejectedType = mutation === "a_record" ? "A" : "TXT";
+				provider.dns.createRecord = (name, type, content) => {
+					if (type !== rejectedType) return createRecord(name, type, content);
+					observation = `list:${name}`;
+					provider.state.failBefore.add(observation);
+					return Effect.fail(new CloudflareApiError({ operation: `create_${type}`, reason: "status", status: 403 }));
+				};
+			}
+			expect(await run(provider)).toMatchObject({ failure: { reason: "rejected", mutation: null } });
+			expect(provider.state.failBefore.has(observation)).toBe(true);
 		},
 	);
 
@@ -58,8 +93,16 @@ describe("edge networking reconciliation", () => {
 		const provider = makeNetworking();
 		provider.state.failBefore.add(operation);
 		expect(await run(provider)).toMatchObject({ failure: { reason: "ambiguous", mutation } });
-		expect(await run(provider, Effect.void, mutation)).toMatchObject({ failure: { reason: "ambiguous", mutation } });
+		expect(await run(provider, Effect.void, mutation)).toMatchObject({ failure: { reason: "pending", mutation } });
 		expect(provider.state.calls.filter((call) => call === operation)).toHaveLength(1);
+	});
+
+	test("surfaces unsupported provider responses instead of spending transient retries", async () => {
+		const provider = makeNetworking();
+		provider.fly.listIpAssignments = () =>
+			Effect.fail(new FlyApiError({ operation: "list_ips", reason: "decode", status: 200 }));
+		expect(await run(provider)).toMatchObject({ failure: { reason: "unsupported", mutation: null } });
+		expect(provider.state.records).toEqual([]);
 	});
 
 	test("refuses duplicate or malformed shared IPs without allocating another", async () => {
@@ -75,6 +118,26 @@ describe("edge networking reconciliation", () => {
 			provider.state.ips = ips;
 			expect(await run(provider)).toMatchObject({ failure: { reason: "conflict" } });
 			expect(provider.state.calls).toEqual(["list_ips"]);
+		}
+	});
+
+	test("waits for incomplete certificate readiness evidence without writing DNS", async () => {
+		for (const certificate of [
+			{ hostname, acme_requested: null, certificates: null, validation: null, dns_requirements: null },
+			{ hostname, acme_requested: true, certificates: [], validation: null, dns_requirements: null },
+			{
+				hostname,
+				acme_requested: true,
+				certificates: [],
+				validation: { ownership_txt_configured: null },
+				dns_requirements: { a: null, ownership: null },
+			},
+		]) {
+			const provider = makeNetworking();
+			provider.state.ips = [{ ip: "66.241.124.100", shared: true, egress: null }];
+			provider.state.certificate = certificate;
+			expect(await run(provider)).toMatchObject({ failure: { reason: "pending" } });
+			expect(provider.state.records).toEqual([]);
 		}
 	});
 
@@ -147,10 +210,10 @@ describe("edge networking reconciliation", () => {
 		{ type: "AAAA", content: "2001:db8::1", proxied: false },
 		{ type: "CNAME", content: "other.fly.dev", proxied: false },
 		{ type: "TXT", content: "unrelated", proxied: false },
-	])("refuses conflicting exact DNS without overwriting it: $type $content $proxied", async (record) => {
+	])("waits on conflicting exact DNS without overwriting it: $type $content $proxied", async (record) => {
 		const provider = makeNetworking();
 		provider.state.records.push({ id: "foreign", name: hostname, ...record });
-		expect(await run(provider)).toMatchObject({ failure: { reason: "conflict" } });
+		expect(await run(provider)).toMatchObject({ failure: { reason: "pending" } });
 		expect(provider.state.records).toEqual([{ id: "foreign", name: hostname, ...record }]);
 		expect(provider.state.calls).not.toContain("create:A");
 	});
@@ -161,11 +224,11 @@ describe("edge networking reconciliation", () => {
 			expect(Result.isSuccess(await run(provider))).toBe(true);
 			if (conflict === "duplicate") provider.state.records.push({ ...provider.state.records[0]!, id: "duplicate" });
 			else provider.state.records[1] = { ...provider.state.records[1]!, content: "app-other" };
-			expect(await run(provider)).toMatchObject({ failure: { reason: "conflict" } });
+			expect(await run(provider)).toMatchObject({ failure: { reason: "pending" } });
 		}
 	});
 
-	test("does not write to an unrelated, inactive, or delegated zone", async () => {
+	test("rejects unrelated zones but waits for inactive or delegated DNS to be repaired", async () => {
 		for (const conflict of ["unrelated", "inactive", "delegated", "partial"]) {
 			const provider = makeNetworking();
 			if (conflict === "unrelated") provider.state.zone.name = "other.wiki";
@@ -173,7 +236,9 @@ describe("edge networking reconciliation", () => {
 			if (conflict === "partial") provider.state.zone.type = "partial";
 			if (conflict === "delegated")
 				provider.state.records.push({ id: "ns", name: "boards.chirp.wiki", type: "NS", content: "ns.example.com" });
-			expect(await run(provider)).toMatchObject({ failure: { reason: "conflict" } });
+			expect(await run(provider)).toMatchObject({
+				failure: { reason: conflict === "unrelated" || conflict === "partial" ? "conflict" : "pending" },
+			});
 			expect(provider.state.calls).not.toContain("create:A");
 		}
 	});
@@ -195,8 +260,8 @@ describe("edge networking reconciliation", () => {
 			provider.state.calls.push("renew");
 		});
 		expect(Result.isSuccess(await run(provider, renewed))).toBe(true);
-		for (let index = 0; index < provider.state.calls.length; index += 2)
-			expect(provider.state.calls[index]).toBe("renew");
+		for (const [index, call] of provider.state.calls.entries())
+			if (call !== "renew") expect(provider.state.calls[index - 1]).toBe("renew");
 		provider.state.calls.length = 0;
 		await expect(run(provider, Effect.die("lost lease"))).rejects.toThrow("lost lease");
 		expect(provider.state.calls).toEqual([]);

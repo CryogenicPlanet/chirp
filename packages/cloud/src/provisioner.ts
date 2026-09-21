@@ -1,14 +1,20 @@
-import { Context, Data, DateTime, Effect, Layer, Option, Random, Result } from "effect";
+import { Clock, Context, Data, Effect, Layer, Option, Random, Result } from "effect";
 import { Boards } from "./boards.ts";
 import { CloudflareDns } from "./cloudflare-dns.ts";
-import type { Deployment, DeploymentDrift, DeploymentState } from "./deployment.ts";
+import {
+	type Deployment,
+	type DeploymentDrift,
+	DeploymentFenceLost,
+	type DeploymentState,
+	InvalidDeploymentTransition,
+} from "./deployment.ts";
 import { Deployments, type DeploymentLease } from "./deployments.ts";
 import { EdgeProbe } from "./edge-probe.ts";
 import { EdgeNetworkingError, ensureEdgeNetworking } from "./edge-networking.ts";
 import { type FlyApiError, FlyBoardApi } from "./fly-board-api.ts";
 import type { FlyApp, FlyMachine, FlyVolume } from "./fly-model.ts";
 import { machineConfig, machineMatches } from "./machine-spec.ts";
-import type { Operation, ProviderMutation } from "./operation.ts";
+import { InvalidLeaseDuration, LeaseLost, type Operation, type ProviderMutation } from "./operation.ts";
 import { Operations } from "./operations.ts";
 import { deploymentSpec, type ProvisioningSettings } from "./provisioning-settings.ts";
 
@@ -29,14 +35,13 @@ export class ProvisioningError extends Data.TaggedError("ProvisioningError")<{
 		| "provider_drift"
 		| "provider_observation_pending"
 		| "retry_exhausted"
-		| "edge_unavailable";
+		| "edge_unavailable"
+		| "provisioning_internal_error";
 	readonly retriable: boolean;
 	readonly message: string;
 }> {}
 
-export type ProvisioningOutcome = "succeeded" | "requeued" | "blocked";
-
-const maxAttempts = 10;
+export type ProvisioningOutcome = "succeeded" | "requeued" | "blocked" | "lost_lease";
 
 const issue = (code: ProvisioningError["code"], retriable: boolean, message: string) =>
 	new ProvisioningError({ code, retriable, message });
@@ -45,7 +50,7 @@ const rejected = (error: FlyApiError) =>
 	error.status !== null &&
 	error.status >= 400 &&
 	error.status < 500 &&
-	![408, 409, 425, 429].includes(error.status);
+	![404, 408, 409, 425, 429].includes(error.status);
 const isAmbiguity = (code: string | null) => code === "provider_ambiguous" || code?.endsWith("_ambiguous") === true;
 interface MutationJournal<E, R> {
 	readonly pending: Set<ProviderMutation>;
@@ -85,14 +90,20 @@ const make = (settings: ProvisioningSettings) =>
 		const fly = yield* FlyBoardApi;
 		const dns = yield* CloudflareDns;
 		const edge = yield* EdgeProbe;
-		const observed = <A, R>(effect: Effect.Effect<A, FlyApiError, R>) =>
-			effect.pipe(
-				Effect.mapError((error) =>
-					error.reason === "decode"
-						? issue("provider_drift", false, "Fly returned an unsupported response shape")
-						: rejected(error)
-							? issue("provider_rejected", false, "Fly rejected the observation")
-							: issue("provider_unavailable", true, "Fly observation failed"),
+		const observed = <A, R, E, R2>(effect: Effect.Effect<A, FlyApiError, R>, before: Effect.Effect<unknown, E, R2>) =>
+			before.pipe(
+				Effect.andThen(
+					effect.pipe(
+						Effect.mapError((error) =>
+							error.reason === "decode"
+								? issue("provider_drift", false, "Fly returned an unsupported response shape")
+								: error.reason === "status" && error.status === 404
+									? issue("provider_observation_pending", true, "Fly resource is not yet observable")
+									: rejected(error)
+										? issue("provider_rejected", false, "Fly rejected the observation")
+										: issue("provider_unavailable", true, "Fly observation failed"),
+						),
+					),
 				),
 			);
 		const assertApp = (app: FlyApp, deployment: Deployment) =>
@@ -135,22 +146,25 @@ const make = (settings: ProvisioningSettings) =>
 						);
 					yield* renewLease;
 					yield* journal.mark("machine_start");
+					yield* renewLease;
 					const started = yield* fly.startMachine(deployment.app_name, deployment.machine_id).pipe(Effect.result);
-					let found = yield* observed(fly.getMachine(deployment.app_name, deployment.machine_id));
+					if (Result.isFailure(started) && rejected(started.failure)) {
+						yield* journal.clear("machine_start");
+						return yield* issue("provider_rejected", false, "Fly rejected the Machine start");
+					}
+					let found = yield* observed(fly.getMachine(deployment.app_name, deployment.machine_id), renewLease);
 					if (Option.isNone(found))
 						return yield* issue("machine_start_ambiguous", true, "Fly Machine start is not observable");
 					machine = yield* assertMachine(found.value, deployment);
 					if (machine.state !== "started") {
 						if (Result.isFailure(started)) {
-							if (rejected(started.failure)) yield* journal.clear("machine_start");
-							return yield* rejected(started.failure)
-								? issue("provider_rejected", false, "Fly rejected the Machine start")
-								: issue("machine_start_ambiguous", true, "Fly Machine start is not observable");
+							return yield* issue("machine_start_ambiguous", true, "Fly Machine start is not observable");
 						}
 						yield* observed(
 							fly.waitMachine(deployment.app_name, deployment.machine_id, "started", machine.instance_id),
+							renewLease,
 						);
-						found = yield* observed(fly.getMachine(deployment.app_name, deployment.machine_id));
+						found = yield* observed(fly.getMachine(deployment.app_name, deployment.machine_id), renewLease);
 						if (Option.isNone(found))
 							return yield* issue("machine_start_ambiguous", true, "Fly Machine disappeared after start");
 						machine = yield* assertMachine(found.value, deployment);
@@ -168,14 +182,14 @@ const make = (settings: ProvisioningSettings) =>
 		) =>
 			Effect.gen(function* () {
 				if (deployment.app_id !== null || afterAppCreated.includes(deployment.state)) {
-					const app = yield* observed(fly.getApp(deployment.app_name));
+					const app = yield* observed(fly.getApp(deployment.app_name), renewLease);
 					if (Option.isNone(app)) return yield* issue("provider_drift", false, "Recorded Fly App is missing");
 					yield* assertApp(app.value, deployment);
 					if (journal.pending.has("app_create")) yield* journal.clear("app_create");
 				}
 				if (deployment.volume_id !== null || afterVolumeCreated.includes(deployment.state)) {
 					if (!deployment.volume_id) return yield* issue("provider_drift", false, "Fly Volume ID is missing");
-					const matching = (yield* observed(fly.listVolumes(deployment.app_name))).filter(
+					const matching = (yield* observed(fly.listVolumes(deployment.app_name), renewLease)).filter(
 						(volume) => volume.name === deployment.volume_name && volume.region === deployment.region,
 					);
 					if (matching.length > 1)
@@ -195,7 +209,7 @@ const make = (settings: ProvisioningSettings) =>
 				}
 				if (deployment.machine_id !== null || afterMachineCreated.includes(deployment.state)) {
 					if (!deployment.machine_id) return yield* issue("provider_drift", false, "Fly Machine ID is missing");
-					const serving = (yield* observed(fly.listMachines(deployment.app_name))).filter(
+					const serving = (yield* observed(fly.listMachines(deployment.app_name), renewLease)).filter(
 						(machine) => machine.config.services.length > 0,
 					);
 					if (serving.length > 1)
@@ -235,7 +249,11 @@ const make = (settings: ProvisioningSettings) =>
 													? "provider_drift"
 													: error.reason === "rejected"
 														? "provider_rejected"
-														: "provider_observation_pending",
+														: error.reason === "unsupported"
+															? "provider_drift"
+															: error.reason === "unavailable"
+																? "provider_unavailable"
+																: "provider_observation_pending",
 											error.reason === "pending" || error.reason === "unavailable" || error.reason === "ambiguous",
 											`Edge networking ${error.reason}`,
 										),
@@ -248,15 +266,21 @@ const make = (settings: ProvisioningSettings) =>
 		return {
 			run: (operation: Operation, workerId: string) =>
 				Effect.gen(function* () {
-					if (operation.kind !== "provision")
-						return yield* issue("provider_drift", false, "Provisioner received a non-provision operation");
-					if (!operation.lease_token || operation.lease_owner !== workerId)
-						return yield* issue("provider_drift", false, "Provisioner received an unowned operation");
+					if (operation.kind !== "provision" || !operation.lease_token || operation.lease_owner !== workerId)
+						return "lost_lease" as const;
 					const lease: DeploymentLease = {
 						operationId: operation.id,
 						leaseToken: operation.lease_token,
 						workerId,
 					};
+					const deadline = operation.created_at.getTime() + settings.maxOperationAgeMs;
+					const ensureWithinLifetime = Clock.currentTimeMillis.pipe(
+						Effect.flatMap((now) =>
+							now < deadline
+								? Effect.void
+								: Effect.fail(issue("retry_exhausted", true, "Provisioning lifetime reached")),
+						),
+					);
 					const pending = new Set(operation.ambiguous_mutations);
 					const journal = {
 						pending,
@@ -285,6 +309,51 @@ const make = (settings: ProvisioningSettings) =>
 						workerId,
 						leaseMilliseconds: 90_000,
 					});
+					const beforeProvider = ensureWithinLifetime.pipe(
+						Effect.andThen(renewLease),
+						Effect.andThen(ensureWithinLifetime),
+					);
+					const settle = (error: ProvisioningError) =>
+						Effect.gen(function* () {
+							const now = yield* Clock.currentTimeMillis;
+							const observationWait = error.code === "provider_observation_pending";
+							const ambiguityWait = isAmbiguity(error.code) || pending.size > 0;
+							const waitsWithoutFailure = observationWait || ambiguityWait || error.code === "retry_exhausted";
+							const countFailure = error.retriable && !waitsWithoutFailure;
+							const nextFailureCount = operation.failure_count + (countFailure ? 1 : 0);
+							const ageExceeded = now >= deadline;
+							if (error.retriable && !ageExceeded && (!countFailure || nextFailureCount < settings.maxFailures)) {
+								let delay: number;
+								if (observationWait) delay = settings.pollIntervalMs;
+								else if (ambiguityWait) delay = Math.max(60_000, settings.pollIntervalMs);
+								else {
+									const ceiling = Math.min(300_000, 5_000 * 2 ** Math.max(0, nextFailureCount - 1));
+									delay = Math.floor(ceiling / 2 + (yield* Random.next) * (ceiling / 2));
+								}
+								yield* operations.requeue({
+									id: operation.id,
+									leaseToken: lease.leaseToken,
+									workerId,
+									availableAt: new Date(Math.min(now + delay, deadline)),
+									errorCode: error.code,
+									errorMessage: error.message,
+									countFailure,
+								});
+								return "requeued" as const;
+							}
+							const exhausted = error.retriable;
+							yield* deployments.block({
+								...lease,
+								errorCode: exhausted ? "retry_exhausted" : error.code,
+								errorMessage: exhausted
+									? ageExceeded
+										? `Provisioning lifetime reached: ${error.code}. ${error.message}`
+										: `Provisioning failure limit reached: ${error.code}. ${error.message}`
+									: error.message,
+								countFailure,
+							});
+							return "blocked" as const;
+						});
 					const flow = Effect.gen(function* () {
 						const board = yield* boards.getById(operation.board_id).pipe(
 							Effect.flatMap(
@@ -298,6 +367,18 @@ const make = (settings: ProvisioningSettings) =>
 							...lease,
 							spec: deploymentSpec(board.slug, settings),
 						});
+						if (
+							deployment.state !== "provisioned" &&
+							(operation.failure_count >= settings.maxFailures || (yield* Clock.currentTimeMillis) >= deadline)
+						) {
+							yield* deployments.block({
+								...lease,
+								errorCode: "retry_exhausted",
+								errorMessage: "Provisioning retry budget was already exhausted before provider work",
+							});
+							return "blocked" as const;
+						}
+						const finalizationOnly = deployment.state === "provisioned" && pending.size === 0;
 						const advance = (
 							next: DeploymentState,
 							changes: {
@@ -327,17 +408,20 @@ const make = (settings: ProvisioningSettings) =>
 							if (deployment.state === "blocked")
 								return yield* issue("provider_drift", false, "Blocked deployment requires an operator retry");
 							if (deployment.state === "provisioned" && pending.size === 0) {
+								if (!finalizationOnly) yield* ensureWithinLifetime;
 								yield* operations.succeed(operation.id, lease.leaseToken, workerId);
 								return "succeeded" as const;
 							}
-							if (operation.attempt > maxAttempts)
-								return yield* issue(
-									"retry_exhausted",
-									false,
-									"Provisioning attempt limit reached after lease recovery",
-								);
-							yield* verifyRecordedResources(deployment, renewLease, journal);
+							yield* ensureWithinLifetime;
+							yield* verifyRecordedResources(deployment, beforeProvider, journal);
 							if (deployment.state === "provisioned") {
+								if (pending.size > 0)
+									return yield* issue(
+										"provider_observation_pending",
+										true,
+										"Provisioning completed with unresolved provider mutations",
+									);
+								yield* ensureWithinLifetime;
 								yield* operations.succeed(operation.id, lease.leaseToken, workerId);
 								return "succeeded" as const;
 							}
@@ -353,7 +437,7 @@ const make = (settings: ProvisioningSettings) =>
 									break;
 								}
 								case "storage_configuration_verified": {
-									let app = yield* observed(fly.getApp(deployment.app_name));
+									let app = yield* observed(fly.getApp(deployment.app_name), beforeProvider);
 									let creation: Result.Result<void, FlyApiError> | undefined;
 									if (Option.isNone(app)) {
 										if (pending.has("app_create"))
@@ -362,8 +446,9 @@ const make = (settings: ProvisioningSettings) =>
 												true,
 												"Fly App creation remains unobservable; refusing to create a duplicate",
 											);
-										yield* renewLease;
+										yield* beforeProvider;
 										yield* journal.mark("app_create");
+										yield* beforeProvider;
 										creation = yield* fly
 											.createApp({
 												name: deployment.app_name,
@@ -371,13 +456,13 @@ const make = (settings: ProvisioningSettings) =>
 												network: deployment.network_name,
 											})
 											.pipe(Effect.result);
-										app = yield* observed(fly.getApp(deployment.app_name));
-									}
-									if (Option.isNone(app)) {
-										if (creation && Result.isFailure(creation) && rejected(creation.failure)) {
+										if (Result.isFailure(creation) && rejected(creation.failure)) {
 											yield* journal.clear("app_create");
 											return yield* issue("provider_rejected", false, "Fly rejected the App creation");
 										}
+										app = yield* observed(fly.getApp(deployment.app_name), beforeProvider);
+									}
+									if (Option.isNone(app)) {
 										return yield* issue("app_create_ambiguous", true, "Fly App creation is not yet observable");
 									}
 									yield* assertApp(app.value, deployment);
@@ -388,7 +473,7 @@ const make = (settings: ProvisioningSettings) =>
 									break;
 								}
 								case "app_created": {
-									const listed = yield* observed(fly.listVolumes(deployment.app_name));
+									const listed = yield* observed(fly.listVolumes(deployment.app_name), beforeProvider);
 									let matching = listed.filter(
 										(volume) => volume.name === deployment.volume_name && volume.region === deployment.region,
 									);
@@ -400,10 +485,10 @@ const make = (settings: ProvisioningSettings) =>
 											true,
 											"Fly Volume creation remains unobservable; refusing to create a duplicate",
 										);
-									let creationFailure: FlyApiError | undefined;
 									if (matching.length === 0) {
-										yield* renewLease;
+										yield* beforeProvider;
 										yield* journal.mark("volume_create");
+										yield* beforeProvider;
 										const created = yield* fly
 											.createVolume({
 												appName: deployment.app_name,
@@ -412,20 +497,19 @@ const make = (settings: ProvisioningSettings) =>
 												sizeGb: deployment.volume_size_gb,
 											})
 											.pipe(Effect.result);
+										if (Result.isFailure(created) && rejected(created.failure)) {
+											yield* journal.clear("volume_create");
+											return yield* issue("provider_rejected", false, "Fly rejected the Volume creation");
+										}
 										matching = Result.isSuccess(created)
 											? [created.success]
-											: (yield* observed(fly.listVolumes(deployment.app_name))).filter(
+											: (yield* observed(fly.listVolumes(deployment.app_name), beforeProvider)).filter(
 													(volume) => volume.name === deployment.volume_name && volume.region === deployment.region,
 												);
-										if (Result.isFailure(created)) creationFailure = created.failure;
 									}
 									if (matching.length > 1)
 										return yield* issue("provider_drift", false, "Multiple Fly Volumes match this deployment");
 									if (matching.length !== 1) {
-										if (matching.length === 0 && creationFailure && rejected(creationFailure)) {
-											yield* journal.clear("volume_create");
-											return yield* issue("provider_rejected", false, "Fly rejected the Volume creation");
-										}
 										return yield* issue(
 											"volume_create_ambiguous",
 											true,
@@ -441,7 +525,10 @@ const make = (settings: ProvisioningSettings) =>
 								}
 								case "volume_created": {
 									if (!deployment.volume_id) return yield* issue("provider_drift", false, "Fly Volume ID is missing");
-									const found = yield* observed(fly.getVolume(deployment.app_name, deployment.volume_id));
+									const found = yield* observed(
+										fly.getVolume(deployment.app_name, deployment.volume_id),
+										beforeProvider,
+									);
 									if (Option.isNone(found))
 										return yield* issue("provider_observation_pending", true, "Fly Volume is not observable");
 									const volume = yield* assertVolume(found.value, deployment);
@@ -449,7 +536,7 @@ const make = (settings: ProvisioningSettings) =>
 										return yield* issue("provider_observation_pending", true, "Fly Volume is not ready");
 									if (volume.state !== "created")
 										return yield* issue("provider_drift", false, "Fly Volume entered an unsupported state");
-									const serving = (yield* observed(fly.listMachines(deployment.app_name))).filter(
+									const serving = (yield* observed(fly.listMachines(deployment.app_name), beforeProvider)).filter(
 										(machine) => machine.config.services.length > 0,
 									);
 									if (serving.length > 1)
@@ -473,10 +560,10 @@ const make = (settings: ProvisioningSettings) =>
 											true,
 											"Fly Machine creation remains unobservable; refusing to create a duplicate",
 										);
-									let creationFailure: FlyApiError | undefined;
 									if (matching.length === 0) {
-										yield* renewLease;
+										yield* beforeProvider;
 										yield* journal.mark("machine_create");
+										yield* beforeProvider;
 										const created = yield* fly
 											.createMachine({
 												appName: deployment.app_name,
@@ -485,24 +572,23 @@ const make = (settings: ProvisioningSettings) =>
 												config: machineConfig(deployment),
 											})
 											.pipe(Effect.result);
+										if (Result.isFailure(created) && rejected(created.failure)) {
+											yield* journal.clear("machine_create");
+											return yield* issue("provider_rejected", false, "Fly rejected the Machine creation");
+										}
 										matching = Result.isSuccess(created)
 											? [created.success]
-											: (yield* observed(fly.listMachines(deployment.app_name)))
+											: (yield* observed(fly.listMachines(deployment.app_name), beforeProvider))
 													.filter((machine) => machine.config.services.length > 0)
 													.filter(
 														(machine) =>
 															machine.name === deployment.machine_name &&
 															machine.config.metadata["chirp.deployment_id"] === deployment.board_id,
 													);
-										if (Result.isFailure(created)) creationFailure = created.failure;
 									}
 									if (matching.length > 1)
 										return yield* issue("provider_drift", false, "Multiple Fly Machines match this deployment");
 									if (matching.length !== 1) {
-										if (matching.length === 0 && creationFailure && rejected(creationFailure)) {
-											yield* journal.clear("machine_create");
-											return yield* issue("provider_rejected", false, "Fly rejected the Machine creation");
-										}
 										return yield* issue(
 											"machine_create_ambiguous",
 											true,
@@ -518,20 +604,25 @@ const make = (settings: ProvisioningSettings) =>
 								}
 								case "machine_created": {
 									if (!deployment.machine_id) return yield* issue("provider_drift", false, "Fly Machine ID is missing");
-									const found = yield* observed(fly.getMachine(deployment.app_name, deployment.machine_id));
+									const found = yield* observed(
+										fly.getMachine(deployment.app_name, deployment.machine_id),
+										beforeProvider,
+									);
 									if (Option.isNone(found))
 										return yield* issue("provider_observation_pending", true, "Fly Machine is not observable");
 									yield* ensureMachineStarted(
 										deployment,
 										yield* assertMachine(found.value, deployment),
-										renewLease,
+										beforeProvider,
 										journal,
 									);
 									deployment = yield* advance("machine_started");
 									break;
 								}
 								case "machine_started": {
+									yield* ensureWithinLifetime;
 									yield* deployments.publishRoute({ ...lease, expectedRowVersion: deployment.row_version });
+									yield* beforeProvider;
 									yield* edge
 										.health(deployment.hostname)
 										.pipe(Effect.mapError(() => issue("edge_unavailable", true, "Board health is not reachable")));
@@ -539,6 +630,7 @@ const make = (settings: ProvisioningSettings) =>
 									break;
 								}
 								case "edge_reachable": {
+									yield* beforeProvider;
 									yield* edge
 										.childRoute(deployment.hostname)
 										.pipe(Effect.mapError(() => issue("edge_unavailable", true, "Board child route is not reachable")));
@@ -546,6 +638,7 @@ const make = (settings: ProvisioningSettings) =>
 									break;
 								}
 								case "child_route_observed": {
+									yield* ensureWithinLifetime;
 									deployment = yield* advance("provisioned");
 									break;
 								}
@@ -562,36 +655,19 @@ const make = (settings: ProvisioningSettings) =>
 										errorMessage: `Immutable deployment field drifted: ${error.field}`,
 									})
 									.pipe(Effect.as<ProvisioningOutcome>("blocked")),
-							ProvisioningError: (error: ProvisioningError) =>
-								Effect.gen(function* () {
-									if (error.retriable && operation.attempt < maxAttempts) {
-										const now = yield* DateTime.now;
-										const baseCeiling = Math.min(300_000, 5_000 * 2 ** (operation.attempt - 1));
-										const errorCode = error.code;
-										const ambiguous = isAmbiguity(errorCode) || pending.size > 0;
-										const floor = ambiguous ? 60_000 : baseCeiling / 2;
-										const ceiling = Math.max(floor, baseCeiling);
-										const delay = Math.floor(floor + (yield* Random.next) * (ceiling - floor));
-										yield* operations.requeue({
-											id: operation.id,
-											leaseToken: lease.leaseToken,
-											workerId,
-											availableAt: DateTime.toDateUtc(DateTime.addDuration(now, delay)),
-											errorCode,
-											errorMessage: error.message,
-										});
-										return "requeued" as const;
-									}
-									yield* deployments.block({
-										...lease,
-										errorCode: error.retriable ? "retry_exhausted" : error.code,
-										errorMessage: error.retriable
-											? `Provisioning attempt limit reached: ${error.code}. ${error.message}`
-											: error.message,
-									});
-									return "blocked" as const;
-								}),
+							ProvisioningError: settle,
 						}),
+						Effect.catch((error) =>
+							error instanceof LeaseLost || error instanceof DeploymentFenceLost
+								? Effect.succeed("lost_lease" as const)
+								: settle(
+										issue(
+											"provisioning_internal_error",
+											!(error instanceof InvalidLeaseDuration || error instanceof InvalidDeploymentTransition),
+											"Provisioning persistence or state transition failed",
+										),
+									),
+						),
 					);
 				}),
 		};

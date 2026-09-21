@@ -86,7 +86,14 @@ const make = (settings: FlyApiSettings) =>
 			response: HttpClientResponse.HttpClientResponse,
 		) =>
 			HttpClientResponse.schemaBodyJson(schema)(response).pipe(
-				Effect.mapError(() => new FlyApiError({ operation, reason: "decode", status: response.status })),
+				Effect.mapError(
+					(error) =>
+						new FlyApiError({
+							operation,
+							reason: error._tag === "SchemaError" ? "decode" : "transport",
+							status: response.status,
+						}),
+				),
 			);
 		const discard = (operation: string, response: HttpClientResponse.HttpClientResponse) =>
 			successful(operation, response).pipe(
