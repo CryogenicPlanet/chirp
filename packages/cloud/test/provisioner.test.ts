@@ -326,7 +326,7 @@ describe("Provisioner", () => {
 		);
 	});
 
-	test("keeps unresolved edge and Machine-start mutations independently", async () => {
+	test("keeps an unresolved edge mutation while retrying an idempotent Machine start", async () => {
 		const provider = makeFakeProvider();
 		provider.set.failHealth();
 		await runFresh(
@@ -363,8 +363,10 @@ describe("Provisioner", () => {
 				]);
 				expect(provider.calls.startMachine).toBe(2);
 				const fourth = yield* nextClaim("worker-4");
-				expect(yield* provisioner.run(fourth, "worker-4")).toBe("requeued");
-				expect(provider.calls.startMachine).toBe(2);
+				// A start cannot duplicate a resource, so an unresolved marker must not stop the next
+				// attempt from starting the Machine. The deployment recovers instead of deadlocking.
+				expect(yield* provisioner.run(fourth, "worker-4")).not.toBe("blocked");
+				expect(provider.calls.startMachine).toBe(3);
 			}).pipe(Effect.provide(provisionerFor(provider))),
 		);
 	});

@@ -148,12 +148,10 @@ const make = (settings: ProvisioningSettings) =>
 				if (!deployment.machine_id) return yield* issue("provider_drift", false, "Fly Machine ID is missing");
 				let machine = initial;
 				if (machine.state !== "started") {
-					if (journal.pending.has("machine_start"))
-						return yield* issue(
-							"machine_start_ambiguous",
-							true,
-							"Fly Machine start remains unobservable; refusing to repeat it",
-						);
+					// A start is idempotent: unlike a create it cannot duplicate a resource, and the
+					// Machine's own state is the observation of whether it took effect. Refusing to
+					// repeat a marked start deadlocked instead, because the marker is only cleared once
+					// the Machine is observed started and nothing else could start it.
 					yield* renewLease;
 					yield* journal.mark("machine_start");
 					yield* renewLease;
