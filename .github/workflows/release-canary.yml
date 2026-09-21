@@ -1,0 +1,47 @@
+name: Release canary
+
+# Merging to master is the canary release. Once master's CI passes, build the board image exactly once
+# and publish it under its commit and as :canary. Promotion to :latest only ever retags an image built
+# here, so no other workflow builds a board image.
+on:
+  workflow_run:
+    workflows: [Linux]
+    types: [completed]
+    branches: [master]
+
+permissions:
+  contents: read
+  packages: write
+
+# Serialized rather than cancelled, so :canary always ends on the newest green merge.
+concurrency:
+  group: release-canary
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish canary image
+    # Push events only: never build a pull request's code with a write-scoped token.
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      IMAGE: ghcr.io/cryogenicplanet/chirp
+      SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Log in to GHCR
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: printf '%s' "$TOKEN" | docker login ghcr.io --username "$ACTOR" --password-stdin
+      - name: Build once and publish
+        run: |
+          docker buildx build --platform linux/amd64 \
+            --label org.opencontainers.image.source=https://github.com/CryogenicPlanet/chirp \
+            --label org.opencontainers.image.revision="$SHA" \
+            --tag "$IMAGE:sha-$SHA" --tag "$IMAGE:canary" \
+            --push .

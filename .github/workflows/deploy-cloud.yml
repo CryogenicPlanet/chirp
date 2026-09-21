@@ -1,0 +1,40 @@
+name: Deploy Cloud
+
+# The Cloud control plane follows master. Once master's CI passes, deploy it to Fly. The release
+# command applies migrations before the new image serves, and a failed migration aborts the deploy
+# without replacing the running machine. Board images are released separately and are not built here.
+on:
+  workflow_run:
+    workflows: [Linux]
+    types: [completed]
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-cloud
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy control plane
+    # Push events only: never deploy a pull request's code with production credentials.
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: superfly/flyctl-actions/setup-flyctl@dfdfedc86b296f5e5384f755a18bf400409a15d0
+        with:
+          version: 0.4.95
+      - name: Deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: >
+          flyctl deploy --config packages/cloud/fly.toml --dockerfile packages/cloud/Dockerfile
+          --ignorefile packages/cloud/dockerignore --depot --ha=false
+          --image-label "cloud-${{ github.event.workflow_run.head_sha }}"

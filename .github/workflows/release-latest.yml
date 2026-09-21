@@ -1,0 +1,48 @@
+name: Release latest
+
+# Pushing a vMAJOR.MINOR.PATCH tag promotes an existing canary build to :latest. It never builds: the
+# image that ships is byte-for-byte the one built and run as canary. A commit that never reached master,
+# or whose canary build does not exist, cannot be released.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: release-latest
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Promote canary to latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      IMAGE: ghcr.io/cryogenicplanet/chirp
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check the tag names a canary release
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::$TAG is not vMAJOR.MINOR.PATCH"; exit 1; }
+          sha="$(git rev-list -n 1 "$TAG")"
+          git merge-base --is-ancestor "$sha" origin/master \
+            || { echo "::error::$TAG points at $sha, which is not on master and so was never a canary release"; exit 1; }
+          echo "SHA=$sha" >> "$GITHUB_ENV"
+      - name: Log in to GHCR
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: printf '%s' "$TOKEN" | docker login ghcr.io --username "$ACTOR" --password-stdin
+      - name: Retag the canary build
+        run: |
+          docker buildx imagetools inspect "$IMAGE:sha-$SHA" >/dev/null \
+            || { echo "::error::No canary build exists for $SHA; promote a commit the canary release published"; exit 1; }
+          docker buildx imagetools create --tag "$IMAGE:$TAG" --tag "$IMAGE:latest" "$IMAGE:sha-$SHA"
+          docker buildx imagetools inspect "$IMAGE:latest"

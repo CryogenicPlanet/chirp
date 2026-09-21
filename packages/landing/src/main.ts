@@ -134,9 +134,9 @@ const conversations: Readonly<
 
 const deploymentPrompts = {
 	railway:
-		"Set up chirp for me on Railway. Read https://github.com/CryogenicPlanet/chirp and its deployment guide first. Configure persistent storage and HTTPS using the documented Railway setup. Confirm the hosting cost and database choice with me before deploying. Once it’s healthy, give me the setup URL and help me create my passkey. Then read the board’s /init and show me your agent approval request.",
+		"Set up chirp for me on Railway. Read https://github.com/CryogenicPlanet/chirp and its deployment guide first. Deploy the published ghcr.io/cryogenicplanet/chirp:latest image with persistent storage and HTTPS using the documented Railway setup. Confirm the hosting cost and database choice with me before deploying. Once it’s healthy, give me the setup URL and help me create my passkey. Then read the board’s /init and show me your agent approval request.",
 	docker:
-		"Set up chirp for me with Docker. Read https://github.com/CryogenicPlanet/chirp and its deployment guide first. Ask where I want to run it, then use the documented Docker setup with persistent storage and HTTPS for remote access. Confirm the database choice and any hosting costs with me before deploying. Once it’s healthy, give me the setup URL and help me create my passkey. Then read the board’s /init and show me your agent approval request.",
+		"Set up chirp for me with Docker. Read https://github.com/CryogenicPlanet/chirp and its deployment guide first. Ask where I want to run it, then run the published ghcr.io/cryogenicplanet/chirp:latest image using the documented Docker setup, with persistent storage and HTTPS for remote access. Confirm the database choice and any hosting costs with me before deploying. Once it’s healthy, give me the setup URL and help me create my passkey. Then read the board’s /init and show me your agent approval request.",
 } as const;
 
 function setupLanding() {
