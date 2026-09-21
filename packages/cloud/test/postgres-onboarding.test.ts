@@ -1,6 +1,6 @@
 import { Effect, Option, Redacted } from "effect";
 import { describe, expect, test, vi } from "vitest";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Client } from "pg";
 import { PostgresStorage, postgresStorageLayerWithLocal } from "../src/postgres-storage.ts";
 import { FlySecrets, FlySecretsError } from "../src/fly-secrets.ts";
@@ -128,6 +128,49 @@ test("converts historical prepared credentials under the active lease without ro
 			const runtime = Redacted.value(yield* (yield* CloudSecrets).decryptRuntime(board.id, row.runtime_ciphertext));
 			expect(new URL(runtime.bootUrl).password).toBe(payload.bootPassword);
 			expect(new URL(runtime.appUrl).password).toBe(payload.appPassword);
+		}),
+		Redacted.make(key),
+	);
+});
+
+test("converts completed historical credentials without changing operation history", async () => {
+	const key = "e".repeat(64);
+	await runFresh(
+		Effect.gen(function* () {
+			yield* migrateCloudDatabase;
+			const board = yield* (yield* Dashboard).create("owner", {
+				...input,
+				idempotency_key: "completed-legacy",
+			});
+			const database = yield* Database;
+			yield* database
+				.update(boardOperations)
+				.set({ state: "succeeded", finished_at: sql`clock_timestamp()` })
+				.where(eq(boardOperations.board_id, board.id));
+			const payload = {
+				adminUrl: url,
+				bootPassword: "c".repeat(64),
+				appPassword: "d".repeat(64),
+			};
+			yield* database
+				.update(boardPostgresSecrets)
+				.set({
+					prepared: true,
+					bootstrap_ciphertext: encryptLegacyBootstrap(key, board.id, payload, "purpose"),
+					runtime_ciphertext: null,
+					fly_secrets_version: 17,
+				})
+				.where(eq(boardPostgresSecrets.board_id, board.id));
+			const storage = yield* PostgresStorage;
+			expect(yield* storage.upgradeLegacy).toBe(1);
+			expect(yield* storage.upgradeLegacy).toBe(0);
+			const row = (yield* database.select().from(boardPostgresSecrets))[0];
+			expect(row).toMatchObject({ prepared: true, bootstrap_ciphertext: null, fly_secrets_version: 17 });
+			if (!row?.runtime_ciphertext) return yield* Effect.die("Legacy conversion produced no runtime credentials");
+			const runtime = Redacted.value(yield* (yield* CloudSecrets).decryptRuntime(board.id, row.runtime_ciphertext));
+			expect(new URL(runtime.bootUrl).password).toBe(payload.bootPassword);
+			expect(new URL(runtime.appUrl).password).toBe(payload.appPassword);
+			expect(Option.getOrThrow(yield* (yield* Operations).latest(board.id, "provision")).state).toBe("succeeded");
 		}),
 		Redacted.make(key),
 	);
