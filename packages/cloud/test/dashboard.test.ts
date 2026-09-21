@@ -10,6 +10,12 @@ import { runFresh } from "./fixture.ts";
 import { deploymentSpec } from "../src/provisioning-settings.ts";
 import { settings } from "./fixtures/provisioner.ts";
 
+const sqlRequeue = (boardId: string, code: string) =>
+	Effect.gen(function* () {
+		const sql = yield* SqlClient.SqlClient;
+		yield* sql`UPDATE board_operations SET last_error_code = ${code} WHERE board_id = ${boardId} AND kind = 'provision'`;
+	});
+
 const create = {
 	name: "  Private board  ",
 	idempotency_key: "dashboard-create-1",
@@ -178,6 +184,86 @@ describe("Dashboard", () => {
 				expect(running).toMatchObject({
 					phase: "provisioning",
 					error: { code: "provider_unavailable", message: "Fly will be retried", retrying: true },
+				});
+			}),
+		);
+	});
+
+	test("reports a blocked deployment as terminal even when the operation still carries a progress code", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				const dashboard = yield* Dashboard;
+				const board = yield* dashboard.create("user-1", create);
+				const operations = yield* Operations;
+				const operation = Option.getOrThrow(yield* operations.claim("worker-1", 30_000, "provision"));
+				if (!operation.lease_token) return yield* Effect.die("Claim returned no lease token");
+				const stored = Option.getOrThrow(yield* (yield* Boards).get("user-1", board.id));
+				yield* (yield* Deployments).ensure({
+					operationId: operation.id,
+					leaseToken: operation.lease_token,
+					workerId: "worker-1",
+					spec: deploymentSpec(stored.slug, settings),
+				});
+				const sql = yield* SqlClient.SqlClient;
+				yield* sql`UPDATE board_deployments SET state = 'blocked' WHERE board_id = ${board.id}`;
+				yield* operations.requeue({
+					id: operation.id,
+					leaseToken: operation.lease_token,
+					workerId: "worker-1",
+					availableAt: DateTime.toDateUtc(DateTime.makeUnsafe(0)),
+					errorCode: "provider_observation_pending",
+					errorMessage: "Fly Machine health check is not passing",
+				});
+				const blocked = Option.getOrThrow(yield* dashboard.get("user-1", board.id));
+				expect(blocked).toMatchObject({
+					phase: "blocked",
+					error: {
+						code: "provider_observation_pending",
+						message: "Fly Machine health check is not passing",
+						retrying: false,
+						severity: "error",
+					},
+				});
+			}),
+		);
+	});
+
+	test("reports a pending provider observation as progress while the board is still setting up", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				const dashboard = yield* Dashboard;
+				const board = yield* dashboard.create("user-1", create);
+				const operations = yield* Operations;
+				const operation = Option.getOrThrow(yield* operations.claim("worker-1", 30_000, "provision"));
+				if (!operation.lease_token) return yield* Effect.die("Claim returned no lease token");
+				const stored = Option.getOrThrow(yield* (yield* Boards).get("user-1", board.id));
+				yield* (yield* Deployments).ensure({
+					operationId: operation.id,
+					leaseToken: operation.lease_token,
+					workerId: "worker-1",
+					spec: deploymentSpec(stored.slug, settings),
+				});
+				yield* operations.requeue({
+					id: operation.id,
+					leaseToken: operation.lease_token,
+					workerId: "worker-1",
+					availableAt: DateTime.toDateUtc(DateTime.makeUnsafe(0)),
+					errorCode: "provider_observation_pending",
+					errorMessage: "Fly Machine health check is not passing",
+				});
+				expect(Option.getOrThrow(yield* dashboard.get("user-1", board.id))).toMatchObject({
+					phase: "provisioning",
+					error: { code: "provider_observation_pending", retrying: true, severity: "progress" },
+				});
+				yield* sqlRequeue(board.id, "machine_start_ambiguous");
+				expect(Option.getOrThrow(yield* dashboard.get("user-1", board.id))).toMatchObject({
+					error: { code: "machine_start_ambiguous", retrying: true, severity: "progress" },
+				});
+				yield* sqlRequeue(board.id, "provider_unavailable");
+				expect(Option.getOrThrow(yield* dashboard.get("user-1", board.id))).toMatchObject({
+					error: { code: "provider_unavailable", retrying: true, severity: "warning" },
 				});
 			}),
 		);

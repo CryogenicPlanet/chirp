@@ -27,7 +27,7 @@ export function BoardProgressPanel({
 		: board.phase === "ready"
 			? "Your board is ready"
 			: stopped
-				? "Setup paused"
+				? "Setup stopped"
 				: board.phase === "queued"
 					? "Waiting to start"
 					: "Setting up your board";
@@ -87,7 +87,7 @@ export function BoardProgressPanel({
 							"No setup checkpoint is available yet."
 						)}{" "}
 						{stopped
-							? "Setup needs an administrator to resolve the issue and resume it."
+							? "Setup will not continue on its own. An administrator has to resolve the issue and resume it."
 							: board.phase !== "ready"
 								? "You can leave this page and come back."
 								: "Open your board to continue."}
@@ -97,7 +97,7 @@ export function BoardProgressPanel({
 							<li key={step.checkpoint} className="relative flex gap-3 pb-5 last:pb-0">
 								<div className="absolute top-6 bottom-0 left-[11px] w-px bg-border" />
 								<span
-									className={`relative grid size-6 shrink-0 place-items-center rounded-full border ${step.status === "confirmed" ? "border-primary/25 bg-primary/10 text-primary" : step.status === "next" ? "border-warning-border bg-warning-surface text-warning" : "border-border text-subtle"}`}
+									className={`relative grid size-6 shrink-0 place-items-center rounded-full border ${step.status === "confirmed" ? "border-primary/25 bg-primary/10 text-primary" : step.status === "next" ? "border-[#554f70] bg-accent-surface text-accent-foreground" : "border-border text-subtle"}`}
 								>
 									{step.status === "confirmed" ? (
 										<Check className="size-3.5" aria-hidden="true" />

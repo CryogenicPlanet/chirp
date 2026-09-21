@@ -9,6 +9,7 @@ import { type CloudClientUser, DashboardShell } from "../../dashboard-shell.tsx"
 import { pollDashboardBoard } from "../../poll-dashboard-board.ts";
 import { DeleteBoardDialog } from "../../delete-board-dialog.tsx";
 import { BoardProgressPanel } from "../../board-progress-panel.tsx";
+import { boardStatusBanner } from "../../board-status-banner.ts";
 import { StatusBadge } from "../../status-badge.tsx";
 
 class BoardNotFound extends Error {}
@@ -17,6 +18,12 @@ const storageLabels = { sqlite: "Managed SQLite", postgres: "External PostgreSQL
 
 const formatDate = (value: string) =>
 	new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+
+const bannerTones = {
+	progress: "border-border bg-muted text-muted-foreground",
+	warning: "border-warning-border bg-warning-surface text-warning",
+	error: "border-destructive-border bg-destructive-surface text-destructive",
+} as const;
 
 export function BoardDetail({
 	authUnavailable,
@@ -73,6 +80,7 @@ export function BoardDetail({
 		setError(undefined);
 		setPollVersion((version) => version + 1);
 	};
+	const banner = board ? boardStatusBanner(board) : null;
 
 	if (!sessionUser)
 		return (
@@ -170,18 +178,16 @@ export function BoardDetail({
 							</div>
 						</div>
 					</header>
-					{board.error ? (
+					{banner ? (
 						<div
 							role="alert"
-							className={`mb-3 rounded-md border px-4 py-3.5 text-xs leading-[1.55] ${board.error.retrying ? "border-warning-border bg-warning-surface text-warning" : "border-destructive-border bg-destructive-surface text-destructive"}`}
+							className={`mb-3 rounded-md border px-4 py-3.5 text-xs leading-[1.55] ${bannerTones[banner.severity]}`}
 						>
 							<p className="mt-0 mb-[5px] font-mono text-[11px] font-medium tracking-[0.08em] uppercase">
-								{board.error.code.replaceAll("_", " ")}
+								{banner.label}
 							</p>
-							<p className="m-0">{board.error.message}</p>
-							<p className="mt-1.5 mb-0 text-muted-foreground">
-								{board.error.retrying ? "We’ll retry automatically." : "Contact your Cloud administrator for help."}
-							</p>
+							<p className="m-0">{banner.message}</p>
+							<p className="mt-1.5 mb-0 text-muted-foreground">{banner.note}</p>
 						</div>
 					) : null}
 					<div className="grid items-start gap-3 min-[901px]:grid-cols-2 min-[901px]:grid-rows-[auto_1fr]">

@@ -5,7 +5,12 @@ import { Boards, maxListedBoardsPerOwner } from "./boards.ts";
 import { CloudSecrets } from "./cloud-secrets.ts";
 import { validatePostgresUrl } from "./postgres-bootstrap.ts";
 import { Database } from "./database.ts";
-import type { CreateDashboardBoard, DashboardBoard, DashboardPhase } from "./dashboard-contract.ts";
+import type {
+	CreateDashboardBoard,
+	DashboardBoard,
+	DashboardErrorSeverity,
+	DashboardPhase,
+} from "./dashboard-contract.ts";
 import type { Deployment } from "./deployment.ts";
 import { Deployments } from "./deployments.ts";
 import type { Operation } from "./operation.ts";
@@ -38,53 +43,79 @@ const phase = (deployment: Deployment | undefined, operation: DashboardOperation
 	return deployment.state === "provisioned" ? "ready" : "provisioning";
 };
 
+// A stopped board never recovers on its own: an operator has to resolve the reported issue and
+// resume the recorded checkpoint.
+const stopped = (value: DashboardPhase) => value === "blocked" || value === "deletion_blocked";
+
+// Waiting for a provider observation to settle, including a recorded ambiguous mutation, is how a
+// healthy first boot looks; it spends no failure budget and needs no operator.
+const progressing = (code: string) => code === "provider_observation_pending" || code.endsWith("_ambiguous");
+
+// These codes stop provisioning the moment they are recorded, so they never read as progress even
+// if a later write has not moved the deployment yet.
+const definite = (code: string) =>
+	code === "provider_rejected" || code === "provider_drift" || code === "retry_exhausted";
+
+const severity = (value: DashboardPhase, operation: DashboardOperation, code: string): DashboardErrorSeverity =>
+	stopped(value) || operation.state === "failed" || definite(code)
+		? "error"
+		: progressing(code)
+			? "progress"
+			: "warning";
+
 const view = (
 	board: Board,
 	deployment: Deployment | undefined,
 	operation: DashboardOperation | undefined,
-): DashboardBoard => ({
-	id: board.id,
-	name: board.name,
-	hostname: operation?.kind !== "delete" && deployment?.state === "provisioned" ? deployment.hostname : null,
-	storage_engine: board.storage_engine,
-	region: deployment?.region ?? null,
-	volume_size_gb: deployment?.volume_size_gb ?? null,
-	phase: phase(deployment, operation),
-	checkpoint:
-		operation?.kind === "delete" || deployment?.state === "blocked"
-			? (operation?.checkpoint ?? "requested")
-			: (deployment?.state ?? operation?.checkpoint ?? "requested"),
-	operation: operation
-		? {
-				id: operation.id,
-				state: operation.state,
-				attempt: operation.attempt,
-				updated_at: operation.updated_at.toISOString(),
-				next_attempt_at: operation.state === "queued" ? operation.available_at.toISOString() : null,
-			}
-		: null,
-	created_at: board.created_at.toISOString(),
-	last_backup:
-		board.storage_engine === "sqlite" &&
-		deployment?.last_snapshot_id &&
-		deployment.last_snapshot_created_at &&
-		deployment.last_snapshot_digest &&
-		deployment.last_snapshot_retention_days !== null
+): DashboardBoard => {
+	const boardPhase = phase(deployment, operation);
+	return {
+		id: board.id,
+		name: board.name,
+		hostname: operation?.kind !== "delete" && deployment?.state === "provisioned" ? deployment.hostname : null,
+		storage_engine: board.storage_engine,
+		region: deployment?.region ?? null,
+		volume_size_gb: deployment?.volume_size_gb ?? null,
+		phase: boardPhase,
+		checkpoint:
+			operation?.kind === "delete" || deployment?.state === "blocked"
+				? (operation?.checkpoint ?? "requested")
+				: (deployment?.state ?? operation?.checkpoint ?? "requested"),
+		operation: operation
 			? {
-					id: deployment.last_snapshot_id,
-					created_at: deployment.last_snapshot_created_at.toISOString(),
-					digest: deployment.last_snapshot_digest,
-					retention_days: deployment.last_snapshot_retention_days,
+					id: operation.id,
+					state: operation.state,
+					attempt: operation.attempt,
+					updated_at: operation.updated_at.toISOString(),
+					next_attempt_at: operation.state === "queued" ? operation.available_at.toISOString() : null,
 				}
 			: null,
-	error: operation?.last_error_code
-		? {
-				code: operation.last_error_code,
-				message: operation.last_error_message ?? "Provisioning needs attention",
-				retrying: operation.state === "queued" || operation.state === "running",
-			}
-		: null,
-});
+		created_at: board.created_at.toISOString(),
+		last_backup:
+			board.storage_engine === "sqlite" &&
+			deployment?.last_snapshot_id &&
+			deployment.last_snapshot_created_at &&
+			deployment.last_snapshot_digest &&
+			deployment.last_snapshot_retention_days !== null
+				? {
+						id: deployment.last_snapshot_id,
+						created_at: deployment.last_snapshot_created_at.toISOString(),
+						digest: deployment.last_snapshot_digest,
+						retention_days: deployment.last_snapshot_retention_days,
+					}
+				: null,
+		error: operation?.last_error_code
+			? {
+					code: operation.last_error_code,
+					message: operation.last_error_message ?? "Provisioning needs attention",
+					// A stopped board keeps its last recorded code for diagnosis, but that code never
+					// promises another attempt: the operation state and the blocked deployment decide.
+					retrying: !stopped(boardPhase) && (operation.state === "queued" || operation.state === "running"),
+					severity: severity(boardPhase, operation, operation.last_error_code),
+				}
+			: null,
+	};
+};
 
 const make = Effect.gen(function* () {
 	const boards = yield* Boards;

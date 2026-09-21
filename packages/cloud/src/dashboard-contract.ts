@@ -10,6 +10,12 @@ export const DashboardPhase = Schema.Literals([
 ]);
 export type DashboardPhase = typeof DashboardPhase.Type;
 
+// `progress` is an expected condition while a board boots, such as a provider observation that is
+// not settled yet. `warning` is a real failure the worker is still retrying, and `error` is a state
+// that stopped and needs an operator.
+export const DashboardErrorSeverity = Schema.Literals(["progress", "warning", "error"]);
+export type DashboardErrorSeverity = typeof DashboardErrorSeverity.Type;
+
 export const DashboardBackup = Schema.Struct({
 	id: Schema.String,
 	created_at: Schema.String,
@@ -39,7 +45,14 @@ export const DashboardBoard = Schema.Struct({
 	),
 	created_at: Schema.String,
 	last_backup: Schema.NullOr(DashboardBackup),
-	error: Schema.NullOr(Schema.Struct({ code: Schema.String, message: Schema.String, retrying: Schema.Boolean })),
+	error: Schema.NullOr(
+		Schema.Struct({
+			code: Schema.String,
+			message: Schema.String,
+			retrying: Schema.Boolean,
+			severity: DashboardErrorSeverity,
+		}),
+	),
 });
 export type DashboardBoard = typeof DashboardBoard.Type;
 

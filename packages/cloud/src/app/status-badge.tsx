@@ -13,9 +13,9 @@ const colors: Record<DashboardPhase, string> = {
 	queued: "border-[#554f70] bg-accent-surface text-accent-foreground",
 	provisioning: "border-[#554f70] bg-accent-surface text-accent-foreground",
 	ready: "border-tag-border bg-tag-surface text-tag",
-	blocked: "border-warning-border bg-warning-surface text-warning",
-	deleting: "border-destructive-border bg-destructive-surface text-destructive",
-	deletion_blocked: "border-warning-border bg-warning-surface text-warning",
+	blocked: "border-destructive-border bg-destructive-surface text-destructive",
+	deleting: "border-[#554f70] bg-accent-surface text-accent-foreground",
+	deletion_blocked: "border-destructive-border bg-destructive-surface text-destructive",
 };
 
 export function StatusBadge({ phase }: { readonly phase: DashboardPhase }) {
