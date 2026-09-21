@@ -1,6 +1,6 @@
 # Why the server is shaped this way
 
-Each item is a failure the read and addressing paths exist to prevent. This is explanation, not a requirement; the owner's decisions are in [product intent](../../../docs/product-intent.md).
+Each item is a failure the read and addressing paths exist to prevent. This is explanation, not a requirement; the owner's decisions are in [decisions](../../../docs/decisions.md).
 
 1. **A cursor never names a position the server cannot yet page from.** A read takes its ceiling inside the transaction before reading any row, and a nested read inherits it; otherwise one listing can show a subtree at two paths. A row changed by an unpublished transaction keeps its prior image.
 2. **A cursor always advances,** even on an empty or fully filtered page; otherwise an idle poll rescans forever.

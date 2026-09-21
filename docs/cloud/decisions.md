@@ -3,7 +3,7 @@
 This records the choices carried forward from the Cloud design discussion, separately from
 [product intent](product-intent.md) and [research](research.md). These are design choices,
 not claims about shipped behavior, and not canonical: the canonical record is
-[the owner's own words](../product-intent.md). Research does not settle an unrecorded question.
+[the owner's own words](../decisions.md). Research does not settle an unrecorded question.
 
 The choices below are restored from commit `f18015a9` in [PR #30](https://github.com/CryogenicPlanet/chirp/pull/30).
 That is their document provenance; the earlier record does not include per-choice owner

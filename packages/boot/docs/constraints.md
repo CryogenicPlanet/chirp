@@ -1,6 +1,6 @@
 # Why boot is shaped this way
 
-Each item is a failure boot exists to prevent. This is explanation, not a requirement; the owner's decisions are in [product intent](../../../docs/product-intent.md). A **Gap** marks where the code does not yet meet the intent.
+Each item is a failure boot exists to prevent. This is explanation, not a requirement; the owner's decisions are in [decisions](../../../docs/decisions.md). A **Gap** marks where the code does not yet meet the intent.
 
 ## Writes and cutover
 
