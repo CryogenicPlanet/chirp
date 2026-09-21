@@ -145,7 +145,8 @@ const make = (settings: CloudAuthSettings) =>
 												model: "cloudInvitation",
 												where: [
 													{ field: "tokenDigest", value: tokenDigest },
-													{ field: "email", value: email, mode: "insensitive" },
+													{ field: "email", value: null, connector: "OR" },
+													{ field: "email", value: email, mode: "insensitive", connector: "OR" },
 													{ field: "expiresAt", value: after, operator: "gt" },
 												],
 											}),

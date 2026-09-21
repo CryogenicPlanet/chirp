@@ -14,6 +14,7 @@ import * as boardDeletion from "./migrations/0007_board_deletion.ts";
 import * as invitationLimits from "./migrations/0008_invitation_limits.ts";
 import * as postgresSecrets from "./migrations/0009_board_postgres_secrets.ts";
 import * as readableBoardSlugs from "./migrations/0010_readable_board_slugs.ts";
+import * as genericInvitations from "./migrations/0011_generic_invitations.ts";
 import { cloudMigrations } from "./schema.ts";
 
 export { CloudMigrationError } from "./migration-ledger.ts";
@@ -33,6 +34,7 @@ const migrations: ReadonlyArray<Migration> = [
 	invitationLimits,
 	postgresSecrets,
 	readableBoardSlugs,
+	genericInvitations,
 ];
 const receipts = Schema.decodeUnknownEffect(
 	Schema.Array(

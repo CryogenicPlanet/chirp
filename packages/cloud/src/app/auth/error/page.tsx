@@ -17,9 +17,9 @@ export default async function AuthErrorPage({
 			? "We couldn’t accept this invitation"
 			: "We couldn’t sign you in";
 	const description = invitationRequired
-		? "Chirp Cloud is invite-only. Open your invitation link to create an account, and use the email address it was sent to."
+		? "Chirp Cloud is invite-only. Open your invitation link to create an account."
 		: invitationInvalid
-			? "This invitation may have expired, already been used, or belong to a different email address. Open your latest invitation and use the account it was sent to, or ask for a new link."
+			? "This invitation has expired, was already used, or isn't valid for this account. Ask for a new link."
 			: "Your sign-in didn’t finish. Return to sign in and try again. If you’re creating an account, start from your invitation link.";
 
 	return (

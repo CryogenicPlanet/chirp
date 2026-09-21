@@ -16,7 +16,7 @@ const dependencies = () => ({
 		> => ({ ok: true, token: "a".repeat(43), expires_at: "2026-09-22T00:00:00.000Z" }),
 	),
 });
-const request = (body: unknown = { email: "person@example.com" }, origin: string | null = "https://cloud.test") =>
+const request = (body: unknown = {}, origin: string | null = "https://cloud.test") =>
 	new Request("http://localhost:3000/api/invitations", {
 		method: "POST",
 		headers: { "content-type": "application/json", ...(origin === null ? {} : { origin }) },
@@ -74,7 +74,7 @@ describe("invitation HTTP", () => {
 		const response = await makeInvitationHttp(deps).create(request());
 		expect(response.status).toBe(201);
 		expect(response.headers.get("set-cookie")).toBe("renewed=yes; HttpOnly");
-		expect(deps.invite).toHaveBeenCalledWith({ id: user.id, email: user.email }, "person@example.com");
+		expect(deps.invite).toHaveBeenCalledWith({ id: user.id, email: user.email });
 		expect(response.headers.get("cache-control")).toBe("no-store");
 		expect(await response.json()).toEqual({
 			url: `https://cloud.test/invite#${"a".repeat(43)}`,

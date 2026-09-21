@@ -14,7 +14,7 @@ export const invitationPlugin = {
 				},
 				email: {
 					type: "string",
-					required: true,
+					required: false,
 					index: true,
 				},
 				expiresAt: {

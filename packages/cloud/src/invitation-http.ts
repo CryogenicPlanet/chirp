@@ -39,7 +39,7 @@ const decodeRequest = async (request: Request) => {
 		}
 		const body = decodeJson(new TextDecoder().decode(bytes));
 		if (typeof body !== "object" || body === null || Array.isArray(body)) return null;
-		if (Object.keys(body).some((key) => key !== "email")) return null;
+		if (Object.keys(body).length > 0) return null;
 		return Schema.decodeUnknownSync(InvitationCreateRequest)(body);
 	} catch {
 		return null;
@@ -79,7 +79,7 @@ export const makeInvitationHttp = (dependencies: InvitationHttpDependencies) => 
 					return error(400, "invalid_request", headers);
 				const body = await decodeRequest(request);
 				if (!body) return error(400, "invalid_request", headers);
-				const result = await dependencies.invite({ id: user.id, email: user.email }, body.email);
+				const result = await dependencies.invite({ id: user.id, email: user.email });
 				if (!result.ok)
 					return error(
 						result.code === "invitation_rate_limited" ? 429 : result.code === "invitations_forbidden" ? 403 : 400,

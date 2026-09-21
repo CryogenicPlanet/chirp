@@ -8,7 +8,7 @@ import type { InvitationToken } from "./invitation-token.ts";
 
 export interface CloudInvitation {
 	readonly id: string;
-	readonly email: string;
+	readonly email: string | null;
 	readonly expires_at: Date;
 	readonly created_at: Date;
 }
@@ -40,10 +40,10 @@ const canIssue = (email: string) =>
 const make = Effect.gen(function* () {
 	const database = yield* Database;
 	const crypto = yield* Crypto.Crypto;
-	const issue = (email: string, validForMilliseconds: number, target: DatabaseClient = database) =>
+	const issue = (email: string | null, validForMilliseconds: number, target: DatabaseClient = database) =>
 		Effect.gen(function* () {
-			const normalizedEmail = email.trim().toLowerCase();
-			if (!Schema.is(InvitationEmail)(normalizedEmail))
+			const normalizedEmail = email === null ? null : email.trim().toLowerCase();
+			if (normalizedEmail !== null && !Schema.is(InvitationEmail)(normalizedEmail))
 				return yield* new InvalidInvitation({ message: "Invitation email is invalid" });
 			if (!Number.isSafeInteger(validForMilliseconds) || validForMilliseconds <= 0)
 				return yield* new InvalidInvitation({ message: "Invitation lifetime must be a positive integer" });
@@ -76,7 +76,7 @@ const make = Effect.gen(function* () {
 	return {
 		issue,
 		canIssue,
-		issueForOperator: (issuer: { readonly id: string; readonly email: string }, email: string) =>
+		issueForOperator: (issuer: { readonly id: string; readonly email: string }) =>
 			Effect.gen(function* () {
 				if (!(yield* canIssue(issuer.email))) return yield* new InvitationsForbidden();
 				const now = (yield* DateTime.nowAsDate).getTime();
@@ -96,7 +96,7 @@ const make = Effect.gen(function* () {
 							})
 							.returning({ count: cloudInvitationLimits.count });
 						if (claimed.length === 0) return yield* new InvitationRateLimited();
-						return yield* issue(email, 24 * 60 * 60 * 1_000, transaction);
+						return yield* issue(null, 24 * 60 * 60 * 1_000, transaction);
 					}),
 				);
 			}),

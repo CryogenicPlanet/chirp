@@ -113,9 +113,9 @@ export const makeDashboardRequestRuntime = (
 				),
 			),
 		canInvite: (email: string) => runtime.runPromise(Invitations.use((invitations) => invitations.canIssue(email))),
-		invite: (issuer: { readonly id: string; readonly email: string }, email: string) =>
+		invite: (issuer: { readonly id: string; readonly email: string }) =>
 			runtime.runPromise(
-				Invitations.use((invitations) => invitations.issueForOperator(issuer, email)).pipe(
+				Invitations.use((invitations) => invitations.issueForOperator(issuer)).pipe(
 					Effect.map((issued) => ({
 						ok: true as const,
 						token: issued.token,

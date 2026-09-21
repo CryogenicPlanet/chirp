@@ -6,6 +6,7 @@ import { Database, type DatabaseClient } from "../src/database.ts";
 import { CloudMigrationError } from "../src/migration-ledger.ts";
 import { migrateCloudDatabase, runCloudMigrations } from "../src/migrations.ts";
 import * as foundation from "../src/migrations/0001_foundation.ts";
+import * as cloudAuth from "../src/migrations/0002_cloud_auth.ts";
 import { cloudMigrations } from "../src/schema.ts";
 import { realPostgres, runFresh } from "./fixture.ts";
 
@@ -35,6 +36,7 @@ describe("cloud migrations", () => {
 					{ migration_id: 8, name: "invitation_limits", compatibleSchemaVersions: [] },
 					{ migration_id: 9, name: "board_postgres_secrets", compatibleSchemaVersions: [] },
 					{ migration_id: 10, name: "readable_board_slugs", compatibleSchemaVersions: [] },
+					{ migration_id: 11, name: "generic_invitations", compatibleSchemaVersions: [] },
 				]);
 			}),
 		);
@@ -60,7 +62,7 @@ describe("cloud migrations", () => {
 				yield* migrateCloudDatabase;
 				yield* database
 					.insert(cloudMigrations)
-					.values({ migration_id: 11, name: "unknown", compatible_schema_versions: [] });
+					.values({ migration_id: 12, name: "unknown", compatible_schema_versions: [] });
 				const result = yield* Effect.exit(migrateCloudDatabase);
 				expect(Exit.isFailure(result)).toBe(true);
 			}),
@@ -179,6 +181,22 @@ describe("cloud migrations", () => {
     VALUES ('00000000-0000-4000-8000-000000000001', 'owner', 'Original name', ${"a".repeat(32)}, 'sqlite')`;
 				yield* migrateCloudDatabase;
 				expect(yield* sql`SELECT name, slug FROM boards`).toEqual([{ name: "Original name", slug: "a".repeat(32) }]);
+			}),
+		);
+	});
+	test("preserves existing email restrictions when enabling generic invitations", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				yield* runCloudMigrations([foundation, cloudAuth]);
+				const sql = yield* SqlClient.SqlClient;
+				yield* sql`INSERT INTO cloud_invitations (id, token_digest, email, expires_at, created_at)
+				VALUES ('legacy-invite', ${"a".repeat(64)}, 'person@example.com', now() + interval '1 day', now())`;
+				const before = yield* sql`SELECT * FROM cloud_invitations`;
+				yield* migrateCloudDatabase;
+				expect(yield* sql`SELECT * FROM cloud_invitations`).toEqual(before);
+				yield* sql`INSERT INTO cloud_invitations (id, token_digest, email, expires_at, created_at)
+				VALUES ('generic-invite', ${"b".repeat(64)}, NULL, now() + interval '1 day', now())`;
+				expect(yield* sql`SELECT email FROM cloud_invitations WHERE id = 'generic-invite'`).toEqual([{ email: null }]);
 			}),
 		);
 	});

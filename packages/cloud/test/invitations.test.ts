@@ -38,7 +38,7 @@ describe("Invitations", () => {
 				expect(yield* invitations.canIssue(" Owner@Example.COM ")).toBe(true);
 				expect(yield* invitations.canIssue("someone@example.com")).toBe(false);
 				const rejected = yield* invitations
-					.issueForOperator({ id: "outsider", email: "someone@example.com" }, "person@example.com")
+					.issueForOperator({ id: "outsider", email: "someone@example.com" })
 					.pipe(Effect.exit);
 				expect(Exit.isFailure(rejected)).toBe(true);
 			}).pipe(
@@ -58,34 +58,25 @@ describe("Invitations", () => {
 				const database = yield* Database;
 				const issuer = { id: "operator", email: "owner@example.com" };
 				const attempts = yield* Effect.all(
-					Array.from({ length: 25 }, () =>
-						invitations.issueForOperator(issuer, "person@example.com").pipe(Effect.exit),
-					),
+					Array.from({ length: 25 }, () => invitations.issueForOperator(issuer).pipe(Effect.exit)),
 					{ concurrency: "unbounded" },
 				);
 				expect(attempts.filter(Exit.isSuccess)).toHaveLength(20);
 				expect(attempts.filter(Exit.isFailure)).toHaveLength(5);
 				const rows = yield* database.select().from(cloudInvitation);
 				expect(rows).toHaveLength(20);
+				expect(rows.every((row) => row.email === null)).toBe(true);
 				expect(rows.every((row) => row.expires_at.getTime() - row.created_at.getTime() === 86_400_000)).toBe(true);
 				yield* database.delete(cloudInvitation);
+				expect(Exit.isFailure(yield* invitations.issueForOperator(issuer).pipe(Effect.exit))).toBe(true);
 				expect(
-					Exit.isFailure(yield* invitations.issueForOperator(issuer, "person@example.com").pipe(Effect.exit)),
-				).toBe(true);
-				expect(
-					Exit.isSuccess(
-						yield* invitations
-							.issueForOperator({ ...issuer, id: "another-operator" }, "person@example.com")
-							.pipe(Effect.exit),
-					),
+					Exit.isSuccess(yield* invitations.issueForOperator({ ...issuer, id: "another-operator" }).pipe(Effect.exit)),
 				).toBe(true);
 				yield* database
 					.update(cloudInvitationLimits)
 					.set({ window_start: 0 })
 					.where(eq(cloudInvitationLimits.issuer_id, issuer.id));
-				expect(
-					Exit.isSuccess(yield* invitations.issueForOperator(issuer, "person@example.com").pipe(Effect.exit)),
-				).toBe(true);
+				expect(Exit.isSuccess(yield* invitations.issueForOperator(issuer).pipe(Effect.exit))).toBe(true);
 				const limit = yield* database
 					.select()
 					.from(cloudInvitationLimits)
@@ -100,20 +91,14 @@ describe("Invitations", () => {
 		);
 	});
 
-	test("invalid recipients roll back the issuance quota", async () => {
+	test("invalid legacy-bound recipients are rejected", async () => {
 		await runFresh(
 			Effect.gen(function* () {
 				yield* migrateCloudDatabase;
 				const invitations = yield* Invitations;
 				const database = yield* Database;
 				for (const email of ["invalid", "a@@example.com", `${"a".repeat(250)}@example.com`]) {
-					expect(
-						Exit.isFailure(
-							yield* invitations
-								.issueForOperator({ id: "operator", email: "owner@example.com" }, email)
-								.pipe(Effect.exit),
-						),
-					).toBe(true);
+					expect(Exit.isFailure(yield* invitations.issue(email, 60_000).pipe(Effect.exit))).toBe(true);
 				}
 				expect(yield* database.select().from(cloudInvitationLimits)).toHaveLength(0);
 				expect(yield* database.select().from(cloudInvitation)).toHaveLength(0);

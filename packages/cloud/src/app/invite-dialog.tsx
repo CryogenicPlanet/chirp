@@ -1,7 +1,7 @@
 "use client";
 
 import { Schema } from "effect";
-import { Check, Copy, Loader2, Mail, UserPlus } from "lucide-react";
+import { Check, Copy, Link2, Loader2, UserPlus } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { Button } from "./components/ui/button.tsx";
 import {
@@ -36,14 +36,13 @@ export function InviteDialog() {
 	const generate = async (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
 		if (pending) return;
-		const email = new FormData(event.currentTarget).get("email");
 		setPending(true);
 		setError(undefined);
 		try {
 			const response = await fetch("/api/invitations", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ email }),
+				body: "{}",
 			});
 			if (!response.ok) {
 				setError(
@@ -53,9 +52,7 @@ export function InviteDialog() {
 							? "You’ve created several invitations recently. Please wait before trying again."
 							: response.status === 403
 								? "Your account cannot create invitations. Contact your Cloud administrator."
-								: response.status === 400
-									? "Enter a valid email address and try again."
-									: "We couldn't create the invitation. Please try again.",
+								: "We couldn't create the invitation. Please try again.",
 				);
 				return;
 			}
@@ -99,7 +96,7 @@ export function InviteDialog() {
 			<DialogContent className="bg-card" showCloseButton={!pending}>
 				<DialogHeader className="text-left">
 					<div className="mb-2 flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
-						<Mail className="size-5" />
+						<Link2 className="size-5" />
 					</div>
 					<DialogTitle>Invite someone to Chirp Cloud</DialogTitle>
 					<DialogDescription>
@@ -142,20 +139,9 @@ export function InviteDialog() {
 							void generate(event);
 						}}
 					>
-						<div className="grid gap-2">
-							<label htmlFor="invite-email" className="font-medium">
-								Email address
-							</label>
-							<Input
-								id="invite-email"
-								name="email"
-								type="email"
-								placeholder="teammate@company.com"
-								required
-								disabled={pending}
-							/>
-							<p className="text-xs text-muted-foreground">They'll need to sign in with this email address.</p>
-						</div>
+						<p className="text-sm leading-relaxed text-muted-foreground">
+							Anyone with the link can join by signing in. Each link works once and expires after 24 hours.
+						</p>
 						<Button disabled={pending} type="submit">
 							{pending ? <Loader2 className="animate-spin motion-reduce:animate-none" /> : <UserPlus />}
 							{pending ? "Creating invitation…" : "Generate invitation"}
