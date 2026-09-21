@@ -337,7 +337,9 @@ const make = (settings: ProvisioningSettings) =>
 						Effect.gen(function* () {
 							const now = yield* Clock.currentTimeMillis;
 							const observationWait = error.code === "provider_observation_pending";
-							const edgeWait = error.code === "edge_unavailable";
+							// Both edge probes wait on the operation lifetime rather than the failure budget: a
+							// board answers /init only once its first boot has installed and built the app.
+							const edgeWait = error.code === "edge_unavailable" || error.code === "child_route_pending";
 							const ambiguityWait = isAmbiguity(error.code) || pending.size > 0;
 							const waitsWithoutFailure =
 								observationWait || edgeWait || ambiguityWait || error.code === "retry_exhausted";
