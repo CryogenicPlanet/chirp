@@ -1,5 +1,5 @@
 import { Effect, Option, Schema } from "effect";
-import type { ManagedRequestContext } from "../../../src/kernel/extension-api.ts";
+import type { ManagedRequestContext } from "../../../packages/server/src/kernel/extension-api.ts";
 
 const SearchInput = Schema.Struct({ query: Schema.String });
 const FetchInput = Schema.Struct({ id: Schema.String });

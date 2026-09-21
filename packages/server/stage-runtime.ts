@@ -7,8 +7,12 @@ Effect.gen(function* () {
 	const path = yield* Path.Path;
 	const server = yield* path.fromFileUrl(new URL(".", import.meta.url));
 	const target = path.join(server, "dist", "runtime-seed");
+	const pages = path.join(server, "dist", "pages-seed");
 	yield* fs.remove(target, { recursive: true, force: true });
+	yield* fs.remove(pages, { recursive: true, force: true });
 	yield* fs.copy(path.join(server, "src"), target);
+	yield* fs.copy(path.join(server, "pages"), pages);
+	yield* fs.copy(path.resolve(server, "../../examples/extensions/mcp"), path.join(pages, "tooling", "mcp"));
 	for (const launcher of ["main.ts", "start.ts"]) yield* fs.remove(path.join(target, launcher));
 	for (const file of ["package.json", "bun.lock"])
 		yield* fs.copyFile(path.join(server, "runtime", file), path.join(target, file));
