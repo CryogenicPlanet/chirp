@@ -369,6 +369,36 @@ describe("Provisioner", () => {
 		);
 	});
 
+	test("keeps unresolved edge mutations on the ambiguity polling floor", async () => {
+		const provider = makeFakeProvider();
+		provider.networking.state.failBefore.add("allocate_ip");
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				yield* (yield* Boards).request(request);
+				const provisioner = yield* Provisioner;
+				const first = yield* nextClaim("worker-1");
+				expect(yield* provisioner.run(first, "worker-1")).toBe("requeued");
+				const second = yield* nextClaim("worker-2");
+				expect(yield* provisioner.run(second, "worker-2")).toBe("requeued");
+				expect(provider.networking.state.calls.filter((call) => call === "allocate_ip")).toHaveLength(1);
+				const sql = yield* SqlClient.SqlClient;
+				expect(
+					yield* sql`SELECT ambiguous_mutations, failure_count, last_error_code,
+						available_at >= updated_at + interval '59 seconds' AS bounded
+						FROM board_operations WHERE id = ${first.id}`,
+				).toEqual([
+					{
+						ambiguous_mutations: ["edge_ip"],
+						failure_count: 0,
+						last_error_code: "provider_observation_pending",
+						bounded: true,
+					},
+				]);
+			}).pipe(Effect.provide(provisionerFor(provider))),
+		);
+	});
+
 	test("blocks an untracked service-bearing Machine without creating another", async () => {
 		const provider = makeFakeProvider();
 		provider.set.failCreateMachineBeforeMutation();

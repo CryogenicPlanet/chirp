@@ -324,8 +324,8 @@ const make = (settings: ProvisioningSettings) =>
 							const ageExceeded = now >= deadline;
 							if (error.retriable && !ageExceeded && (!countFailure || nextFailureCount < settings.maxFailures)) {
 								let delay: number;
-								if (observationWait) delay = settings.pollIntervalMs;
-								else if (ambiguityWait) delay = Math.max(60_000, settings.pollIntervalMs);
+								if (ambiguityWait) delay = Math.max(60_000, settings.pollIntervalMs);
+								else if (observationWait) delay = settings.pollIntervalMs;
 								else {
 									const ceiling = Math.min(300_000, 5_000 * 2 ** Math.max(0, nextFailureCount - 1));
 									delay = Math.floor(ceiling / 2 + (yield* Random.next) * (ceiling / 2));
