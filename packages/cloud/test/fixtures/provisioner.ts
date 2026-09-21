@@ -168,6 +168,9 @@ export const makeFakeProvider = () => {
 				}
 				const volume = { ...volumeFor(), name: input.name };
 				volumes.push(volume);
+				// Fly echoes the create request before the Volume is materialized: the response carries
+				// no fstype, and only a later observation reports it.
+				const echoed = { ...volume, fstype: "" };
 				if (failListVolumesAfterCreate) {
 					failListVolumesAfterCreate = false;
 					failListVolumes = true;
@@ -176,7 +179,7 @@ export const makeFakeProvider = () => {
 					failCreateVolume = false;
 					return yield* Effect.fail(flyUnavailable("create_volume"));
 				}
-				return volume;
+				return echoed;
 			}),
 		listMachines: (_name: string) =>
 			Effect.gen(function* () {

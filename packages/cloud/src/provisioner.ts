@@ -563,11 +563,12 @@ const make = (settings: ProvisioningSettings) =>
 											yield* journal.clear("volume_create");
 											return yield* issue("provider_rejected", false, "Fly rejected the Volume creation");
 										}
-										matching = Result.isSuccess(created)
-											? [created.success]
-											: (yield* observed(fly.listVolumes(deployment.app_name), beforeProvider)).filter(
-													(volume) => volume.name === deployment.volume_name && volume.region === deployment.region,
-												);
+										// Fly's create response echoes the request before the Volume is fully materialized
+										// and reports an empty fstype, so identity is asserted against a fresh observation
+										// instead of the mutation's own echo.
+										matching = (yield* observed(fly.listVolumes(deployment.app_name), beforeProvider)).filter(
+											(volume) => volume.name === deployment.volume_name && volume.region === deployment.region,
+										);
 									}
 									if (matching.length > 1)
 										return yield* issue("provider_drift", false, "Multiple Fly Volumes match this deployment");
