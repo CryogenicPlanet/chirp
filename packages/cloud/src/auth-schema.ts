@@ -67,7 +67,7 @@ export const cloudInvitation = pgTable(
 	{
 		id: text().primaryKey(),
 		token_digest: text().notNull().unique(),
-		email: text().notNull(),
+		email: text(),
 		expires_at: timestamp({ withTimezone: true }).notNull(),
 		created_at: timestamp({ withTimezone: true }).notNull(),
 	},

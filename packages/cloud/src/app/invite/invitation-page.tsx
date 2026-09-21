@@ -30,9 +30,7 @@ export function InvitationPage({
 					{token === null ? "This invitation link is invalid." : "Create your Chirp Cloud account."}
 				</h1>
 				<p className="mt-4 mb-6 text-[15px] leading-[1.55] text-muted-foreground">
-					{token === null
-						? "Ask the operator for a new invitation."
-						: "Use the verified email address this invitation was sent to."}
+					{token === null ? "Ask the operator for a new invitation." : "Sign in to join Chirp Cloud."}
 				</p>
 				{authUnavailable ? (
 					<p role="alert" className="text-xs text-destructive">
