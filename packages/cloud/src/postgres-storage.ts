@@ -1,4 +1,4 @@
-import { and, eq, gt, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, gt, isNotNull, isNull, sql } from "drizzle-orm";
 import { Config, Context, Data, Effect, Layer, Redacted } from "effect";
 import { CloudSecrets } from "./cloud-secrets.ts";
 import { Database } from "./database.ts";
@@ -174,7 +174,8 @@ const make = (allowLocal: boolean) =>
 								isNull(boardPostgresSecrets.runtime_ciphertext),
 							),
 						)
-						.for("update", { skipLocked: true })
+						.orderBy(asc(boardPostgresSecrets.board_id))
+						.for("update")
 						.limit(50);
 					for (const row of rows) {
 						if (!row.bootstrap_ciphertext) continue;

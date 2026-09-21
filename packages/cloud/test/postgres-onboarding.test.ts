@@ -1,4 +1,4 @@
-import { Effect, Option, Redacted } from "effect";
+import { Effect, Fiber, Option, Redacted } from "effect";
 import { describe, expect, test, vi } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { Client } from "pg";
@@ -171,6 +171,61 @@ test("converts completed historical credentials without changing operation histo
 			expect(new URL(runtime.bootUrl).password).toBe(payload.bootPassword);
 			expect(new URL(runtime.appUrl).password).toBe(payload.appPassword);
 			expect(Option.getOrThrow(yield* (yield* Operations).latest(board.id, "provision")).state).toBe("succeeded");
+		}),
+		Redacted.make(key),
+	);
+});
+
+test.skipIf(!realPostgres)("waits for a concurrent legacy-row lock instead of completing early", async () => {
+	const databaseUrl = process.env["CLOUD_TEST_DATABASE_URL"];
+	if (!databaseUrl) return;
+	const key = "e".repeat(64);
+	await runFresh(
+		Effect.gen(function* () {
+			yield* migrateCloudDatabase;
+			const board = yield* (yield* Dashboard).create("owner", {
+				...input,
+				idempotency_key: "locked-legacy",
+			});
+			const database = yield* Database;
+			yield* database
+				.update(boardPostgresSecrets)
+				.set({
+					prepared: true,
+					bootstrap_ciphertext: encryptLegacyBootstrap(
+						key,
+						board.id,
+						{ adminUrl: url, bootPassword: "a".repeat(64), appPassword: "b".repeat(64) },
+						"board",
+					),
+					runtime_ciphertext: null,
+					fly_secrets_version: 17,
+				})
+				.where(eq(boardPostgresSecrets.board_id, board.id));
+			const blocker = yield* Effect.promise(async () => {
+				const client = new Client({ connectionString: databaseUrl });
+				await client.connect();
+				await client.query("BEGIN");
+				await client.query("SELECT board_id FROM board_postgres_secrets WHERE board_id = $1 FOR UPDATE", [board.id]);
+				return client;
+			});
+			yield* Effect.acquireUseRelease(
+				Effect.succeed(blocker),
+				(client) =>
+					Effect.gen(function* () {
+						const conversion = yield* Effect.forkChild((yield* PostgresStorage).upgradeLegacy);
+						yield* Effect.sleep("100 millis");
+						expect(conversion.pollUnsafe()).toBeUndefined();
+						yield* Effect.promise(() => client.query("ROLLBACK"));
+						expect(yield* Fiber.join(conversion)).toBe(1);
+					}),
+				(client) =>
+					Effect.promise(async () => {
+						await client.query("ROLLBACK").catch(() => undefined);
+						await client.end().catch(() => undefined);
+					}),
+			);
+			expect((yield* database.select().from(boardPostgresSecrets))[0]?.bootstrap_ciphertext).toBe(null);
 		}),
 		Redacted.make(key),
 	);
