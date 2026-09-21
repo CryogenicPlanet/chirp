@@ -51,6 +51,27 @@ If provider inspection proves that a marked mutation never took effect, an opera
 
 Stop old workers before applying the provisioning-recovery, provider-mutation-marker, and retry-budget migrations and deploying the new worker. They map the removed secret checkpoint to `volume_created`, preserve IDs and data, remove the unused secret-version and desired-revision columns, conservatively mark active or failed provider work whose result the old worker did not prove, and add a failure counter without rewriting claim history. A marker may require operator inspection after upgrade, but the new worker will not risk duplicating that resource.
 
+## Deploying to Fly
+
+`Dockerfile`, `fly.toml` and `dockerignore` in this package deploy the control plane; the repository-root `fly.board-image.toml` publishes the board image it provisions. The image build needs the repository root as its context and a separate ignore file, because the root `.dockerignore` describes the board image and excludes this package's fonts:
+
+```sh
+flyctl deploy --config packages/cloud/fly.toml --dockerfile packages/cloud/Dockerfile \
+  --ignorefile packages/cloud/dockerignore --ha=false
+```
+
+`fly.toml` carries the values that identify one deployment: the app name, its region, the Fly organization boards are created in, and `BOARDS_DOMAIN`. Edit them to deploy a different instance. The machine keeps `auto_stop_machines = "off"` with one machine running because the provisioning worker reconciles boards between dashboard requests; a stopped control plane stops provisioning. `release_command` applies migrations before the new image serves.
+
+Everything else is a secret: `CLOUD_DATABASE_URL`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, the OAuth pairs, `CLOUD_OPERATOR_EMAILS`, `FLY_API_TOKEN`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID` and `CHIRP_IMAGE`. Set them with `flyctl secrets import` rather than on the command line. The Fly token wants organization scope, not the deploying user's own credential.
+
+`CHIRP_IMAGE` must be digest-pinned, so publish the board image first and record the digest the push reports:
+
+```sh
+flyctl deploy --config fly.board-image.toml --build-only --push --image-label board-<commit>
+```
+
+The control plane's own hostname needs a DNS-only `A`/`AAAA` pair at the addresses `flyctl ips list` reports and a certificate for it. Do not proxy those records: proxying breaks certificate validation and makes `CLOUD_CLIENT_IP_HEADER` report the proxy rather than the client.
+
 ## Managed board networking
 
 Set `CLOUDFLARE_ZONE_ID` to the active `chirp.wiki` zone's 32-character ID and `CLOUDFLARE_API_TOKEN` to a token scoped to that zone with **Zone / DNS / Edit** and **Zone / Zone / Read** permissions. Cloudflare must be authoritative for the zone; do not delegate `boards.chirp.wiki` to other nameservers. `BOARDS_DOMAIN` defaults to `boards.chirp.wiki`; another domain must be inside the configured zone. The worker verifies the zone before changing DNS. Keep both provider tokens in the control-plane environment, never in board Machine environment variables or the database. The Fly token must allow app creation, shared public IP allocation, and certificate management in `FLY_ORGANIZATION`, in addition to Machines and Volumes.

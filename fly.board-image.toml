@@ -1,0 +1,6 @@
+# Build-only app: holds the digest-pinned Chirp board image that Cloud provisions.
+app = "chirp-board-image"
+primary_region = "sjc"
+
+[build]
+dockerfile = "Dockerfile"
