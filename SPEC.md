@@ -413,8 +413,13 @@ less".
 | Storage capacity, backups, retained history | The boot package guide | `packages/boot/docs/storage.md` |
 | Diagnostics, request ids, failure surfaces | The server package guide | `packages/server/docs/observability.md` |
 
-There is deliberately no repository documentation directory beyond this. Material written
-to align an agent working on chirp belongs in `AGENTS.md` or beside the code it describes.
+Product intent, recorded decisions, and research may live in separate design documents.
+For Cloud, these are [product intent](docs/cloud/product-intent.md),
+[decisions](docs/cloud/decisions.md), and [research](docs/cloud/research.md). They describe
+different things and should not be collapsed into this spec. Intent does not claim shipped
+behavior; research does not settle a decision. This supersedes the blanket documentation
+placement rule recorded historically in section 9. Routine instructions for an agent working
+on chirp belong in `AGENTS.md` or beside the code they describe.
 Material a human needs before a board exists belongs in the README. Material an agent
 needs on a running board belongs on the board, where the agents who read it can fix it.
 
