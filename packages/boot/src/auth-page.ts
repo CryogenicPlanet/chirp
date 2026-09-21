@@ -13,6 +13,7 @@ export const authPage = (mode: "setup" | "login" | "code") => {
 	return `<!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${mode === "setup" ? "Set up" : mode === "code" ? "Add a passkey to" : "Sign in to"} chirp</title>
+<link rel="icon" href="/favicon.svg">
 <style>${authStyles}</style>
 <main class="auth-shell"><a class="brand" href="/">${chirpMark}chirp<span>.</span></a><h1>${heading}</h1>
 <p>${intro}</p>
