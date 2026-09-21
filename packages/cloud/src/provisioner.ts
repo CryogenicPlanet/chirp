@@ -58,6 +58,9 @@ const rejected = (error: FlyApiError) =>
 	// 'created'` until a Machine created with skip_launch has settled, which is ordinary
 	// progress, not a rejection.
 	![404, 408, 409, 412, 425, 429].includes(error.status);
+// Fly answers a start with 412 `failed_precondition` while the resource is in a state it
+// refuses to act on. The request was declined outright, so it cannot have taken effect.
+const precondition = (error: FlyApiError) => error.reason === "status" && error.status === 412;
 const isAmbiguity = (code: string | null) => code === "provider_ambiguous" || code?.endsWith("_ambiguous") === true;
 interface MutationJournal<E, R> {
 	readonly pending: Set<ProviderMutation>;
@@ -165,6 +168,14 @@ const make = (settings: ProvisioningSettings) =>
 					machine = yield* assertMachine(found.value, deployment);
 					if (machine.state !== "started") {
 						if (Result.isFailure(started)) {
+							// A refused precondition is Fly declining the request outright, so the start
+							// definitively did not take effect and the next attempt may repeat it. A transport
+							// failure is different: the request may still have been received, so it stays
+							// ambiguous.
+							if (precondition(started.failure)) {
+								yield* journal.clear("machine_start");
+								return yield* issue("provider_observation_pending", true, "Fly Machine is not startable yet");
+							}
 							return yield* issue("machine_start_ambiguous", true, "Fly Machine start is not observable");
 						}
 						yield* observed(

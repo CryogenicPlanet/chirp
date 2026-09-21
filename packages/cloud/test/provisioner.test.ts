@@ -705,11 +705,18 @@ describe("Provisioner", () => {
 				yield* migrateCloudDatabase;
 				yield* (yield* Boards).request(request);
 				const operation = Option.getOrThrow(yield* (yield* Operations).claim("worker-1", 30_000));
-				expect(yield* (yield* Provisioner).run(operation, "worker-1")).not.toBe("blocked");
+				const provisioner = yield* Provisioner;
+				expect(yield* provisioner.run(operation, "worker-1")).not.toBe("blocked");
 				const sql = yield* SqlClient.SqlClient;
-				const [row] = yield* sql`SELECT state, last_error_code FROM board_operations WHERE id = ${operation.id}`;
-				expect(row?.last_error_code).not.toBe("provider_rejected");
-				expect(row?.state).not.toBe("failed");
+				const [first] = yield* sql`SELECT state, last_error_code FROM board_operations WHERE id = ${operation.id}`;
+				expect(first?.last_error_code).not.toBe("provider_rejected");
+				expect(first?.state).not.toBe("failed");
+				// The refused start must not leave a marker that stops the next attempt retrying it.
+				const retried = yield* nextClaim("worker-2");
+				yield* provisioner.run(retried, "worker-2");
+				const [second] = yield* sql`SELECT state, last_error_code FROM board_operations WHERE id = ${operation.id}`;
+				expect(second?.last_error_code).not.toBe("machine_start_ambiguous");
+				expect(provider.calls.startMachine).toBeGreaterThan(1);
 			}).pipe(Effect.provide(provisionerFor(provider))),
 		);
 	});
