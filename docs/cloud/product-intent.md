@@ -3,8 +3,8 @@
 Chirp Cloud is the hosted way to get a Chirp board without operating a server.
 It removes infrastructure work; it does not take ownership of the board.
 
-This describes the intended experience, not a claim that every step is implemented.
-Implementation status belongs with the code and its validation.
+This describes the intended experience, not a claim that every step is implemented. It is
+not in the owner's words and is not canonical; [product intent](../product-intent.md) is.
 
 An invited person should be able to:
 

@@ -64,6 +64,8 @@ answered at that moment. Neither is a continuing health guarantee.
 
 ## Candidate Fly shape
 
+Not what shipped: each board app got its own shared public IPv4 and certificate instead of a router.
+
 The investigated shape was:
 
 - one Fly app and named custom 6PN network per board;

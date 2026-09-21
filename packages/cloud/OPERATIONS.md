@@ -50,7 +50,7 @@ Publish the board image first, from the repository root:
 flyctl deploy --config fly.board-image.toml --build-only --push --image-label board-<commit>
 ```
 
-Set `CHIRP_IMAGE` to the resulting **digest-pinned** image reference. Board images must include the immutable setup-code command at `/opt/comms/packages/boot/dist/setup-code.js` for dashboard setup codes to work. Older images require an image update; Cloud does not fall back to scraping logs. Codes expire after 15 minutes, replace previous setup challenges, and cannot be issued after the first board passkey exists.
+Set `CHIRP_IMAGE` to the resulting **digest-pinned** image reference. Board images must include the immutable setup-code command at `/opt/comms/packages/boot/dist/setup-code.js` for dashboard setup codes to work. A board keeps the image it was created with: changing `CHIRP_IMAGE` affects only new boards, and Cloud cannot move an existing board to a newer image. Codes expire after 15 minutes, replace previous setup challenges, and cannot be issued after the first board passkey exists.
 
 Import secrets with `flyctl secrets import --config packages/cloud/fly.toml`: `CLOUD_DATABASE_URL`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, the configured OAuth pairs, `CLOUD_OPERATOR_EMAILS`, `FLY_API_TOKEN`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, and `CHIRP_IMAGE`. Add `CLOUD_SECRETS_KEY` if offering PostgreSQL boards. Keep provider tokens only in Cloud's environment, never in board environments or the database. Use an organization-scoped Fly token with access to app creation, Machines, Volumes, shared public IPs, and certificates.
 

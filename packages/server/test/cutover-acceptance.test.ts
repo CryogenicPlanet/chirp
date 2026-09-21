@@ -174,7 +174,7 @@ it.skipIf(process.env.COMMS_CUTOVER_ACCEPTANCE !== "1")(
 		);
 		if (failure !== undefined) throw failure;
 		try {
-			// SPEC §7.7 step 6 permits retriable reads during candidate SQL health. Keep every refusal in the report.
+			// Retriable reads are permitted while the candidate's SQL health check runs. Keep every refusal in the report.
 			expect(records.filter((record) => record.error !== undefined)).toEqual([]);
 			expect(
 				records.filter(
