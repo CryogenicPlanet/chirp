@@ -6,12 +6,12 @@ import { Database } from "../src/database.ts";
 import { retryBlockedDeployment } from "../src/deployment-recovery.ts";
 import { Deployments } from "../src/deployments.ts";
 import { migrateCloudDatabase } from "../src/migrations.ts";
-import * as provisioningTemplateV2 from "../src/migrations/0012_provisioning_template_v2.ts";
+import * as provisioningTemplateV2 from "../src/migrations/0013_provisioning_template_v2.ts";
 import { Operations } from "../src/operations.ts";
 import { Provisioner } from "../src/provisioner.ts";
 import { deploymentSpec, legacyVolumeName } from "../src/provisioning-settings.ts";
 import { realPostgres, runFresh } from "./fixture.ts";
-import { makeFakeProvider, nextClaim, provisionerFor, request, settings } from "./fixtures/provisioner.ts";
+import { imageRef, makeFakeProvider, nextClaim, provisionerFor, request, settings } from "./fixtures/provisioner.ts";
 
 const prepare = (provider: ReturnType<typeof makeFakeProvider>) =>
 	Effect.gen(function* () {
@@ -119,7 +119,7 @@ describe("deployment recovery", () => {
 				let deployment = yield* deployments.ensure({
 					...lease,
 					spec: {
-						...deploymentSpec(board.slug, settings),
+						...deploymentSpec(board.slug, imageRef, settings),
 						volume_name: legacyVolumeName(board.slug),
 						volume_size_gb: 1,
 					},
@@ -158,7 +158,7 @@ describe("deployment recovery", () => {
 						operationId: retry.id,
 						leaseToken: retry.lease_token,
 						workerId: "recovery-worker",
-						spec: deploymentSpec(board.slug, settings),
+						spec: deploymentSpec(board.slug, imageRef, settings),
 					}),
 				).toMatchObject({
 					state: "app_created",

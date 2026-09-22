@@ -95,7 +95,7 @@ describe("cloud migrations", () => {
 			Effect.gen(function* () {
 				yield* migrateCloudDatabase;
 				const sql = yield* SqlClient.SqlClient;
-				yield* sql`DELETE FROM cloud_migrations WHERE migration_id >= 12`;
+				yield* sql`DELETE FROM cloud_migrations WHERE migration_id >= 13`;
 				yield* sql`UPDATE cloud_migrations SET compatible_schema_versions = ARRAY[]::integer[] WHERE migration_id = 9`;
 				yield* sql`ALTER TABLE board_postgres_secrets DROP CONSTRAINT board_postgres_secrets_stage_check`;
 				yield* sql`ALTER TABLE board_postgres_secrets ADD CONSTRAINT board_postgres_secrets_stage_check CHECK (
@@ -114,11 +114,12 @@ describe("cloud migrations", () => {
 				yield* migrateCloudDatabase;
 				expect(
 					yield* sql`SELECT migration_id, compatible_schema_versions FROM cloud_migrations
-						WHERE migration_id IN (9, 12, 13) ORDER BY migration_id`,
+						WHERE migration_id IN (9, 12, 13, 14) ORDER BY migration_id`,
 				).toEqual([
 					{ migration_id: 9, compatible_schema_versions: [] },
-					{ migration_id: 12, compatible_schema_versions: [] },
+					{ migration_id: 12, compatible_schema_versions: [11] },
 					{ migration_id: 13, compatible_schema_versions: [] },
+					{ migration_id: 14, compatible_schema_versions: [] },
 				]);
 				expect(
 					yield* sql`SELECT board_id, bootstrap_ciphertext, runtime_ciphertext, prepared, fly_secrets_version

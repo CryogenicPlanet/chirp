@@ -654,7 +654,7 @@ describe("Provisioner", () => {
 					spec: {
 						hostname: `${board.slug}.${settings.boardsDomain}`,
 						region: settings.region,
-						image_ref: settings.imageRef,
+						image_ref: imageRef,
 						app_name: `chirp-${board.slug}`,
 						network_name: `chirp-${board.slug}`,
 						volume_name: "chirp_data",
@@ -711,7 +711,7 @@ describe("Provisioner", () => {
 					spec: {
 						hostname: `${board.slug}.${settings.boardsDomain}`,
 						region: settings.region,
-						image_ref: settings.imageRef,
+						image_ref: imageRef,
 						app_name: `chirp-${board.slug}`,
 						network_name: `chirp-${board.slug}`,
 						volume_name: "chirp_data",
