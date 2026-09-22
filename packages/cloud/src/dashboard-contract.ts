@@ -1,5 +1,7 @@
 import { Schema } from "effect";
 
+export const DashboardReleaseChannel = Schema.Literals(["latest", "canary"]);
+
 export const DashboardPhase = Schema.Literals([
 	"queued",
 	"provisioning",
@@ -28,6 +30,7 @@ export const DashboardBoard = Schema.Struct({
 	name: Schema.String,
 	hostname: Schema.NullOr(Schema.String),
 	storage_engine: Schema.Literals(["sqlite", "postgres", "mysql"]),
+	channel: DashboardReleaseChannel,
 	region: Schema.NullOr(Schema.String),
 	volume_size_gb: Schema.NullOr(Schema.Int),
 	phase: DashboardPhase,
@@ -68,6 +71,7 @@ export const DashboardCreateRequest = Schema.Struct({
 	slug: Schema.optional(Schema.String),
 	name: Schema.String,
 	storage_engine: Schema.optional(Schema.Literals(["sqlite", "postgres"])),
+	channel: Schema.optional(DashboardReleaseChannel),
 	postgres_admin_url: Schema.optional(Schema.String),
 });
 export type DashboardCreateRequest = typeof DashboardCreateRequest.Type;

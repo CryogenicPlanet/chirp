@@ -44,15 +44,11 @@ Startup checks and applies migrations before serving. The server runs provisioni
 
 Edit [fly.toml](fly.toml) for your Cloud app, region, `FLY_ORGANIZATION`, and `BOARDS_DOMAIN`. Keep one Cloud machine running with automatic stopping disabled so background work can progress. The release command applies migrations before the new image serves.
 
-Publish the board image first, from the repository root:
+Merging to `master` deploys Cloud through the `Deploy Cloud` workflow once CI passes; it needs a `FLY_API_TOKEN` repository secret scoped to the Cloud app. Deploy by hand only to recover.
 
-```sh
-flyctl deploy --config fly.board-image.toml --build-only --push --image-label board-<commit>
-```
+Boards run the published board image, not an image Cloud builds. Each board is created from a release channel, `latest` or `canary`, chosen when it is created and fixed for its life. On the board's first provisioning pass, Cloud resolves the channel to one digest from `CHIRP_IMAGE_REPOSITORY` (default `ghcr.io/cryogenicplanet/chirp`) and records it on the deployment; later passes and restarts reuse that digest, so a release never changes an existing board. Upgrading boards is not yet implemented. A channel that has never been published cannot be resolved, so cut the first release before offering it. Board images must include the immutable setup-code command at `/opt/comms/packages/boot/dist/setup-code.js` for dashboard setup codes to work. A board created from an older image cannot issue setup codes, and Cloud does not fall back to scraping logs. Codes expire after 15 minutes, replace previous setup challenges, and cannot be issued after the first board passkey exists.
 
-Set `CHIRP_IMAGE` to the resulting **digest-pinned** image reference. Board images must include the immutable setup-code command at `/opt/comms/packages/boot/dist/setup-code.js` for dashboard setup codes to work. A board keeps the image it was created with: changing `CHIRP_IMAGE` affects only new boards, and Cloud cannot move an existing board to a newer image. Codes expire after 15 minutes, replace previous setup challenges, and cannot be issued after the first board passkey exists.
-
-Import secrets with `flyctl secrets import --config packages/cloud/fly.toml`: `CLOUD_DATABASE_URL`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, the configured OAuth pairs, `CLOUD_OPERATOR_EMAILS`, `FLY_API_TOKEN`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, and `CHIRP_IMAGE`. Add `CLOUD_SECRETS_KEY` if offering PostgreSQL boards. Keep provider tokens only in Cloud's environment, never in board environments or the database. Use an organization-scoped Fly token with access to app creation, Machines, Volumes, shared public IPs, and certificates.
+Import secrets with `flyctl secrets import --config packages/cloud/fly.toml`: `CLOUD_DATABASE_URL`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, the configured OAuth pairs, `CLOUD_OPERATOR_EMAILS`, `FLY_API_TOKEN`, `CLOUDFLARE_API_TOKEN`, and `CLOUDFLARE_ZONE_ID`. Add `CLOUD_SECRETS_KEY` if offering PostgreSQL boards. Keep provider tokens only in Cloud's environment, never in board environments or the database. Use an organization-scoped Fly token with access to app creation, Machines, Volumes, shared public IPs, and certificates.
 
 Build with the repository root as context and this package's ignore file; the root ignore file excludes assets Cloud needs:
 
@@ -85,7 +81,7 @@ PostgreSQL boards still need a managed volume for source and local data. Databas
 
 Back up the control-plane database before upgrading. Stop old workers before applying migrations that change worker behavior, then deploy the matching Cloud version. In particular, old workers do not understand migration 7's deletion state, migration 9's PostgreSQL secret checkpoint, or migration 10's readable slugs and volume names. Provisioning-recovery migrations can conservatively mark uncertain earlier provider writes for inspection.
 
-Migration receipts are immutable. An older image can run only when its known ledger matches and every newer migration explicitly declares compatibility with that image's schema version. Migration 9 is not rollback-compatible. Do not edit receipts or historical migrations to force startup. Recreate disposable development databases made from incompatible unmerged revisions rather than rewriting their history. Migration 11 permits generic invitations without changing existing email-bound links.
+Migration receipts are immutable. An older image can run only when its known ledger matches and every newer migration explicitly declares compatibility with that image's schema version. Migration 9 is not rollback-compatible. Do not edit receipts or historical migrations to force startup. Recreate disposable development databases made from incompatible unmerged revisions rather than rewriting their history. Migration 11 permits generic invitations without changing existing email-bound links. Migration 12 records each board's release channel; it is additive and declares schema 11 compatible.
 
 ## Recover blocked provisioning
 

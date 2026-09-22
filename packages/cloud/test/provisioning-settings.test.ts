@@ -5,7 +5,6 @@ import { deploymentSpec, type ProvisioningSettings, provisioningSettings } from 
 const environment = {
 	FLY_ORGANIZATION: "chirp",
 	FLY_REGION: "sjc",
-	CHIRP_IMAGE: `registry.example/chirp@sha256:${"a".repeat(64)}`,
 	BOARDS_DOMAIN: "boards.chirp.wiki",
 	FLY_VOLUME_SIZE_GB: "1",
 	PROVISIONING_MAX_FAILURES: "10",
@@ -19,10 +18,11 @@ const load = (values: Readonly<Record<string, string>>) =>
 		Effect.runPromiseExit,
 	);
 
+const imageRef = `registry.example/chirp@sha256:${"a".repeat(64)}`;
+
 const settings: ProvisioningSettings = {
 	organization: "chirp-org",
 	region: "sjc",
-	imageRef: `registry.example/chirp@sha256:${"a".repeat(64)}`,
 	boardsDomain: "boards.chirp.wiki",
 	volumeSizeGb: 1,
 	maxFailures: 10,
@@ -54,7 +54,7 @@ describe("provisioning settings", () => {
 
 describe("deploymentSpec", () => {
 	test("derives names Fly accepts for a full-length slug", () => {
-		const spec = deploymentSpec(slug, settings);
+		const spec = deploymentSpec(slug, imageRef, settings);
 		// Fly: "name only allows lowercase alphanumeric characters and underscores with at most 30 characters".
 		expect(spec.volume_name).toMatch(/^[a-z0-9_]{1,30}$/);
 		for (const name of [spec.app_name, spec.network_name, spec.machine_name]) {
@@ -65,8 +65,8 @@ describe("deploymentSpec", () => {
 	});
 
 	test("scopes the volume to the board's own app rather than the slug", () => {
-		const first = deploymentSpec(slug, settings);
-		const second = deploymentSpec("fedcba9876543210fedcba9876543210", settings);
+		const first = deploymentSpec(slug, imageRef, settings);
+		const second = deploymentSpec("fedcba9876543210fedcba9876543210", imageRef, settings);
 		expect(first.app_name).not.toBe(second.app_name);
 		expect(first.volume_name).toBe(second.volume_name);
 	});

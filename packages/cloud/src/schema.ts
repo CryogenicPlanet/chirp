@@ -17,6 +17,7 @@ import type { DeploymentState } from "./deployment.ts";
 import type { ProviderMutation } from "./operation.ts";
 
 const storageEngines = ["sqlite", "postgres", "mysql"] as const;
+const releaseChannels = ["latest", "canary"] as const;
 const operationKinds = ["provision", "backup", "delete"] as const;
 const operationStates = ["queued", "running", "succeeded", "failed"] as const;
 const cCollatedChar = customType<{
@@ -49,6 +50,7 @@ export const boards = pgTable(
 		name: text().notNull(),
 		slug: cCollatedSlug().notNull(),
 		storage_engine: text({ enum: storageEngines }).notNull(),
+		channel: text({ enum: releaseChannels }).notNull().default("latest"),
 		deletion_requested_at: timestamp({ withTimezone: true }),
 		deleted_at: timestamp({ withTimezone: true }),
 		created_at: timestamp({ withTimezone: true }).notNull().defaultNow(),
@@ -58,6 +60,7 @@ export const boards = pgTable(
 		check("boards_name_nonempty", sql`length(btrim(${table.name})) > 0`),
 		check("boards_slug_dns", sql`${table.slug} ~ '^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$' AND ${table.slug} !~ '^xn--'`),
 		check("boards_storage_engine_check", sql`${table.storage_engine} IN ('sqlite', 'postgres', 'mysql')`),
+		check("boards_channel_check", sql`${table.channel} IN ('latest', 'canary')`),
 		index("boards_owner_created").on(table.owner_id, table.created_at.desc(), table.id.desc()),
 	],
 );

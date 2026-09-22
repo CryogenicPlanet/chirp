@@ -3,12 +3,18 @@ import { type Redacted, Schema } from "effect";
 export const StorageEngine = Schema.Literals(["sqlite", "postgres", "mysql"]);
 export type StorageEngine = typeof StorageEngine.Type;
 
+// The published board image a board is created from. The channel is resolved to one image digest
+// when the board is first provisioned and never moves afterwards; upgrades are a separate concern.
+export const ReleaseChannel = Schema.Literals(["latest", "canary"]);
+export type ReleaseChannel = typeof ReleaseChannel.Type;
+
 export const Board = Schema.Struct({
 	id: Schema.String,
 	owner_id: Schema.String,
 	name: Schema.String,
 	slug: Schema.String,
 	storage_engine: StorageEngine,
+	channel: ReleaseChannel,
 	created_at: Schema.DateFromString,
 });
 export type Board = typeof Board.Type;
@@ -18,6 +24,7 @@ export const RequestBoard = Schema.Struct({
 	owner_id: Schema.String,
 	name: Schema.String,
 	storage_engine: StorageEngine,
+	channel: Schema.optional(ReleaseChannel),
 	requested_by: Schema.String,
 	idempotency_key: Schema.String,
 });

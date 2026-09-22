@@ -10,6 +10,7 @@ import {
 } from "./deployment.ts";
 import { Deployments, type DeploymentLease } from "./deployments.ts";
 import { EdgeProbe } from "./edge-probe.ts";
+import { ImageRegistry } from "./image-registry.ts";
 import { EdgeNetworkingError, ensureEdgeNetworking } from "./edge-networking.ts";
 import { type FlyApiError, FlyBoardApi } from "./fly-board-api.ts";
 import type { FlyApp, FlyMachine, FlyVolume } from "./fly-model.ts";
@@ -100,6 +101,7 @@ const make = (settings: ProvisioningSettings) =>
 		const fly = yield* FlyBoardApi;
 		const dns = yield* CloudflareDns;
 		const edge = yield* EdgeProbe;
+		const registry = yield* ImageRegistry;
 		const observed = <A, R, E, R2>(effect: Effect.Effect<A, FlyApiError, R>, before: Effect.Effect<unknown, E, R2>) =>
 			before.pipe(
 				Effect.andThen(
@@ -387,9 +389,25 @@ const make = (settings: ProvisioningSettings) =>
 								}),
 							),
 						);
+						// A board's channel resolves to a digest once, on its first provisioning pass. Later
+						// passes reuse the recorded digest, so a moving channel never changes an existing board.
+						const recorded = yield* deployments.get(board.id);
+						const imageRef = Option.isSome(recorded)
+							? recorded.value.image_ref
+							: yield* registry
+									.resolve(board.channel)
+									.pipe(
+										Effect.mapError((error) =>
+											issue(
+												"provider_unavailable",
+												true,
+												`The ${error.channel} board image could not be resolved from the registry`,
+											),
+										),
+									);
 						let deployment = yield* deployments.ensure({
 							...lease,
-							spec: deploymentSpec(board.slug, settings),
+							spec: deploymentSpec(board.slug, imageRef, settings),
 						});
 						if (
 							deployment.state !== "provisioned" &&

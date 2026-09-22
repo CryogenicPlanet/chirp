@@ -11,16 +11,20 @@ For boards hosted by Chirp Cloud, see [operating Chirp Cloud](../packages/cloud/
 ## The container
 
 ```sh
-docker build --tag chirp:local .
 docker run --name chirp --restart unless-stopped \
   --read-only --tmpfs /tmp --cap-drop ALL \
   --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
   --cap-add SETUID --cap-add SETGID --cap-add KILL --cap-add SETPCAP \
-  --publish 127.0.0.1:8080:8080 --volume chirp:/data chirp:local
+  --publish 127.0.0.1:8080:8080 --volume chirp:/data ghcr.io/cryogenicplanet/chirp:latest
 ```
 
 Open `/setup` and use the code from `docker logs chirp`. The named volume holds the board;
 keep it when you replace the container.
+
+`:latest` is the current release. `:canary` is the newest build from `master`, published
+when a change merges; it is less tested. Pin a version such as `:v0.1.0`, or an image
+digest, to get the same image on every start. To run a checkout instead, build it with
+`docker build --tag chirp:local .` and run `chirp:local` in place of the published image.
 
 The image sets `HOST=0.0.0.0`, `PORT=8080`, `DATA_DIR=/data`. If you change the container's
 port, change the published container-side port to match. If only the host-side port
@@ -76,9 +80,9 @@ the board itself runs on localhost.
 ## Updating
 
 The first start copies the app and page seeds onto the volume. Later starts keep what is
-installed there. **Rebuilding the image updates the immutable launcher; it does not
-overwrite the editable app or pages.** Update a running board through its edit API; editing
-files on the volume directly does not deploy them.
+installed there. **A newer image updates the immutable launcher; it does not overwrite
+the editable app or pages.** Update a running board through its edit API; editing files on
+the volume directly does not deploy them.
 
 Each generation prepares its dependencies and UI assets from the installed app's own
 manifest and lockfile, so dependency installation needs registry access. Declare extension
@@ -308,15 +312,13 @@ costs.
 
 ## Railway
 
-The repository's `railway.toml` builds this Dockerfile and restarts it on failure. That
-file cannot declare volumes or variables, so create those with the Railway CLI. The image
-has no `VOLUME` instruction because Railway refuses to build one. Railway has deprecated
-`railway.toml` in favour of `.railway/railway.ts`; the file keeps working until 2026-12-01.
+Run the published image. Railway cannot declare volumes or variables for a service, so create
+those with the Railway CLI. The image has no `VOLUME` instruction because Railway refuses one.
 
 ```sh
 railway init --name chirp
 railway add --database postgres
-railway add --service chirp
+railway add --service chirp --image ghcr.io/cryogenicplanet/chirp:latest
 railway service link chirp
 railway volume add --mount-path /data
 railway domain --service chirp --port 8080
@@ -384,11 +386,18 @@ verified TLS, use a provider whose certificate is publicly trusted.
 ### Deploying
 
 ```sh
-railway up --service chirp
+railway redeploy --service chirp
 railway logs --service chirp
 ```
 
-The logs print the setup code. `.railwayignore` keeps reference repositories and local data
+The logs print the setup code. The service pulls the image tag it was created with, so a
+redeploy of `:latest` picks up the current release; see [Updating](#updating) for what that
+changes on a running board.
+
+To deploy a checkout instead, create the service without `--image` and run
+`railway up --service chirp`. The repository's `railway.toml` builds the Dockerfile and
+restarts it on failure; Railway has deprecated it in favour of `.railway/railway.ts`, and it
+keeps working until 2026-12-01. `.railwayignore` keeps reference repositories and local data
 out of the upload. Anchor any rule you add to the repository root, as in `/docs/`: an
 unanchored `docs/` also strips `packages/*/docs`, which the image build copies.
 

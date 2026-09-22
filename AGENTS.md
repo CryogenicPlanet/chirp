@@ -24,3 +24,10 @@
 - repos/ holds upstream sources to learn style from, never to import: `effect/` for how to write good Effect, and `pi-mono/` for how to build minimal, extendable abstractions. Starting points and revisions are in repos/README.md.
 - Flag disagreements with product intent or a documented constraint rather than silently changing behavior.
 - Multiple agents can share this checkout. Stage explicit paths; never reset, clean, stash, or discard unrelated changes. Commit only when asked.
+
+# Releasing
+
+- The board image (boot and the seed app, one version) is published to `ghcr.io/cryogenicplanet/chirp`. Only the `Release canary` workflow builds it: once `master`'s CI passes it publishes `:sha-<commit>` and moves `:canary`. Merging to `master` is the canary release.
+- Promote to `:latest` by pushing a `vMAJOR.MINOR.PATCH` tag on a commit already on `master`. `Release latest` retags that commit's canary build and never rebuilds, so the released image is the one that ran as canary. It refuses a commit without a canary build.
+- Never build or push a board image by hand, and never point Cloud or a deployment at an image built from a branch. That is how an image ships without a fix its branch never contained.
+- Cloud deploys itself from `master` through `Deploy Cloud`. Releasing a board image and upgrading existing boards are separate: a board keeps the digest it was created with.

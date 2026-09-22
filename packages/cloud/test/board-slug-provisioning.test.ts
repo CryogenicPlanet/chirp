@@ -8,7 +8,15 @@ import { PostgresStorage } from "../src/postgres-storage.ts";
 import { Provisioner } from "../src/provisioner.ts";
 import { deploymentSpec } from "../src/provisioning-settings.ts";
 import { runFresh } from "./fixture.ts";
-import { appFor, makeFakeProvider, nextClaim, provisionerFor, request, settings } from "./fixtures/provisioner.ts";
+import {
+	appFor,
+	imageRef,
+	makeFakeProvider,
+	nextClaim,
+	provisionerFor,
+	request,
+	settings,
+} from "./fixtures/provisioner.ts";
 
 describe("readable slug provider ownership", () => {
 	test("refuses an existing matching App before staging PostgreSQL secrets or mutating Fly", async () => {
@@ -23,7 +31,10 @@ describe("readable slug provider ownership", () => {
 				if (!operation.lease_token) return yield* Effect.die("Missing lease");
 				const lease = { operationId: operation.id, leaseToken: operation.lease_token, workerId: "worker" };
 				const deployments = yield* Deployments;
-				const deployment = yield* deployments.ensure({ ...lease, spec: deploymentSpec(board.slug, settings) });
+				const deployment = yield* deployments.ensure({
+					...lease,
+					spec: deploymentSpec(board.slug, imageRef, settings),
+				});
 				yield* deployments.transition({
 					...lease,
 					expectedCheckpoint: "requested",

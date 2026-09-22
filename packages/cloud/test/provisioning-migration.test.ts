@@ -8,7 +8,7 @@ import * as cloudAuth from "../src/migrations/0002_cloud_auth.ts";
 import * as flyProvisioning from "../src/migrations/0003_fly_provisioning.ts";
 import { cloudMigrations } from "../src/schema.ts";
 import { runFresh } from "./fixture.ts";
-import { request, settings } from "./fixtures/provisioner.ts";
+import { imageRef, request, settings } from "./fixtures/provisioner.ts";
 
 const legacy = Effect.gen(function* () {
 	const sql = yield* SqlClient.SqlClient;
@@ -55,7 +55,7 @@ describe("provisioning recovery migration", () => {
 					yield* sql`INSERT INTO board_deployments (board_id, state, hostname, storage_engine, region, image_ref,
 					app_name, network_name, volume_name, machine_name, volume_size_gb, app_id, volume_id,
 					last_snapshot_id, last_snapshot_digest, last_snapshot_created_at, last_snapshot_retention_days)
-					VALUES (${board.id}, ${state}, ${board.slug}, 'sqlite', 'sjc', ${settings.imageRef},
+					VALUES (${board.id}, ${state}, ${board.slug}, 'sqlite', 'sjc', ${imageRef},
 					${board.slug}, ${board.slug}, ${board.slug}, ${board.slug}, 1, 'app-id', ${board.slug},
 					'snapshot-id', 'snapshot-digest', '2026-09-20T12:00:00Z', 5)`;
 					yield* sql`UPDATE board_operations SET checkpoint = 'runtime_secrets_written', attempt = 3,
@@ -112,7 +112,7 @@ describe("provisioning recovery migration", () => {
 				const board = yield* legacyBoard("legacy-running");
 				yield* sql`INSERT INTO board_deployments (board_id, state, hostname, storage_engine, region, image_ref,
 					app_name, network_name, volume_name, machine_name, volume_size_gb, app_id, volume_id, machine_id)
-					VALUES (${board.id}, 'machine_started', ${board.slug}, 'sqlite', 'sjc', ${settings.imageRef},
+					VALUES (${board.id}, 'machine_started', ${board.slug}, 'sqlite', 'sjc', ${imageRef},
 					${board.slug}, ${board.slug}, ${board.slug}, ${board.slug}, 1, 'app-id', 'volume-id', 'machine-id')`;
 				yield* sql`UPDATE board_operations SET checkpoint = 'machine_started', state = 'running',
 					lease_token = '00000000-0000-4000-8000-000000000001', lease_owner = 'stopped-old-worker',
@@ -135,7 +135,7 @@ describe("provisioning recovery migration", () => {
 				const board = yield* legacyBoard("legacy-retry");
 				yield* sql`INSERT INTO board_deployments (board_id, state, hostname, storage_engine, region, image_ref,
 					app_name, network_name, volume_name, machine_name, volume_size_gb, app_id, volume_id)
-					VALUES (${board.id}, 'blocked', ${board.slug}, 'sqlite', 'sjc', ${settings.imageRef},
+					VALUES (${board.id}, 'blocked', ${board.slug}, 'sqlite', 'sjc', ${imageRef},
 					${board.slug}, ${board.slug}, ${board.slug}, ${board.slug}, 1, 'app-id', 'volume-id')`;
 				yield* sql`UPDATE board_operations SET checkpoint = 'runtime_secrets_written', state = 'failed',
 					last_error_code = 'provider_rejected', last_error_message = 'legacy readback rejected',

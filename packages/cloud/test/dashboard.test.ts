@@ -8,7 +8,7 @@ import { migrateCloudDatabase } from "../src/migrations.ts";
 import { Operations } from "../src/operations.ts";
 import { runFresh } from "./fixture.ts";
 import { deploymentSpec } from "../src/provisioning-settings.ts";
-import { settings } from "./fixtures/provisioner.ts";
+import { imageRef, settings } from "./fixtures/provisioner.ts";
 
 const sqlRequeue = (boardId: string, code: string) =>
 	Effect.gen(function* () {
@@ -122,7 +122,7 @@ describe("Dashboard", () => {
 					operationId: operation.id,
 					leaseToken: operation.lease_token,
 					workerId: "worker-1",
-					spec: deploymentSpec(stored.slug, settings),
+					spec: deploymentSpec(stored.slug, imageRef, settings),
 				});
 				const sql = yield* SqlClient.SqlClient;
 				yield* sql`UPDATE board_deployments SET state = 'blocked' WHERE board_id = ${board.id}`;
@@ -206,7 +206,7 @@ describe("Dashboard", () => {
 					operationId: operation.id,
 					leaseToken: operation.lease_token,
 					workerId: "worker-1",
-					spec: deploymentSpec(stored.slug, settings),
+					spec: deploymentSpec(stored.slug, imageRef, settings),
 				});
 				const sql = yield* SqlClient.SqlClient;
 				yield* sql`UPDATE board_deployments SET state = 'blocked' WHERE board_id = ${board.id}`;
@@ -251,7 +251,7 @@ describe("Dashboard", () => {
 					operationId: operation.id,
 					leaseToken: operation.lease_token,
 					workerId: "worker-1",
-					spec: deploymentSpec(stored.slug, settings),
+					spec: deploymentSpec(stored.slug, imageRef, settings),
 				});
 				yield* operations.requeue({
 					id: operation.id,
