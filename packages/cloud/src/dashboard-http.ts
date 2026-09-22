@@ -56,7 +56,11 @@ const decodeCreateRequest = async (request: Request) => {
 		}
 		const body = decodeJson(new TextDecoder().decode(bytes));
 		if (typeof body !== "object" || body === null || Array.isArray(body)) return null;
-		if (Object.keys(body).some((key) => !["name", "slug", "storage_engine", "postgres_admin_url"].includes(key)))
+		if (
+			Object.keys(body).some(
+				(key) => !["name", "slug", "storage_engine", "channel", "postgres_admin_url"].includes(key),
+			)
+		)
 			return null;
 		return Schema.decodeUnknownSync(DashboardCreateRequest)(body);
 	} catch {

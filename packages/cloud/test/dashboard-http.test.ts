@@ -196,6 +196,29 @@ describe("dashboard HTTP", () => {
 		expect(await response.json()).toEqual({ board });
 	});
 
+	test("accepts the release channel the create dialog sends", async () => {
+		const deps = dependencies();
+		const response = await makeDashboardHttp(deps).create(
+			request("/api/boards", {
+				method: "POST",
+				headers: {
+					origin: "https://cloud.chirp.wiki",
+					"content-type": "application/json",
+					"idempotency-key": "canary-key",
+				},
+				body: JSON.stringify({ name: "Board", slug: "board", storage_engine: "sqlite", channel: "canary" }),
+			}),
+		);
+		expect(response.status).toBe(201);
+		expect(deps.create).toHaveBeenCalledWith("user-1", {
+			name: "Board",
+			slug: "board",
+			storage_engine: "sqlite",
+			channel: "canary",
+			idempotency_key: "canary-key",
+		});
+	});
+
 	test("maps idempotency conflicts and runtime failures to typed, redacted errors", async () => {
 		const conflict = dependencies();
 		conflict.create.mockResolvedValueOnce({ ok: false, code: "idempotency_conflict" });
