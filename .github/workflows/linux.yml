@@ -46,12 +46,12 @@ jobs:
         run: bun run check:invariants
 
   verify:
-    name: Tests (${{ matrix.shard }}/2)
+    name: Tests (${{ matrix.shard }}/6)
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4, 5, 6]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -82,7 +82,7 @@ jobs:
         run: bun run build
       - name: Boot, server and storage recovery tests
         # Each file launches Bun processes; four workers exceeded measured fixture budgets on this runner.
-        run: bun run test packages/boot/test packages/server/test packages/storage/test --maxWorkers=2 --shard=${{ matrix.shard }}/2 --reporter=verbose
+        run: bun run test packages/boot/test packages/server/test packages/storage/test --maxWorkers=2 --shard=${{ matrix.shard }}/6 --reporter=verbose
 
   cloud:
     name: Cloud PostgreSQL tests
