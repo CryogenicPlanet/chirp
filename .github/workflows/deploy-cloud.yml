@@ -1,11 +1,11 @@
 name: Deploy Cloud
 
-# The Cloud control plane follows master. Once master's CI passes, deploy it to Fly. The release
+# The Cloud control plane follows master. Once master's Cloud workflow passes, deploy it to Fly. The release
 # command applies migrations before the new image serves, and a failed migration aborts the deploy
 # without replacing the running machine. Board images are released separately and are not built here.
 on:
   workflow_run:
-    workflows: [Linux]
+    workflows: [Cloud]
     types: [completed]
     branches: [master]
 
