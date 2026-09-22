@@ -82,11 +82,14 @@ const run = Effect.gen(function* () {
 		const replacementCode = /code ([A-F0-9]{16})$/.exec(replacement)?.[1];
 		assert.ok(replacementCode);
 		yield* fails(auth.startSetup(second.code), "setup_code_invalid");
-		yield* auth.startSetup(replacementCode);
+		const replacementCeremony = yield* auth.startSetup(replacementCode);
 		yield* fails(
 			auth.finishSetup(finalMoment.id, device.registration(finalMoment.options.challenge)),
 			"challenge_invalid",
 		);
+		yield* auth.finishSetup(replacementCeremony.id, device.registration(replacementCeremony.options.challenge));
+		assert.equal((yield* sql`SELECT id FROM passkeys`).length, 1);
+		yield* sql`DELETE FROM passkeys`;
 		const loggedAfterExpiry = output.length;
 		const crossing = yield* auth.mintSetupCode;
 		now = crossing.expires_at - 4;

@@ -1,9 +1,13 @@
 import { Effect, Layer, Redacted, Result } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
-import { expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { FlySetupApi, flySetupApiLayer } from "../src/fly-setup-api.ts";
 
+afterEach(() => vi.restoreAllMocks());
+
 test("fixed exec argv, strict ephemeral payload and sanitized provider failures", async () => {
+	const now = Date.parse("2026-01-01T00:00:00.000Z");
+	vi.spyOn(Date, "now").mockReturnValue(now);
 	for (const mode of [
 		"ok",
 		"closed",
@@ -17,7 +21,6 @@ test("fixed exec argv, strict ephemeral payload and sanitized provider failures"
 		"near-missing-script",
 		"status",
 	] as const) {
-		const now = Date.now();
 		const stdout =
 			mode === "closed"
 				? { error: "setup_closed" }
