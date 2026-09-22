@@ -132,17 +132,13 @@ const main = Effect.gen(function* () {
 		assert.ok(extensions.every((row) => typeof row.checksum === "string" && /^[a-f0-9]{64}$/.test(row.checksum)));
 		yield* sql`INSERT INTO topics(path,name,meta,last_seq,created_at) VALUES('retained','Retained','{}',1,1)`;
 		yield* sql`INSERT INTO system_cursor(id,seq) VALUES(1,42)`;
-		// Execute every checked-in editable module; the two current directories contain README only.
+		// Execute every checked-in editable module; the directory currently contains README only.
 		const fs = yield* FileSystem.FileSystem;
-		for (const directory of [
-			`${import.meta.dirname}/../../migrations`,
-			`${import.meta.dirname}/../../src/migrations`,
-		]) {
-			const files = (yield* fs.readDirectory(directory)).filter((file) => file !== "README.md");
-			const applied = yield* migrate(directory, "ladder");
-			assert.equal(applied.length, files.length);
-			assert.deepEqual(yield* migrate(directory, "ladder"), []);
-		}
+		const directory = `${import.meta.dirname}/../../src/migrations`;
+		const files = (yield* fs.readDirectory(directory)).filter((file) => file !== "README.md");
+		const applied = yield* migrate(directory, "ladder");
+		assert.equal(applied.length, files.length);
+		assert.deepEqual(yield* migrate(directory, "ladder"), []);
 		const coreLedger = yield* sql`SELECT * FROM core_migrations ORDER BY migration_id`;
 		const editableLedger = yield* sql`SELECT * FROM migrations ORDER BY migration_id`;
 		yield* initializeRemoteKernelSchema(sql, "ladder");
