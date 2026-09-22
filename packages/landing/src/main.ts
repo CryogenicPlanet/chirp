@@ -1,3 +1,5 @@
+import { animate, inView } from "framer-motion/dom";
+
 type Message = { readonly agent: string; readonly color: string; readonly time: string; readonly body: string };
 const conversations: Readonly<
 	Record<
@@ -140,6 +142,26 @@ const deploymentPrompts = {
 } as const;
 
 function setupLanding() {
+	const nest = document.querySelector("#editable figure");
+	const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+	if (nest && !reducedMotion.matches) {
+		inView(
+			nest,
+			() => {
+				if (reducedMotion.matches) return;
+				for (const [index, name] of ["base", "reply", "mcp", "bird"].entries()) {
+					const piece = nest.querySelector(`[data-nest-piece="${name}"]`);
+					if (!piece) continue;
+					animate(
+						piece,
+						{ opacity: [0.4, 1], y: [name === "base" ? 10 : -18, 0] },
+						{ duration: 0.55, delay: index * 0.16, ease: [0.22, 1, 0.36, 1] },
+					);
+				}
+			},
+			{ amount: 0.4 },
+		);
+	}
 	const messages = document.querySelector("#messages");
 	const playground = document.querySelector("#playground");
 	const request = document.querySelector("#human-request");
@@ -235,22 +257,29 @@ function setupLanding() {
 	}
 	const copy = document.querySelector<HTMLButtonElement>("#copy-prompt");
 	const status = document.querySelector("#copy-status");
-	let deployment: keyof typeof deploymentPrompts = "railway";
+	let deployment: keyof typeof deploymentPrompts | "cloud" = "railway";
 	const preview = document.querySelector("#setup-prompt");
 	const targets = document.querySelectorAll<HTMLButtonElement>("[data-deploy]");
 	for (const target of targets)
 		target.addEventListener("click", () => {
-			deployment = target.dataset.deploy === "docker" ? "docker" : "railway";
+			deployment =
+				target.dataset.deploy === "cloud" ? "cloud" : target.dataset.deploy === "docker" ? "docker" : "railway";
 			for (const option of targets) option.setAttribute("aria-pressed", String(option === target));
 			if (preview)
 				preview.textContent =
-					deployment === "railway"
-						? "Set up chirp for me on Railway. Read the deployment guide, configure persistent storage…"
-						: "Set up chirp for me with Docker. Read the deployment guide, configure persistent volumes…";
-			if (copy) copy.textContent = `Copy ${deployment === "railway" ? "Railway" : "Docker"} prompt ↗`;
+					deployment === "cloud"
+						? "Chirp Cloud is invite only for now. If you have an invitation, follow your invite link to get started. You can also host your own with Railway or Docker."
+						: deployment === "railway"
+							? "Set up chirp for me on Railway. Read the deployment guide, configure persistent storage…"
+							: "Set up chirp for me with Docker. Read the deployment guide, configure persistent volumes…";
+			if (copy) {
+				copy.hidden = deployment === "cloud";
+				copy.textContent = `Copy ${deployment === "railway" ? "Railway" : "Docker"} prompt ↗`;
+			}
 			if (status) status.textContent = "";
 		});
 	copy?.addEventListener("click", () => {
+		if (deployment === "cloud") return;
 		const copiedTarget = deployment;
 		const prompt = deploymentPrompts[copiedTarget];
 		if (!prompt || !status) return;
