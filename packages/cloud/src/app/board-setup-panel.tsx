@@ -102,94 +102,99 @@ export function BoardSetupPanel({ boardId, hostname }: { readonly boardId: strin
 	};
 
 	return (
-		<section aria-labelledby="board-setup" className="mb-4 rounded-md border border-primary/30 bg-primary/5 p-5">
-			<p className="m-0 font-mono text-[11px] font-medium tracking-[0.08em] text-primary uppercase">Your next step</p>
-			<h2 id="board-setup" className="mt-2 mb-0 text-xl font-normal tracking-tight">
-				{closed ? "Your board is already set up" : "Make this board yours"}
-			</h2>
-			<p className="mt-2 mb-4 max-w-xl text-sm leading-relaxed text-muted-foreground">
-				{closed
-					? "Sign in to your board with its passkey to continue."
-					: "Copy a private setup code, then open onboarding to add your board passkey. Your code is valid for 15 minutes."}
-			</p>
-			{closed ? (
-				<Button asChild>
-					<a href={`https://${hostname}`} target="_blank" rel="noreferrer">
-						Sign in to board <ArrowUpRight />
-					</a>
-				</Button>
-			) : (
-				<div className="grid gap-3">
-					{issued ? (
-						<div className="max-w-lg">
-							<label htmlFor="board-setup-code" className="mb-2 block text-xs font-medium">
-								Your private setup code
-							</label>
-							<div className="flex gap-2">
-								<Input
-									id="board-setup-code"
-									ref={codeField}
-									readOnly
-									value={issued.code}
-									autoComplete="off"
-									spellCheck={false}
-									className="font-mono"
-									onFocus={(event) => event.currentTarget.select()}
-								/>
-								<Button
-									variant="outline"
-									onClick={() => {
-										setError(undefined);
-										void copy(issued.code);
-									}}
-								>
-									<Copy />
-									Copy
-								</Button>
-							</div>
-							<p className="mt-2 mb-0 text-xs text-muted-foreground">
-								Expires at {new Date(issued.expires_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.
-								Keep it private.
-							</p>
-						</div>
-					) : null}
-					{expired && !issued ? (
-						<p role="status" className="m-0 text-sm text-muted-foreground">
-							Your setup code expired. Generate a new one to continue.
-						</p>
-					) : null}
-					<div className="flex flex-wrap gap-2">
-						<Button
-							disabled={pending}
-							variant={issued ? "outline" : "default"}
-							onClick={() => {
-								void generate();
-							}}
-						>
-							{pending ? <Loader2 className="animate-spin motion-reduce:animate-none" /> : <Copy />}
-							{pending ? "Generating code…" : issued || expired ? "Generate new code" : "Copy setup code"}
-						</Button>
+		<details className="mt-4 rounded-md border border-border bg-card p-5">
+			<summary className="cursor-pointer text-sm font-medium focus-visible:outline-ring">
+				{closed ? "Board passkey is set up" : "First-time board setup"}
+			</summary>
+			<div className="pt-3">
+				<h2 id="board-setup" className="mt-2 mb-0 text-xl font-normal tracking-tight">
+					{closed ? "Your board is already set up" : "Add your first passkey"}
+				</h2>
+				<p className="mt-2 mb-4 max-w-xl text-sm leading-relaxed text-muted-foreground">
+					{closed
+						? "Sign in to your board with its passkey to continue."
+						: "Already have a board passkey? Use Open board to sign in. Otherwise, copy a private setup code to add your first passkey. The code is valid for 15 minutes."}
+				</p>
+				{closed ? (
+					<Button asChild>
+						<a href={`https://${hostname}`} target="_blank" rel="noreferrer">
+							Sign in to board <ArrowUpRight />
+						</a>
+					</Button>
+				) : (
+					<div className="grid gap-3">
 						{issued ? (
-							<Button asChild>
-								<a href={issued.onboarding_url} target="_blank" rel="noreferrer">
-									Continue to onboarding <ArrowUpRight />
-								</a>
+							<div className="max-w-lg">
+								<label htmlFor="board-setup-code" className="mb-2 block text-xs font-medium">
+									Your private setup code
+								</label>
+								<div className="flex gap-2">
+									<Input
+										id="board-setup-code"
+										ref={codeField}
+										readOnly
+										value={issued.code}
+										autoComplete="off"
+										spellCheck={false}
+										className="font-mono"
+										onFocus={(event) => event.currentTarget.select()}
+									/>
+									<Button
+										variant="outline"
+										onClick={() => {
+											setError(undefined);
+											void copy(issued.code);
+										}}
+									>
+										<Copy />
+										Copy
+									</Button>
+								</div>
+								<p className="mt-2 mb-0 text-xs text-muted-foreground">
+									Expires at{" "}
+									{new Date(issued.expires_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}. Keep it
+									private.
+								</p>
+							</div>
+						) : null}
+						{expired && !issued ? (
+							<p role="status" className="m-0 text-sm text-muted-foreground">
+								Your setup code expired. Generate a new one to continue.
+							</p>
+						) : null}
+						<div className="flex flex-wrap gap-2">
+							<Button
+								disabled={pending}
+								variant="outline"
+								onClick={() => {
+									void generate();
+								}}
+							>
+								{pending ? <Loader2 className="animate-spin motion-reduce:animate-none" /> : <Copy />}
+								{pending ? "Generating code…" : issued || expired ? "Generate new code" : "Copy setup code"}
 							</Button>
+							{issued ? (
+								<Button asChild>
+									<a href={issued.onboarding_url} target="_blank" rel="noreferrer">
+										Continue to onboarding <ArrowUpRight />
+									</a>
+								</Button>
+							) : null}
+						</div>
+						{copied ? (
+							<p role="status" className="m-0 flex items-center gap-1.5 text-xs text-primary">
+								<Check className="size-3.5" />
+								Code copied. Paste it on the onboarding page.
+							</p>
+						) : null}
+						{error ? (
+							<p role="alert" className="m-0 text-sm text-destructive">
+								{error}
+							</p>
 						) : null}
 					</div>
-					{copied ? (
-						<p role="status" className="m-0 flex items-center gap-1.5 text-xs text-primary">
-							<Check className="size-3.5" />
-							Code copied. Paste it on the onboarding page.
-						</p>
-					) : null}
-					{error ? (
-						<p role="alert" className="m-0 text-sm text-destructive">
-							{error}
-						</p>
-					) : null}
-				</div>
-			)}
-		</section>
+				)}
+			</div>
+		</details>
 	);
 }

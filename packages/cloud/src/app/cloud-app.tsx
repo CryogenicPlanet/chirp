@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { ArrowUpRight, ArrowRight, Bot, Database, Layers3, MessageSquare, RefreshCw } from "lucide-react";
+import { ArrowUpRight, ArrowRight, Bot, Layers3, MessageSquare, RefreshCw } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import type { OAuthProvider } from "../auth-settings.ts";
@@ -13,7 +13,6 @@ import { dashboardErrorMessage, readDashboardResponse } from "./dashboard-respon
 import { type CloudClientUser, DashboardShell } from "./dashboard-shell.tsx";
 import { StatusBadge } from "./status-badge.tsx";
 
-const storageLabels = { sqlite: "SQLite", postgres: "PostgreSQL", mysql: "MySQL" } as const;
 const boardSubtitle = (board: DashboardBoardList["boards"][number]) => {
 	if (board.hostname) return board.hostname;
 	if (board.phase === "deleting") return "Deletion is in progress";
@@ -186,10 +185,7 @@ export function CloudApp({
 								</div>
 								<div className="flex items-center justify-between gap-3 border-t bg-background/20 px-5 py-3">
 									<span className="flex items-center gap-2 text-xs text-subtle">
-										<Database className="size-3.5" />
-										{storageLabels[board.storage_engine]}
-										<span className="text-border">/</span>
-										{new Date(board.created_at).toLocaleDateString()}
+										{`Created ${new Date(board.created_at).toLocaleDateString()}`}
 									</span>
 									{board.hostname && board.phase === "ready" ? (
 										<a

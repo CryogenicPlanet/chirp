@@ -105,7 +105,12 @@ export function DashboardShell({ children, user }: { readonly children: ReactNod
 					>
 						<Wordmark />
 					</Link>
-					<p className="mt-[5px] mr-0 mb-[30px] ml-[31px] font-mono text-[10px] tracking-[0.03em] text-subtle">Cloud</p>
+					<p className="mt-[5px] mr-0 mb-[30px] ml-[31px] flex items-center gap-2 font-mono text-[10px] tracking-[0.03em] text-subtle">
+						Cloud
+						<span className="rounded border border-primary/20 bg-primary/5 px-1.5 py-0.5 text-[9px] text-primary">
+							Beta
+						</span>
+					</p>
 				</div>
 				<nav aria-label="Cloud navigation" className="grid gap-[3px]">
 					<Link

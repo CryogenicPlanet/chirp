@@ -179,9 +179,6 @@ export function BoardDetail({
 							</div>
 						</div>
 					</header>
-					{board.phase === "ready" && board.hostname ? (
-						<BoardSetupPanel key={board.id} boardId={board.id} hostname={board.hostname} />
-					) : null}
 					{banner ? (
 						<div
 							role="alert"
@@ -194,72 +191,67 @@ export function BoardDetail({
 							<p className="mt-1.5 mb-0 text-muted-foreground">{banner.note}</p>
 						</div>
 					) : null}
-					<div className="grid items-start gap-3 min-[901px]:grid-cols-2 min-[901px]:grid-rows-[auto_1fr]">
-						<div className="min-[901px]:row-span-2">
-							<BoardProgressPanel board={board} onRefresh={refresh} />
-						</div>
-						<section
-							aria-labelledby="configuration"
-							className="rounded-md border border-border bg-card p-5 shadow-card"
-						>
-							<p className="m-0 font-mono text-[11px] font-medium tracking-[0.08em] text-subtle uppercase">
-								Configuration
-							</p>
-							<h2 className="mt-[7px] mb-0 text-lg leading-tight font-normal text-balance" id="configuration">
-								{storageLabels[board.storage_engine]}
+					<div className="grid gap-4">
+						{board.phase !== "ready" ? <BoardProgressPanel board={board} onRefresh={refresh} /> : null}
+						<section aria-labelledby="backup" className="rounded-md border border-border bg-card p-5">
+							<h2 id="backup" className="text-sm font-medium">
+								Latest backup
 							</h2>
-							<dl className="mt-[18px] mb-0">
-								<div className="grid grid-cols-[minmax(120px,0.65fr)_minmax(0,1fr)] gap-5 border-t border-border py-2.5 max-[460px]:grid-cols-1 max-[460px]:gap-1">
+							<p className="mt-3 text-xl tracking-tight">
+								{board.storage_engine !== "sqlite"
+									? "Manage backups with your database provider"
+									: board.last_backup
+										? formatDate(board.last_backup.created_at)
+										: "No completed backups yet"}
+							</p>
+							{board.last_backup ? (
+								<p className="mt-2 text-xs text-muted-foreground">
+									Retained for {board.last_backup.retention_days} days, as reported by your provider.
+								</p>
+							) : null}
+						</section>
+						<details className="rounded-md border border-border bg-card p-5">
+							<summary className="cursor-pointer text-sm font-medium focus-visible:outline-ring">
+								Technical details
+							</summary>
+							<dl className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
+								<div>
+									<dt className="text-subtle">Database</dt>
+									<dd className="mt-1">{storageLabels[board.storage_engine]}</dd>
+								</div>
+								<div>
 									<dt className="text-subtle">Region</dt>
-									<dd className="m-0 text-foreground [overflow-wrap:anywhere]">{board.region ?? "Pending"}</dd>
+									<dd className="mt-1">{board.region ?? "Pending"}</dd>
 								</div>
 								{board.storage_engine === "sqlite" ? (
-									<div className="grid grid-cols-[minmax(120px,0.65fr)_minmax(0,1fr)] gap-5 border-t border-border py-2.5 max-[460px]:grid-cols-1 max-[460px]:gap-1">
-										<dt className="text-subtle">Persistent volume</dt>
-										<dd className="m-0 text-foreground [overflow-wrap:anywhere]">
-											{board.volume_size_gb ? `${board.volume_size_gb} GB` : "Pending"}
+									<div>
+										<dt className="text-subtle">Storage capacity</dt>
+										<dd className="mt-1">
+											{board.volume_size_gb ? `${board.volume_size_gb} GB allocated` : "Pending"}
 										</dd>
 									</div>
 								) : null}
+								<div>
+									<dt className="text-subtle">Created</dt>
+									<dd className="mt-1">{formatDate(board.created_at)}</dd>
+								</div>
+								{board.last_backup ? (
+									<div className="sm:col-span-2">
+										<dt className="text-subtle">Backup digest</dt>
+										<dd className="mt-1 break-all font-mono text-xs">{board.last_backup.digest}</dd>
+									</div>
+								) : null}
 							</dl>
-						</section>
-						<section aria-labelledby="backup" className="rounded-md border border-border bg-card p-5 shadow-card">
-							<p className="m-0 font-mono text-[11px] font-medium tracking-[0.08em] text-subtle uppercase">
-								Data protection
-							</p>
-							<h2 className="mt-[7px] mb-0 text-lg leading-tight font-normal text-balance" id="backup">
-								Latest snapshot
-							</h2>
-							{board.storage_engine !== "sqlite" ? (
-								<p className="mt-1.5 mb-0 leading-normal text-muted-foreground">
-									Manage backups with your database provider.
-								</p>
-							) : board.last_backup ? (
-								<dl className="mt-[18px] mb-0 grid min-[761px]:grid-cols-2 min-[761px]:gap-x-7">
-									<div className="grid grid-cols-[minmax(120px,0.65fr)_minmax(0,1fr)] gap-5 border-t border-border py-2.5 max-[460px]:grid-cols-1 max-[460px]:gap-1">
-										<dt className="text-subtle">Created</dt>
-										<dd className="m-0 text-foreground [overflow-wrap:anywhere]">
-											{formatDate(board.last_backup.created_at)}
-										</dd>
-									</div>
-									<div className="grid grid-cols-[minmax(120px,0.65fr)_minmax(0,1fr)] gap-5 border-t border-border py-2.5 max-[460px]:grid-cols-1 max-[460px]:gap-1">
-										<dt className="text-subtle">Retention reported by provider</dt>
-										<dd className="m-0 text-foreground [overflow-wrap:anywhere]">
-											{board.last_backup.retention_days} days
-										</dd>
-									</div>
-									<div className="grid grid-cols-[minmax(120px,0.65fr)_minmax(0,1fr)] gap-5 border-t border-border py-2.5 max-[460px]:grid-cols-1 max-[460px]:gap-1 min-[761px]:col-span-full">
-										<dt className="text-subtle">Digest</dt>
-										<dd className="m-0 font-mono text-[11px] text-foreground [overflow-wrap:anywhere]">
-											{board.last_backup.digest}
-										</dd>
-									</div>
-								</dl>
-							) : (
-								<p className="mt-1.5 mb-0 leading-normal text-muted-foreground">No completed snapshots yet.</p>
-							)}
-						</section>
+							{board.phase === "ready" ? (
+								<div className="mt-5">
+									<BoardProgressPanel board={board} onRefresh={refresh} />
+								</div>
+							) : null}
+						</details>
 					</div>
+					{board.phase === "ready" && board.hostname ? (
+						<BoardSetupPanel key={board.id} boardId={board.id} hostname={board.hostname} />
+					) : null}
 				</>
 			)}
 		</DashboardShell>
