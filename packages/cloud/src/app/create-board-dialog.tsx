@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Database, HardDrive, Loader2, Plus } from "lucide-react";
+import { ArrowRight, ChevronDown, Database, HardDrive, Loader2, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useRef, useState } from "react";
 import { boardSlugPattern, suggestedBoardSlug } from "../board-slug.ts";
@@ -151,64 +151,81 @@ export function CreateBoardDialog({
 								3–32 lowercase letters, numbers, or hyphens. This address cannot be changed later.
 							</p>
 						</div>
-						<fieldset disabled={pending} className="grid gap-3">
-							<legend className="mb-3 font-medium">Database</legend>
-							<div className="grid grid-cols-2 gap-3">
-								{(["sqlite", "postgres"] as const).map((engine) => (
-									<label
-										key={engine}
-										className={`relative cursor-pointer rounded-lg border p-4 transition-colors ${storage === engine ? "border-primary/65 bg-primary/5" : "border-border hover:bg-muted/50"}`}
-									>
-										<input
-											type="radio"
-											name="storage"
-											value={engine}
-											checked={storage === engine}
-											onChange={() => setStorage(engine)}
-											className="absolute top-4 right-4 accent-primary"
-										/>
-										{engine === "sqlite" ? (
-											<HardDrive className="mb-3 size-5 text-primary" />
-										) : (
-											<Database className="mb-3 size-5 text-primary" />
-										)}
-										<span className="block font-medium">{engine === "sqlite" ? "Managed SQLite" : "PostgreSQL"}</span>
-										<span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
-											{engine === "sqlite" ? "Ready to go. No setup needed." : "Connect your own database."}
-										</span>
-									</label>
-								))}
+						<details className="group rounded-lg border border-border">
+							<summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-4 [&::-webkit-details-marker]:hidden">
+								<span className="grid gap-1">
+									<span className="font-medium">Advanced</span>
+									<span className="text-xs text-muted-foreground">
+										Choose the database and release channel. Using{" "}
+										{storage === "sqlite" ? "managed SQLite" : "PostgreSQL"} on{" "}
+										{channel === "latest" ? "Latest" : "Canary"}.
+									</span>
+								</span>
+								<ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+							</summary>
+							<div className="grid gap-6 border-t border-border p-4">
+								<fieldset disabled={pending} className="grid gap-3">
+									<legend className="mb-3 font-medium">Database</legend>
+									<div className="grid grid-cols-2 gap-3">
+										{(["sqlite", "postgres"] as const).map((engine) => (
+											<label
+												key={engine}
+												className={`relative cursor-pointer rounded-lg border p-4 transition-colors ${storage === engine ? "border-primary/65 bg-primary/5" : "border-border hover:bg-muted/50"}`}
+											>
+												<input
+													type="radio"
+													name="storage"
+													value={engine}
+													checked={storage === engine}
+													onChange={() => setStorage(engine)}
+													className="absolute top-4 right-4 accent-primary"
+												/>
+												{engine === "sqlite" ? (
+													<HardDrive className="mb-3 size-5 text-primary" />
+												) : (
+													<Database className="mb-3 size-5 text-primary" />
+												)}
+												<span className="block font-medium">
+													{engine === "sqlite" ? "Managed SQLite" : "PostgreSQL"}
+												</span>
+												<span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+													{engine === "sqlite" ? "Ready to go. No setup needed." : "Connect your own database."}
+												</span>
+											</label>
+										))}
+									</div>
+								</fieldset>
+								<fieldset disabled={pending} className="grid gap-3">
+									<legend className="mb-3 font-medium">Release</legend>
+									<div className="grid grid-cols-2 gap-3">
+										{(["latest", "canary"] as const).map((track) => (
+											<label
+												key={track}
+												className={`relative cursor-pointer rounded-lg border p-4 transition-colors ${channel === track ? "border-primary/65 bg-primary/5" : "border-border hover:bg-muted/50"}`}
+											>
+												<input
+													type="radio"
+													name="channel"
+													value={track}
+													checked={channel === track}
+													onChange={() => setChannel(track)}
+													className="absolute top-4 right-4 accent-primary"
+												/>
+												<span className="block font-medium">{track === "latest" ? "Latest" : "Canary"}</span>
+												<span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+													{track === "latest"
+														? "The current release. Recommended."
+														: "The newest build from main. Less tested."}
+												</span>
+											</label>
+										))}
+									</div>
+									<p className="text-xs leading-relaxed text-muted-foreground">
+										Your board keeps the build it starts with. You can’t change this later.
+									</p>
+								</fieldset>
 							</div>
-						</fieldset>
-						<fieldset disabled={pending} className="grid gap-3">
-							<legend className="mb-3 font-medium">Release</legend>
-							<div className="grid grid-cols-2 gap-3">
-								{(["latest", "canary"] as const).map((track) => (
-									<label
-										key={track}
-										className={`relative cursor-pointer rounded-lg border p-4 transition-colors ${channel === track ? "border-primary/65 bg-primary/5" : "border-border hover:bg-muted/50"}`}
-									>
-										<input
-											type="radio"
-											name="channel"
-											value={track}
-											checked={channel === track}
-											onChange={() => setChannel(track)}
-											className="absolute top-4 right-4 accent-primary"
-										/>
-										<span className="block font-medium">{track === "latest" ? "Latest" : "Canary"}</span>
-										<span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
-											{track === "latest"
-												? "The current release. Recommended."
-												: "The newest build from main. Less tested."}
-										</span>
-									</label>
-								))}
-							</div>
-							<p className="text-xs leading-relaxed text-muted-foreground">
-								Your board keeps the build it starts with. You can’t change this later.
-							</p>
-						</fieldset>
+						</details>
 						{storage === "postgres" ? (
 							<div className="grid gap-3 rounded-lg border bg-background/50 p-4">
 								<label htmlFor="postgres-admin-url" className="text-xs font-medium">
