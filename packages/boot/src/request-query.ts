@@ -65,22 +65,22 @@ const credentialShaped = (text: string) =>
 // `//user:pass@host`, backslashes and extra slashes, and `@` inside the password, splitting at the last `@`.
 const withoutNested = (value: string) => {
 	const cut = value.search(/[?#]/);
-	return (cut < 0 ? value : `${value.slice(0, cut)}${value.charAt(cut)}${redacted}`).replace(
-		/^(\s*(?:[a-z][a-z0-9+.-]*:)?[\\/]{2,})[^\\/?#]*@/i,
-		`$1${redacted}@`,
-	);
+	return cut < 0 ? value : `${value.slice(0, cut)}${value.charAt(cut)}${redacted}`;
 };
+const userinfo = /^(\s*(?:[a-z][a-z0-9+.-]*:)?[\\/]{2,})[^\\/?#]*@/i;
 // Special schemes also take userinfo after zero or one slash (`https:user:pass@host`), and parsers drop tabs,
-// newlines and leading controls. Whatever the URL parser still reads as userinfo drops the whole value.
+// newlines and leading controls. The check removes only the userinfo matched above, never text the input
+// supplied, and whatever the URL parser still reads as userinfo drops the whole value.
 const parsedUserinfo = (value: string) => {
-	const url = URL.parse(value.replace(`${redacted}@`, ""), "http://base.invalid");
+	const url = URL.parse(value.replace(userinfo, "$1"), "http://base.invalid");
 	return url !== null && (url.username !== "" || url.password !== "");
 };
 const clip = (text: string, limit: number) => (text.length > limit ? `${text.slice(0, limit)}…` : text);
 const storedValue = (name: string, value: string) => {
 	if (secretName(name)) return redacted;
-	const readable = withoutNested(value);
-	if (parsedUserinfo(readable)) return redacted;
+	const url = withoutNested(value);
+	if (parsedUserinfo(url)) return redacted;
+	const readable = url.replace(userinfo, `$1${redacted}@`);
 	return !publicNames.has(name) && credentialShaped(readable) ? redacted : clip(readable, maxValue);
 };
 

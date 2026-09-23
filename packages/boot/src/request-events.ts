@@ -22,6 +22,18 @@ type RequestPayload = {
 type LostPayload = { readonly outcome: "lost"; readonly lost: number };
 type Stored<Payload> = Omit<typeof EventRecord.Type, "seq" | "payload"> & { readonly payload: Payload };
 type RequestRecord = Stored<RequestPayload>;
+// Missing records per actor: the agent, or `boot` for anonymous and boot-refused requests.
+type Counts = ReadonlyMap<string, number>;
+const none: Counts = new Map();
+const take = (counts: Counts, actor: string): readonly [number, Counts] => {
+	const count = counts.get(actor) ?? 0;
+	if (count === 0) return [0, counts];
+	const rest = new Map(counts);
+	rest.delete(actor);
+	return [count, rest];
+};
+const add = (counts: Counts, actor: string, count: number): Counts =>
+	count === 0 ? counts : new Map(counts).set(actor, (counts.get(actor) ?? 0) + count);
 // Boot's own refusals carry a stable {error:{code}}. Proxied app bodies are streams and are never read.
 const BootError = Schema.fromJsonString(
 	Schema.Struct({
@@ -41,55 +53,68 @@ const errorCode = (response: HttpServerResponse.HttpServerResponse) =>
 export const requestEvents = (events: Events["Service"]) =>
 	Effect.gen(function* () {
 		const pending = yield* Queue.dropping<RequestRecord>(256);
-		// A missing record is counted as `lost` on a later stored one, so a reader can tell a quiet period
-		// from lost history. A drop is carried by the next record queued or, when the queue drains first, by a
-		// `lost` record of its own; a failed write is carried by the next record written. A request that finished
-		// between two stored records is therefore stored between them or counted by one of them, unless boot
-		// stopped with records still queued.
-		const dropped = yield* Ref.make(0);
+		// A missing record is counted as `lost` on a later stored record of the same actor, so a reader who sees
+		// only one actor's records can still tell a quiet period from lost history. A drop is carried by that
+		// actor's next record queued, a failed write by its next record written, and either, once the queue
+		// drains, by a `lost` record of its own. A request that finished between two stored records of an actor
+		// is therefore stored between them or counted by one of them, unless boot stopped with records queued.
+		const dropped = yield* Ref.make(none);
 		// Taking the drop count and offering its carrier must not interleave with another finalizer, or a
 		// record could be queued without drops that happened before it while the count waits for a later one.
 		const handoff = yield* Semaphore.make(1);
-		const failed = yield* Ref.make(0);
+		const failed = yield* Ref.make(none);
 		const withLost = (payload: RequestPayload, count: number): RequestPayload =>
 			count === 0 ? payload : { ...payload, lost: (payload.lost ?? 0) + count };
 		const write = (event: Stored<RequestPayload | LostPayload>) =>
 			Effect.gen(function* () {
-				const lost = (event.payload.lost ?? 0) + (yield* Ref.getAndSet(failed, 0));
+				const lost = (event.payload.lost ?? 0) + (yield* Ref.modify(failed, (counts) => take(counts, event.actor)));
 				const payload = lost === 0 ? event.payload : { ...event.payload, lost };
-				yield* events.writeBoot({ ...event, payload }).pipe(
+				return yield* events.writeBoot({ ...event, payload }).pipe(
+					Effect.as(true),
 					// Do not retry an uncertain commit or include request/error contents in stderr.
 					Effect.catchCauseIf(
 						(cause) => !Cause.hasInterruptsOnly(cause),
 						() =>
-							Ref.update(failed, (count) => count + lost + (payload.outcome === "lost" ? 0 : 1)).pipe(
-								Effect.andThen(Effect.logError("http.request event write failed")),
-							),
+							Ref.update(failed, (counts) =>
+								add(counts, event.actor, lost + (payload.outcome === "lost" ? 0 : 1)),
+							).pipe(Effect.andThen(Effect.logError("http.request event write failed")), Effect.as(false)),
 					),
 				);
 			});
-		yield* Effect.gen(function* () {
-			const event = yield* Queue.take(pending);
-			yield* write(event);
-			// Only drops start a record of their own: a failing store would refuse it and loop.
-			const tail = yield* handoff.withPermit(
-				Queue.size(pending).pipe(
-					Effect.flatMap((size) => (size === 0 ? Ref.getAndSet(dropped, 0) : Effect.succeed(0))),
-				),
-			);
-			if (tail > 0)
-				yield* write({
-					at: yield* Clock.currentTimeMillis,
+		const lostRecord = (actor: string, lost: number, generation: number) =>
+			Clock.currentTimeMillis.pipe(
+				Effect.map((at): Stored<LostPayload> => ({
+					at,
 					type: "http.request",
 					level: "warn",
-					actor: "boot",
+					actor,
 					instance: null,
-					generation: event.generation,
+					generation,
 					request_id: null,
 					topic: null,
 					message_id: null,
-					payload: { outcome: "lost", lost: tail },
-				});
+					payload: { outcome: "lost", lost },
+				})),
+			);
+		yield* Effect.gen(function* () {
+			const event = yield* Queue.take(pending);
+			const stored = yield* write(event);
+			const drained = yield* handoff.withPermit(
+				Queue.size(pending).pipe(
+					Effect.flatMap((size) => (size === 0 ? Ref.getAndSet(dropped, none) : Effect.succeed(none))),
+				),
+			);
+			// Refused writes start records of their own only after a write succeeded; otherwise a failing store
+			// would refuse those records in a loop.
+			const refused = stored && (yield* Queue.size(pending)) === 0 ? yield* Ref.getAndSet(failed, none) : none;
+			yield* Effect.forEach(
+				new Set([...drained.keys(), ...refused.keys()]),
+				(actor) =>
+					lostRecord(actor, (drained.get(actor) ?? 0) + (refused.get(actor) ?? 0), event.generation).pipe(
+						Effect.flatMap(write),
+					),
+				{ discard: true },
+			);
 		}).pipe(Effect.forever, Effect.forkScoped);
 		return (input: {
 			readonly started: bigint;
@@ -137,9 +162,9 @@ export const requestEvents = (events: Events["Service"]) =>
 						};
 						const queued = yield* handoff.withPermit(
 							Effect.gen(function* () {
-								const missed = yield* Ref.getAndSet(dropped, 0);
+								const missed = yield* Ref.modify(dropped, (counts) => take(counts, record.actor));
 								const offered = yield* Queue.offer(pending, { ...record, payload: withLost(record.payload, missed) });
-								if (!offered) yield* Ref.update(dropped, (count) => count + missed + 1);
+								if (!offered) yield* Ref.update(dropped, (counts) => add(counts, record.actor, missed + 1));
 								return offered;
 							}),
 						);

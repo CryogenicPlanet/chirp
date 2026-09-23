@@ -324,13 +324,14 @@ it("lets fs agents read every request record, including human and anonymous ones
 	expect(await actors({ cookie: app.cookie })).toEqual(["rahul", "boot", "reader"]);
 }, 10000);
 
-it("queues earlier drops on the next record even when another finalizer pauses, and writes drops left when the queue drains", async () => {
-	const handoffStored = Schema.Struct({
+it("hands each actor its own drops, even across a paused finalizer, and writes what is left when the queue drains", async () => {
+	const stored = Schema.Struct({
+		actor: Schema.String,
 		path: Schema.optionalKey(Schema.String),
 		outcome: Schema.String,
 		lost: Schema.optionalKey(Schema.Int),
 	});
-	const handoffRecord = Schema.NullOr(handoffStored);
+	const record = Schema.NullOr(stored);
 	const { stdout } = await execute("bun", [join(import.meta.dirname, "fixtures/request-event-handoff.ts")], {
 		timeout: 30000,
 	});
@@ -338,20 +339,27 @@ it("queues earlier drops on the next record even when another finalizer pauses, 
 		Schema.fromJsonString(
 			Schema.Struct({
 				filling: Schema.Int,
-				fill: Schema.Int,
-				a: handoffRecord,
-				b: handoffRecord,
-				c: handoffRecord,
-				markers: Schema.Array(handoffStored),
+				handoff: Schema.Struct({ fill: Schema.Int, a: record, b: record, c: record, markers: Schema.Array(stored) }),
+				actors: Schema.Struct({ fill: Schema.Int, x: record, y: record, markers: Schema.Array(stored) }),
+				refused: Schema.Struct({ x: record, y: record, markers: Schema.Array(stored) }),
 			}),
 		),
 	)(stdout.trim().split("\n").at(-1));
+	const { handoff, actors, refused } = result;
 	// A's record found the queue full again; B took the slot the writer freed while A paused.
-	expect(result.a).toBeNull();
-	expect(result.b).toEqual({ path: "/b", outcome: "completed", lost: result.filling - result.fill });
+	expect(handoff.a).toBeNull();
+	expect(handoff.b).toEqual({ actor: "boot", path: "/b", outcome: "completed", lost: result.filling - handoff.fill });
 	// No request followed A before the queue drained, so boot wrote its drop without waiting for C.
-	expect(result.markers).toEqual([{ outcome: "lost", lost: 1 }]);
-	expect(result.c).toEqual({ path: "/c", outcome: "completed" });
+	expect(handoff.markers).toEqual([{ actor: "boot", outcome: "lost", lost: 1 }]);
+	expect(handoff.c).toEqual({ actor: "boot", path: "/c", outcome: "completed" });
+	// An agent that reads only its own records sees its own drops, never another actor's.
+	expect(actors.x).toEqual({ actor: "x", path: "/x/carry", outcome: "completed", lost: 2 });
+	expect(actors.y).toEqual({ actor: "y", path: "/y/clean", outcome: "completed" });
+	expect(actors.markers).toEqual([{ actor: "boot", outcome: "lost", lost: result.filling - actors.fill }]);
+	// A refused write returns as a record of the same actor once a later write succeeds.
+	expect(refused.x).toBeNull();
+	expect(refused.y).toEqual({ actor: "y", path: "/y/after", outcome: "completed" });
+	expect(refused.markers).toEqual([{ actor: "x", outcome: "lost", lost: 1 }]);
 }, 40000);
 
 it("finishes HTTP response and traffic cleanup while its diagnostic writer waits on the boot SQL connection", async (test) => {

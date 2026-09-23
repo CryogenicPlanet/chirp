@@ -125,6 +125,8 @@ it("removes short userinfo from scheme-relative, backslashed and @-containing UR
 			tabbed: "ht\ttps://heidi:hunter2@example.com",
 			email: "rahul@example.com",
 			mailto: "mailto:rahul@example.com",
+			planted: "https:ivan:secret9[redacted]@example.com",
+			plantedSlashes: "https://judy:pw5[redacted]@example.com/x",
 		})}`,
 	);
 	expect(recorded.query).toEqual([
@@ -139,8 +141,25 @@ it("removes short userinfo from scheme-relative, backslashed and @-containing UR
 		["tabbed", "[redacted]"],
 		["email", "rahul@example.com"],
 		["mailto", "mailto:rahul@example.com"],
+		// A marker the input supplies is data, not proof of redaction.
+		["planted", "[redacted]"],
+		["plantedSlashes", "https://[redacted]@example.com/x"],
 	]);
-	for (const password of ["hunter2", "pa@ss9", "ss9", "tulip7", "dave", "erin", "frank", "grace", "heidi"])
+	for (const password of [
+		"hunter2",
+		"pa@ss9",
+		"ss9",
+		"tulip7",
+		"dave",
+		"erin",
+		"frank",
+		"grace",
+		"heidi",
+		"ivan",
+		"secret9",
+		"judy",
+		"pw5",
+	])
 		expect(JSON.stringify(recorded)).not.toContain(password);
 });
 
