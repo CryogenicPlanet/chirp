@@ -327,6 +327,7 @@ it("lets fs agents read every request record, including human and anonymous ones
 it("hands each actor its own drops, even across a paused finalizer, and writes what is left when the queue drains", async () => {
 	const stored = Schema.Struct({
 		actor: Schema.String,
+		generation: Schema.Int,
 		path: Schema.optionalKey(Schema.String),
 		outcome: Schema.String,
 		lost: Schema.optionalKey(Schema.Int),
@@ -348,18 +349,27 @@ it("hands each actor its own drops, even across a paused finalizer, and writes w
 	const { handoff, actors, refused } = result;
 	// A's record found the queue full again; B took the slot the writer freed while A paused.
 	expect(handoff.a).toBeNull();
-	expect(handoff.b).toEqual({ actor: "boot", path: "/b", outcome: "completed", lost: result.filling - handoff.fill });
-	// No request followed A before the queue drained, so boot wrote its drop without waiting for C.
-	expect(handoff.markers).toEqual([{ actor: "boot", outcome: "lost", lost: 1 }]);
-	expect(handoff.c).toEqual({ actor: "boot", path: "/c", outcome: "completed" });
+	expect(handoff.b).toEqual({
+		actor: "boot",
+		generation: 1,
+		path: "/b",
+		outcome: "completed",
+		lost: result.filling - handoff.fill,
+	});
+	// No request followed A before the queue drained, so boot wrote its drop without waiting for C. A came from
+	// generation 2 while the writer last took a generation 1 record; a lost record names no generation.
+	expect(handoff.markers).toEqual([{ actor: "boot", generation: 0, outcome: "lost", lost: 1 }]);
+	expect(handoff.c).toEqual({ actor: "boot", generation: 1, path: "/c", outcome: "completed" });
 	// An agent that reads only its own records sees its own drops, never another actor's.
-	expect(actors.x).toEqual({ actor: "x", path: "/x/carry", outcome: "completed", lost: 2 });
-	expect(actors.y).toEqual({ actor: "y", path: "/y/clean", outcome: "completed" });
-	expect(actors.markers).toEqual([{ actor: "boot", outcome: "lost", lost: result.filling - actors.fill }]);
+	expect(actors.x).toEqual({ actor: "x", generation: 1, path: "/x/carry", outcome: "completed", lost: 2 });
+	expect(actors.y).toEqual({ actor: "y", generation: 1, path: "/y/clean", outcome: "completed" });
+	expect(actors.markers).toEqual([
+		{ actor: "boot", generation: 0, outcome: "lost", lost: result.filling - actors.fill },
+	]);
 	// A refused write returns as a record of the same actor once a later write succeeds.
 	expect(refused.x).toBeNull();
-	expect(refused.y).toEqual({ actor: "y", path: "/y/after", outcome: "completed" });
-	expect(refused.markers).toEqual([{ actor: "x", outcome: "lost", lost: 1 }]);
+	expect(refused.y).toEqual({ actor: "y", generation: 1, path: "/y/after", outcome: "completed" });
+	expect(refused.markers).toEqual([{ actor: "x", generation: 0, outcome: "lost", lost: 1 }]);
 }, 40000);
 
 it("finishes HTTP response and traffic cleanup while its diagnostic writer waits on the boot SQL connection", async (test) => {

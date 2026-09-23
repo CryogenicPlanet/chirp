@@ -81,7 +81,9 @@ export const requestEvents = (events: Events["Service"]) =>
 					),
 				);
 			});
-		const lostRecord = (actor: string, lost: number, generation: number) =>
+		// A lost record can count requests from several generations, so it names none: generation 0, as for
+		// requests boot refuses before selecting one.
+		const lostRecord = (actor: string, lost: number) =>
 			Clock.currentTimeMillis.pipe(
 				Effect.map((at): Stored<LostPayload> => ({
 					at,
@@ -89,7 +91,7 @@ export const requestEvents = (events: Events["Service"]) =>
 					level: "warn",
 					actor,
 					instance: null,
-					generation,
+					generation: 0,
 					request_id: null,
 					topic: null,
 					message_id: null,
@@ -109,10 +111,7 @@ export const requestEvents = (events: Events["Service"]) =>
 			const refused = stored && (yield* Queue.size(pending)) === 0 ? yield* Ref.getAndSet(failed, none) : none;
 			yield* Effect.forEach(
 				new Set([...drained.keys(), ...refused.keys()]),
-				(actor) =>
-					lostRecord(actor, (drained.get(actor) ?? 0) + (refused.get(actor) ?? 0), event.generation).pipe(
-						Effect.flatMap(write),
-					),
+				(actor) => lostRecord(actor, (drained.get(actor) ?? 0) + (refused.get(actor) ?? 0)).pipe(Effect.flatMap(write)),
 				{ discard: true },
 			);
 		}).pipe(Effect.forever, Effect.forkScoped);

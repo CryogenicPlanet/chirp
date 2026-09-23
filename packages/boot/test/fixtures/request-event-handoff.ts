@@ -9,6 +9,7 @@ import { requestEvents } from "../../src/request-events.ts";
 
 const Stored = Schema.Struct({
 	actor: Schema.String,
+	generation: Schema.Int,
 	path: Schema.optionalKey(Schema.String),
 	outcome: Schema.String,
 	lost: Schema.optionalKey(Schema.Int),
@@ -37,6 +38,13 @@ const agent = (name: string): VerifiedIdentity => ({
 	scopes: ["read"],
 	expiresAt: Number.MAX_SAFE_INTEGER,
 });
+// Wait for an exact writer state rather than a fixed delay, which a loaded runner can outlast.
+const until = (check: Effect.Effect<boolean>): Effect.Effect<void> =>
+	check.pipe(
+		Effect.flatMap((done) =>
+			done ? Effect.void : Effect.sleep("5 millis").pipe(Effect.andThen(Effect.suspend(() => until(check)))),
+		),
+	);
 
 const main = Effect.gen(function* () {
 	yield* eventsSchema;
@@ -44,29 +52,36 @@ const main = Effect.gen(function* () {
 	yield* eventFilterSchema;
 	return yield* Effect.gen(function* () {
 		const events = yield* Events;
-		const settle = Effect.sleep("50 millis");
-		// Each writer takes one token per write, so a test decides when the queue drains.
+		// Each writer takes one token per write, so the test decides when the queue drains. `taken` counts the
+		// records the writer has taken from the queue: each one enters writeBoot before waiting for a token.
 		const writer = Effect.gen(function* () {
 			const writes = yield* Queue.unbounded<void>();
+			const taken = yield* Ref.make(0);
 			const written = yield* Ref.make<ReadonlyArray<typeof Stored.Type>>([]);
 			const refusing = yield* Ref.make(false);
+			const refusals = yield* Ref.make(0);
 			const observe = yield* requestEvents({
 				...events,
 				writeBoot: (event) =>
-					Queue.take(writes).pipe(
+					Ref.update(taken, (count) => count + 1).pipe(
+						Effect.andThen(Queue.take(writes)),
 						Effect.andThen(Ref.get(refusing)),
-						Effect.andThen((refuse) => (refuse ? Effect.die("store refused") : events.writeBoot(event))),
+						Effect.andThen((refuse) =>
+							refuse
+								? Ref.update(refusals, (count) => count + 1).pipe(Effect.andThen(Effect.die("store refused")))
+								: events.writeBoot(event),
+						),
 						Effect.tap(() =>
 							Ref.update(written, (all) =>
 								Option.match(payload(event.payload), {
 									onNone: () => all,
-									onSome: (stored) => [...all, { actor: event.actor, ...stored }],
+									onSome: (stored) => [...all, { actor: event.actor, generation: event.generation, ...stored }],
 								}),
 							),
 						),
 					),
 			});
-			const request = (path: string, identity: VerifiedIdentity | null = null) =>
+			const request = (path: string, identity: VerifiedIdentity | null = null, generation = 1) =>
 				Effect.scoped(
 					Effect.gen(function* () {
 						const observed = yield* observe({
@@ -76,24 +91,36 @@ const main = Effect.gen(function* () {
 							search: "",
 							userAgent: undefined,
 							identity,
-							generation: 1,
+							generation,
 							requestId: `request-${path}`,
 						});
 						yield* observed.respond(HttpServerResponse.empty({ status: 200 }));
 					}),
 				);
-			// The writer holds one record and the queue holds 256; the rest are dropped.
+			const takenReaches = (count: number) => until(Ref.get(taken).pipe(Effect.map((now) => now >= count)));
+			const writtenHas = (found: (all: ReadonlyArray<typeof Stored.Type>) => boolean) =>
+				until(Ref.get(written).pipe(Effect.map(found)));
+			// The writer holds the first record and the queue holds the next 256; the rest are dropped.
 			const fill = (prefix: string) =>
-				Effect.forEach(
-					Array.from({ length: filling }, (_, index) => `${prefix}/${index}`),
-					(path) => request(path),
-					{ discard: true },
-				).pipe(Effect.andThen(settle));
-			const release = (count: number) =>
-				Queue.offerAll(
-					writes,
-					Array.from({ length: count }, () => undefined),
-				).pipe(Effect.andThen(settle));
+				request(`${prefix}/0`).pipe(
+					Effect.andThen(takenReaches(1)),
+					Effect.andThen(
+						Effect.forEach(
+							Array.from({ length: filling - 1 }, (_, index) => `${prefix}/${index + 1}`),
+							(path) => request(path),
+							{ discard: true },
+						),
+					),
+				);
+			// One write frees one queue slot once the writer has taken the next record.
+			const freeSlot = Ref.get(taken).pipe(
+				Effect.tap(() => Queue.offer(writes, undefined)),
+				Effect.flatMap((before) => takenReaches(before + 1)),
+			);
+			const drain = Queue.offerAll(
+				writes,
+				Array.from({ length: filling * 2 }, () => undefined),
+			);
 			const report = (prefix: string, paths: ReadonlyArray<string>) =>
 				Ref.get(written).pipe(
 					Effect.map((all) => ({
@@ -102,12 +129,17 @@ const main = Effect.gen(function* () {
 						markers: all.filter((stored) => stored.outcome === "lost"),
 					})),
 				);
-			return { request, fill, release, report, refusing };
+			return { request, fill, freeSlot, drain, writtenHas, report, refusing, refusals };
 		});
+		const markers = (count: number) => (all: ReadonlyArray<typeof Stored.Type>) =>
+			all.filter((stored) => stored.outcome === "lost").length >= count;
+		const has = (path: string) => (all: ReadonlyArray<typeof Stored.Type>) =>
+			all.some((stored) => stored.path === path);
 
-		// Request A pauses while its finalizer builds its record. Meanwhile the writer frees one queue slot and
-		// request B takes it. B must carry the drops before it. Nothing is queued after A is dropped, so once the
-		// queue drains boot must write A's drop on its own rather than leave it for C.
+		// Request A, from a newer generation, pauses while its finalizer builds its record. Meanwhile the writer
+		// frees one queue slot and request B takes it. B must carry the drops before it. Nothing is queued after
+		// A is dropped, so once the queue drains boot writes A's drop on its own rather than leave it for C, and
+		// that record names no generation rather than the generation of the record the writer took last.
 		const first = yield* writer;
 		yield* first.fill("/fill");
 		const clock = yield* Clock.Clock;
@@ -128,15 +160,16 @@ const main = Effect.gen(function* () {
 			monotonicTimeNanos: clock.monotonicTimeNanos,
 			sleep: (duration) => clock.sleep(duration),
 		};
-		const a = yield* first.request("/a").pipe(Effect.provideService(Clock.Clock, pausing), Effect.forkChild);
+		const a = yield* first.request("/a", null, 2).pipe(Effect.provideService(Clock.Clock, pausing), Effect.forkChild);
 		yield* Deferred.await(paused);
-		yield* first.release(1);
+		yield* first.freeSlot;
 		yield* first.request("/b");
 		yield* Deferred.succeed(resume, undefined);
 		yield* Fiber.join(a);
-		yield* first.release(filling * 2);
+		yield* first.drain;
+		yield* first.writtenHas(markers(1));
 		yield* first.request("/c");
-		yield* settle;
+		yield* first.writtenHas(has("/c"));
 		const handoff = yield* first.report("/fill", ["/a", "/b", "/c"]);
 
 		// Losses are counted per actor: agent x's next record carries only x's drops, agent y's carries none,
@@ -145,20 +178,21 @@ const main = Effect.gen(function* () {
 		yield* second.fill("/fill");
 		yield* second.request("/x/dropped/0", agent("x"));
 		yield* second.request("/x/dropped/1", agent("x"));
-		yield* second.release(1);
+		yield* second.freeSlot;
 		yield* second.request("/x/carry", agent("x"));
-		yield* second.release(1);
+		yield* second.freeSlot;
 		yield* second.request("/y/clean", agent("y"));
-		yield* second.release(filling * 2);
+		yield* second.drain;
+		yield* second.writtenHas(markers(1));
 		const actors = yield* second.report("/fill", ["/x/carry", "/y/clean"]);
 
 		// A refused write for x returns as an x record once a later write succeeds, not on y's record.
 		yield* Ref.set(second.refusing, true);
 		yield* second.request("/x/refused", agent("x"));
-		yield* settle;
+		yield* until(Ref.get(second.refusals).pipe(Effect.map((count) => count === 1)));
 		yield* Ref.set(second.refusing, false);
 		yield* second.request("/y/after", agent("y"));
-		yield* settle;
+		yield* second.writtenHas(markers(2));
 		const refused = yield* second.report("/fill", ["/x/refused", "/y/after"]);
 
 		yield* Console.log(
@@ -184,7 +218,7 @@ const main = Effect.gen(function* () {
 				},
 			}),
 		);
-	}).pipe(Effect.provide(layer(Effect.void)));
+	}).pipe(Effect.provide(layer(Effect.void)), Effect.timeout("20 seconds"));
 }).pipe(
 	Effect.scoped,
 	Effect.provide(Layer.mergeAll(BunServices.layer, SqliteClient.layer({ filename: ":memory:", disableWAL: true }))),
