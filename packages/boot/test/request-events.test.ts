@@ -324,6 +324,22 @@ it("lets fs agents read every request record, including human and anonymous ones
 	expect(await actors({ cookie: app.cookie })).toEqual(["rahul", "boot", "reader"]);
 }, 10000);
 
+it("queues earlier drops on the next record even when another finalizer pauses between finishing and queuing", async () => {
+	const handoffRecord = Schema.NullOr(Schema.Struct({ path: Schema.String, lost: Schema.optionalKey(Schema.Int) }));
+	const { stdout } = await execute("bun", [join(import.meta.dirname, "fixtures/request-event-handoff.ts")], {
+		timeout: 30000,
+	});
+	const result = Schema.decodeUnknownSync(
+		Schema.fromJsonString(
+			Schema.Struct({ filling: Schema.Int, fill: Schema.Int, a: handoffRecord, b: handoffRecord, c: handoffRecord }),
+		),
+	)(stdout.trim().split("\n").at(-1));
+	// A's record found the queue full again; B took the slot the writer freed while A paused.
+	expect(result.a).toBeNull();
+	expect(result.b).toEqual({ path: "/b", lost: result.filling - result.fill });
+	expect(result.c).toEqual({ path: "/c", lost: 1 });
+}, 40000);
+
 it("finishes HTTP response and traffic cleanup while its diagnostic writer waits on the boot SQL connection", async (test) => {
 	const child = spawn("bun", [join(import.meta.dirname, "fixtures/request-event-contention.ts")], {
 		stdio: ["ignore", "pipe", "pipe"],

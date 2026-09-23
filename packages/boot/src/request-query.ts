@@ -61,11 +61,12 @@ const credentialShaped = (text: string) =>
 	(text.match(/[A-Za-z0-9_+=-]{20,}/g) ?? []).some(
 		(run) => [/[a-z]/, /[A-Z]/, /[0-9]/].filter((pattern) => pattern.test(run)).length >= 2,
 	);
-// A URL inside a value can carry its own query, fragment or userinfo.
+// A URL inside a value can carry its own query, fragment or userinfo. URL parsers also accept scheme-relative
+// `//user:pass@host`, backslashes for slashes and `@` inside the password, splitting at the last `@`.
 const withoutNested = (value: string) => {
 	const cut = value.search(/[?#]/);
 	return (cut < 0 ? value : `${value.slice(0, cut)}${value.charAt(cut)}${redacted}`).replace(
-		/^([a-z][a-z0-9+.-]*:\/\/)[^/?#@]*@/i,
+		/^(\s*(?:[a-z][a-z0-9+.-]*:)?[\\/]{2})[^\\/?#]*@/i,
 		`$1${redacted}@`,
 	);
 };

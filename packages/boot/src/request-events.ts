@@ -1,4 +1,4 @@
-import { Cause, Clock, Effect, Option, Queue, Ref, Schema } from "effect";
+import { Cause, Clock, Effect, Option, Queue, Ref, Schema, Semaphore } from "effect";
 import type { HttpServerResponse } from "effect/unstable/http";
 import type { VerifiedIdentity } from "./enrollment.ts";
 import type { EventRecord, Events } from "./events.ts";
@@ -43,6 +43,9 @@ export const requestEvents = (events: Events["Service"]) =>
 		// record written. A request that finished between two stored records is therefore stored between
 		// them or counted by one of them, unless boot stopped with records still queued.
 		const dropped = yield* Ref.make(0);
+		// Taking the drop count and offering its carrier must not interleave with another finalizer, or a
+		// record could be queued without drops that happened before it while the count waits for a later one.
+		const handoff = yield* Semaphore.make(1);
 		const failed = yield* Ref.make(0);
 		const withLost = (payload: RequestPayload, count: number): RequestPayload =>
 			count === 0 ? payload : { ...payload, lost: (payload.lost ?? 0) + count };
@@ -81,8 +84,7 @@ export const requestEvents = (events: Events["Service"]) =>
 					Effect.gen(function* () {
 						span.end(yield* Clock.monotonicTimeNanos, exit);
 						const interrupted = exit._tag === "Failure" && Cause.hasInterruptsOnly(exit.cause);
-						const missed = yield* Ref.getAndSet(dropped, 0);
-						const queued = yield* Queue.offer(pending, {
+						const record: RequestRecord = {
 							at: yield* Clock.currentTimeMillis,
 							type: "http.request",
 							level: status >= 500 || exit._tag === "Failure" ? "error" : "info",
@@ -92,26 +94,28 @@ export const requestEvents = (events: Events["Service"]) =>
 							request_id: input.requestId,
 							topic: null,
 							message_id: null,
-							payload: withLost(
-								{
-									trace_id: span.traceId,
-									span_id: span.spanId,
-									method: input.method,
-									path: input.path.slice(0, 2048),
-									...query,
-									...(input.userAgent === undefined ? {} : { user_agent: input.userAgent.slice(0, 256) }),
-									status,
-									...(code === null ? {} : { error_code: code }),
-									duration_ms: Number((yield* Clock.monotonicTimeNanos) - input.started) / 1_000_000,
-									outcome: interrupted ? "interrupted" : exit._tag === "Failure" ? "failed" : "completed",
-								},
-								missed,
-							),
-						});
-						if (!queued) {
-							yield* Ref.update(dropped, (count) => count + missed + 1);
-							yield* Effect.logError("http.request event queue full");
-						}
+							payload: {
+								trace_id: span.traceId,
+								span_id: span.spanId,
+								method: input.method,
+								path: input.path.slice(0, 2048),
+								...query,
+								...(input.userAgent === undefined ? {} : { user_agent: input.userAgent.slice(0, 256) }),
+								status,
+								...(code === null ? {} : { error_code: code }),
+								duration_ms: Number((yield* Clock.monotonicTimeNanos) - input.started) / 1_000_000,
+								outcome: interrupted ? "interrupted" : exit._tag === "Failure" ? "failed" : "completed",
+							},
+						};
+						const queued = yield* handoff.withPermit(
+							Effect.gen(function* () {
+								const missed = yield* Ref.getAndSet(dropped, 0);
+								const offered = yield* Queue.offer(pending, { ...record, payload: withLost(record.payload, missed) });
+								if (!offered) yield* Ref.update(dropped, (count) => count + missed + 1);
+								return offered;
+							}),
+						);
+						if (!queued) yield* Effect.logError("http.request event queue full");
 					}),
 				);
 				return {

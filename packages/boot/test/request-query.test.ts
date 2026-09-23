@@ -112,6 +112,23 @@ it("removes nested queries, fragments and userinfo from URL values, even for pub
 	expect(JSON.stringify(recorded)).not.toContain(secret);
 });
 
+it("removes short userinfo from scheme-relative, backslashed and @-containing URL values", () => {
+	const recorded = requestQuery(
+		`?${new URLSearchParams({
+			next: "//alice:hunter2@example.com/private",
+			target: String.raw`https:\\bob:pa@ss9@example.com/x`,
+			back: String.raw`/\carol:tulip7@example.com`,
+		})}`,
+	);
+	expect(recorded.query).toEqual([
+		["next", "//[redacted]@example.com/private"],
+		["target", String.raw`https:\\[redacted]@example.com/x`],
+		["back", String.raw`/\[redacted]@example.com`],
+	]);
+	for (const password of ["hunter2", "pa@ss9", "ss9", "tulip7"])
+		expect(JSON.stringify(recorded)).not.toContain(password);
+});
+
 it("bounds parameter count, name and value length and total size", () => {
 	expect(requestQuery("")).toEqual({});
 	expect(requestQuery("?")).toEqual({});
