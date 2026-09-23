@@ -118,14 +118,29 @@ it("removes short userinfo from scheme-relative, backslashed and @-containing UR
 			next: "//alice:hunter2@example.com/private",
 			target: String.raw`https:\\bob:pa@ss9@example.com/x`,
 			back: String.raw`/\carol:tulip7@example.com`,
+			triple: "https:///dave:hunter2@example.com",
+			relative: "///erin:hunter2@example.com",
+			bare: "https:frank:hunter2@example.com/private",
+			single: "https:/grace:hunter2@example.com/private",
+			tabbed: "ht\ttps://heidi:hunter2@example.com",
+			email: "rahul@example.com",
+			mailto: "mailto:rahul@example.com",
 		})}`,
 	);
 	expect(recorded.query).toEqual([
 		["next", "//[redacted]@example.com/private"],
 		["target", String.raw`https:\\[redacted]@example.com/x`],
 		["back", String.raw`/\[redacted]@example.com`],
+		["triple", "https:///[redacted]@example.com"],
+		["relative", "///[redacted]@example.com"],
+		// The URL parser reads these as userinfo too, so nothing of them is kept.
+		["bare", "[redacted]"],
+		["single", "[redacted]"],
+		["tabbed", "[redacted]"],
+		["email", "rahul@example.com"],
+		["mailto", "mailto:rahul@example.com"],
 	]);
-	for (const password of ["hunter2", "pa@ss9", "ss9", "tulip7"])
+	for (const password of ["hunter2", "pa@ss9", "ss9", "tulip7", "dave", "erin", "frank", "grace", "heidi"])
 		expect(JSON.stringify(recorded)).not.toContain(password);
 });
 

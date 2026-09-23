@@ -324,20 +324,34 @@ it("lets fs agents read every request record, including human and anonymous ones
 	expect(await actors({ cookie: app.cookie })).toEqual(["rahul", "boot", "reader"]);
 }, 10000);
 
-it("queues earlier drops on the next record even when another finalizer pauses between finishing and queuing", async () => {
-	const handoffRecord = Schema.NullOr(Schema.Struct({ path: Schema.String, lost: Schema.optionalKey(Schema.Int) }));
+it("queues earlier drops on the next record even when another finalizer pauses, and writes drops left when the queue drains", async () => {
+	const handoffStored = Schema.Struct({
+		path: Schema.optionalKey(Schema.String),
+		outcome: Schema.String,
+		lost: Schema.optionalKey(Schema.Int),
+	});
+	const handoffRecord = Schema.NullOr(handoffStored);
 	const { stdout } = await execute("bun", [join(import.meta.dirname, "fixtures/request-event-handoff.ts")], {
 		timeout: 30000,
 	});
 	const result = Schema.decodeUnknownSync(
 		Schema.fromJsonString(
-			Schema.Struct({ filling: Schema.Int, fill: Schema.Int, a: handoffRecord, b: handoffRecord, c: handoffRecord }),
+			Schema.Struct({
+				filling: Schema.Int,
+				fill: Schema.Int,
+				a: handoffRecord,
+				b: handoffRecord,
+				c: handoffRecord,
+				markers: Schema.Array(handoffStored),
+			}),
 		),
 	)(stdout.trim().split("\n").at(-1));
 	// A's record found the queue full again; B took the slot the writer freed while A paused.
 	expect(result.a).toBeNull();
-	expect(result.b).toEqual({ path: "/b", lost: result.filling - result.fill });
-	expect(result.c).toEqual({ path: "/c", lost: 1 });
+	expect(result.b).toEqual({ path: "/b", outcome: "completed", lost: result.filling - result.fill });
+	// No request followed A before the queue drained, so boot wrote its drop without waiting for C.
+	expect(result.markers).toEqual([{ outcome: "lost", lost: 1 }]);
+	expect(result.c).toEqual({ path: "/c", outcome: "completed" });
 }, 40000);
 
 it("finishes HTTP response and traffic cleanup while its diagnostic writer waits on the boot SQL connection", async (test) => {
@@ -382,19 +396,19 @@ it("finishes HTTP response and traffic cleanup while its diagnostic writer waits
 		await fetch(`${url}/release`);
 		await holding;
 	}
-	await expect.poll(stats, { timeout: 2000 }).toMatchObject({ written: 257, lost: 0 });
-	// The next queued record reports the 44 records the full queue dropped.
+	// Nothing was queued after the 44 drops, so once the 257 queued records drain boot writes the count on its own.
+	await expect.poll(stats, { timeout: 2000 }).toMatchObject({ written: 258, lost: 44 });
 	await (await fetch(`${url}/request`)).text();
-	await expect.poll(stats).toMatchObject({ written: 258, lost: 44 });
+	await expect.poll(stats).toMatchObject({ written: 259, lost: 44 });
 	await fetch(`${url}/fail`);
 	expect(await (await fetch(`${url}/request`)).text()).toBe("response complete");
 	await expect.poll(() => output).toContain("http.request event write failed");
 	expect(output).not.toContain("private-diagnostic-secret");
-	expect(await stats()).toMatchObject({ written: 258, traffic: { admitted: 0 } });
+	expect(await stats()).toMatchObject({ written: 259, traffic: { admitted: 0 } });
 	await fetch(`${url}/repair`);
 	await (await fetch(`${url}/request`)).text();
 	// The next written record reports the refused write.
-	await expect.poll(stats).toMatchObject({ written: 259, lost: 45 });
+	await expect.poll(stats).toMatchObject({ written: 260, lost: 45 });
 }, 7000);
 
 it("records boot auth and enrollment failures and app-down replies once without feed self-logging", async (test) => {

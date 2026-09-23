@@ -18,7 +18,10 @@ type RequestPayload = {
 	readonly outcome: "completed" | "failed" | "interrupted";
 	readonly lost?: number;
 };
-type RequestRecord = Omit<typeof EventRecord.Type, "seq" | "payload"> & { readonly payload: RequestPayload };
+// Drops no later request carried, written by boot on their own once the queue drains.
+type LostPayload = { readonly outcome: "lost"; readonly lost: number };
+type Stored<Payload> = Omit<typeof EventRecord.Type, "seq" | "payload"> & { readonly payload: Payload };
+type RequestRecord = Stored<RequestPayload>;
 // Boot's own refusals carry a stable {error:{code}}. Proxied app bodies are streams and are never read.
 const BootError = Schema.fromJsonString(
 	Schema.Struct({
@@ -39,9 +42,10 @@ export const requestEvents = (events: Events["Service"]) =>
 	Effect.gen(function* () {
 		const pending = yield* Queue.dropping<RequestRecord>(256);
 		// A missing record is counted as `lost` on a later stored one, so a reader can tell a quiet period
-		// from lost history. A drop is carried by the next record queued, and a failed write by the next
-		// record written. A request that finished between two stored records is therefore stored between
-		// them or counted by one of them, unless boot stopped with records still queued.
+		// from lost history. A drop is carried by the next record queued or, when the queue drains first, by a
+		// `lost` record of its own; a failed write is carried by the next record written. A request that finished
+		// between two stored records is therefore stored between them or counted by one of them, unless boot
+		// stopped with records still queued.
 		const dropped = yield* Ref.make(0);
 		// Taking the drop count and offering its carrier must not interleave with another finalizer, or a
 		// record could be queued without drops that happened before it while the count waits for a later one.
@@ -49,19 +53,43 @@ export const requestEvents = (events: Events["Service"]) =>
 		const failed = yield* Ref.make(0);
 		const withLost = (payload: RequestPayload, count: number): RequestPayload =>
 			count === 0 ? payload : { ...payload, lost: (payload.lost ?? 0) + count };
+		const write = (event: Stored<RequestPayload | LostPayload>) =>
+			Effect.gen(function* () {
+				const lost = (event.payload.lost ?? 0) + (yield* Ref.getAndSet(failed, 0));
+				const payload = lost === 0 ? event.payload : { ...event.payload, lost };
+				yield* events.writeBoot({ ...event, payload }).pipe(
+					// Do not retry an uncertain commit or include request/error contents in stderr.
+					Effect.catchCauseIf(
+						(cause) => !Cause.hasInterruptsOnly(cause),
+						() =>
+							Ref.update(failed, (count) => count + lost + (payload.outcome === "lost" ? 0 : 1)).pipe(
+								Effect.andThen(Effect.logError("http.request event write failed")),
+							),
+					),
+				);
+			});
 		yield* Effect.gen(function* () {
 			const event = yield* Queue.take(pending);
-			const payload = withLost(event.payload, yield* Ref.getAndSet(failed, 0));
-			yield* events.writeBoot({ ...event, payload }).pipe(
-				// Do not retry an uncertain commit or include request/error contents in stderr.
-				Effect.catchCauseIf(
-					(cause) => !Cause.hasInterruptsOnly(cause),
-					() =>
-						Ref.update(failed, (count) => count + (payload.lost ?? 0) + 1).pipe(
-							Effect.andThen(Effect.logError("http.request event write failed")),
-						),
+			yield* write(event);
+			// Only drops start a record of their own: a failing store would refuse it and loop.
+			const tail = yield* handoff.withPermit(
+				Queue.size(pending).pipe(
+					Effect.flatMap((size) => (size === 0 ? Ref.getAndSet(dropped, 0) : Effect.succeed(0))),
 				),
 			);
+			if (tail > 0)
+				yield* write({
+					at: yield* Clock.currentTimeMillis,
+					type: "http.request",
+					level: "warn",
+					actor: "boot",
+					instance: null,
+					generation: event.generation,
+					request_id: null,
+					topic: null,
+					message_id: null,
+					payload: { outcome: "lost", lost: tail },
+				});
 		}).pipe(Effect.forever, Effect.forkScoped);
 		return (input: {
 			readonly started: bigint;

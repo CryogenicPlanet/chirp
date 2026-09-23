@@ -62,18 +62,25 @@ const credentialShaped = (text: string) =>
 		(run) => [/[a-z]/, /[A-Z]/, /[0-9]/].filter((pattern) => pattern.test(run)).length >= 2,
 	);
 // A URL inside a value can carry its own query, fragment or userinfo. URL parsers also accept scheme-relative
-// `//user:pass@host`, backslashes for slashes and `@` inside the password, splitting at the last `@`.
+// `//user:pass@host`, backslashes and extra slashes, and `@` inside the password, splitting at the last `@`.
 const withoutNested = (value: string) => {
 	const cut = value.search(/[?#]/);
 	return (cut < 0 ? value : `${value.slice(0, cut)}${value.charAt(cut)}${redacted}`).replace(
-		/^(\s*(?:[a-z][a-z0-9+.-]*:)?[\\/]{2})[^\\/?#]*@/i,
+		/^(\s*(?:[a-z][a-z0-9+.-]*:)?[\\/]{2,})[^\\/?#]*@/i,
 		`$1${redacted}@`,
 	);
+};
+// Special schemes also take userinfo after zero or one slash (`https:user:pass@host`), and parsers drop tabs,
+// newlines and leading controls. Whatever the URL parser still reads as userinfo drops the whole value.
+const parsedUserinfo = (value: string) => {
+	const url = URL.parse(value.replace(`${redacted}@`, ""), "http://base.invalid");
+	return url !== null && (url.username !== "" || url.password !== "");
 };
 const clip = (text: string, limit: number) => (text.length > limit ? `${text.slice(0, limit)}…` : text);
 const storedValue = (name: string, value: string) => {
 	if (secretName(name)) return redacted;
 	const readable = withoutNested(value);
+	if (parsedUserinfo(readable)) return redacted;
 	return !publicNames.has(name) && credentialShaped(readable) ? redacted : clip(readable, maxValue);
 };
 

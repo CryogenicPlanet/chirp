@@ -7,8 +7,13 @@ import { eventFilterSchema, eventRoutingSchema } from "../../src/boot-schema.ts"
 import { requestEvents } from "../../src/request-events.ts";
 
 // Request A pauses while its finalizer builds its record. Meanwhile the writer frees one queue slot and request B
-// takes it. B must carry the drops that happened before it, and A's own drop must reach the next record, C.
-const Stored = Schema.Struct({ path: Schema.String, lost: Schema.optionalKey(Schema.Int) });
+// takes it. B must carry the drops that happened before it. Nothing is queued after A is dropped, so once the queue
+// drains boot must write A's drop on its own rather than leave it for C.
+const Stored = Schema.Struct({
+	path: Schema.optionalKey(Schema.String),
+	outcome: Schema.String,
+	lost: Schema.optionalKey(Schema.Int),
+});
 const stored = Schema.decodeUnknownOption(Stored);
 const Result = Schema.fromJsonString(
 	Schema.Struct({
@@ -17,6 +22,7 @@ const Result = Schema.fromJsonString(
 		a: Schema.NullOr(Stored),
 		b: Schema.NullOr(Stored),
 		c: Schema.NullOr(Stored),
+		markers: Schema.Array(Stored),
 	}),
 );
 const filling = 300;
@@ -104,10 +110,11 @@ const main = Effect.gen(function* () {
 		yield* Console.log(
 			yield* Schema.encodeEffect(Result)({
 				filling,
-				fill: all.filter((payload) => payload.path.startsWith("/fill/")).length,
+				fill: all.filter((payload) => payload.path?.startsWith("/fill/")).length,
 				a: find("/a"),
 				b: find("/b"),
 				c: find("/c"),
+				markers: all.filter((payload) => payload.outcome === "lost"),
 			}),
 		);
 	}).pipe(Effect.provide(layer(Effect.void)));
