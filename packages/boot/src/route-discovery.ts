@@ -138,7 +138,7 @@ const routes = [
 		"get",
 		["/_boot/approve/{id}", "/approve/{id}"],
 		"public",
-		"Immutable enrollment approval page displaying the user code and passkey controls.",
+		"Immutable enrollment approval page displaying the user code and passkey controls. A malformed or unknown link, including one copied with a trailing character, returns 404 approval_link_invalid.",
 	],
 	[
 		"post",
