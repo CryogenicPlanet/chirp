@@ -75,7 +75,9 @@ export const publicEventResponse = (
 		const input = {
 			limit,
 			...(since === undefined ? {} : { since }),
-			...(identity?.kind === "agent"
+			// An fs agent can already publish app code that observes every proxied request, so it reads
+			// every request record. Other agents read only their own.
+			...(identity?.kind === "agent" && !identity.scopes.includes("fs")
 				? { requestActor: identity.agent }
 				: requestActor === null
 					? {}

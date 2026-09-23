@@ -17,9 +17,14 @@ const requestEvent = Schema.Struct({
 		span_id: Schema.String,
 		method: Schema.String,
 		path: Schema.String,
+		query: Schema.optionalKey(Schema.Array(Schema.Tuple([Schema.String, Schema.String]))),
+		query_truncated: Schema.optionalKey(Schema.Literal(true)),
+		user_agent: Schema.optionalKey(Schema.String),
 		status: Schema.Int,
+		error_code: Schema.optionalKey(Schema.String),
 		duration_ms: Schema.Finite,
 		outcome: Schema.String,
+		lost: Schema.optionalKey(Schema.Int),
 	}).annotate({ parseOptions: { onExcessProperty: "error" } }),
 });
 const envelope = Schema.Struct({ items: Schema.Array(requestEvent), cursor: Schema.Int });
@@ -50,13 +55,13 @@ const recordedRequests = async (data: string) => {
 		),
 	)(stdout).success;
 };
-const seedAgent = async (data: string, name: string) => {
+const seedAgent = async (data: string, name: string, scopes: readonly string[] = ["read"]) => {
 	const token = randomBytes(32).toString("base64url"),
 		id = randomBytes(16).toString("hex");
 	const hash = createHash("sha256").update(token).digest("hex");
 	await inspect(
 		data,
-		`INSERT INTO tokens VALUES ('${id}','${id}','${id}','${name}','access','${hash}','test','["read"]',9999999999999,0,NULL,NULL,NULL,NULL)`,
+		`INSERT INTO tokens VALUES ('${id}','${id}','${id}','${name}','access','${hash}','test','${JSON.stringify(scopes)}',9999999999999,0,NULL,NULL,NULL,NULL)`,
 	);
 	return { id, headers: { authorization: `Bearer ${token}` } };
 };
@@ -236,6 +241,89 @@ it("fences stored request publication while direct boot diagnostics enforce acto
 	);
 }, 10000);
 
+it("records readable query parameters, the user agent and boot's error code without storing a secret", async (test) => {
+	const app = await launch(test);
+	await expect.poll(async () => (await app.state()).state).toBe("live");
+	const secrets = [randomBytes(32).toString("base64url"), "state-secret", "verifier-secret", "short1"];
+	const authorize = new URLSearchParams({
+		response_type: "code",
+		state: secrets[1] ?? "",
+		code_verifier: secrets[2] ?? "",
+		invite: secrets[0] ?? "",
+		pin: secrets[3] ?? "",
+		resource: "https://chirp.cryo.wtf/mcp",
+	});
+	// A browser without a board credential is anonymous; boot refuses it before the app.
+	const anonymous = await fetch(`${app.url}/mcp/oauth/authorize?${authorize}`, {
+		headers: { "user-agent": "Mozilla/5.0 claude-test" },
+	});
+	expect(anonymous.status).toBe(401);
+	const refusal: unknown = await anonymous.json();
+	const unknown = await app.fetch(`${app.url}/_boot/nope?limit=5`);
+	expect(unknown.status).toBe(501);
+	await unknown.text();
+	const echoed = await app.fetch(`${app.url}/echo?topic=project/thread&token=${secrets[0]}`);
+	expect(echoed.status).toBe(200);
+	await echoed.text();
+	await expect.poll(async () => (await recordedRequests(app.data)).items.length).toBe(3);
+	const [first, second, third] = (await recordedRequests(app.data)).items;
+	expect(first).toMatchObject({
+		actor: "boot",
+		payload: {
+			method: "GET",
+			path: "/mcp/oauth/authorize",
+			query: [
+				["response_type", "code"],
+				["state", "[redacted]"],
+				["code_verifier", "[redacted]"],
+				["invite", "[redacted]"],
+				["pin", "[redacted]"],
+				["resource", "https://chirp.cryo.wtf/mcp"],
+			],
+			user_agent: "Mozilla/5.0 claude-test",
+			status: 401,
+			error_code: expect.stringMatching(/^[a-z_]+$/),
+		},
+	});
+	expect(refusal).toMatchObject({ error: { code: first?.payload.error_code } });
+	expect(second).toMatchObject({
+		actor: "rahul",
+		payload: { path: "/_boot/nope", query: [["limit", "5"]], status: 501, error_code: "not_implemented" },
+	});
+	// Proxied app bodies are never read, so app responses carry no boot error code.
+	expect(third?.payload).toMatchObject({
+		path: "/echo",
+		query: [
+			["topic", "project/thread"],
+			["token", "[redacted]"],
+		],
+		status: 200,
+	});
+	expect(third?.payload).not.toHaveProperty("error_code");
+	const stored = JSON.stringify(await inspect(app.data, "SELECT event FROM events"));
+	for (const secret of secrets) expect(stored).not.toContain(secret);
+}, 10000);
+
+it("lets fs agents read every request record, including human and anonymous ones, while other agents read only their own", async (test) => {
+	const app = await launch(test);
+	await expect.poll(async () => (await app.state()).state).toBe("live");
+	const reader = await seedAgent(app.data, "reader"),
+		builder = await seedAgent(app.data, "builder", ["read", "write", "fs"]);
+	await (await app.fetch(`${app.url}/echo`)).text();
+	await (await fetch(`${app.url}/mcp/oauth/token`, { method: "POST" })).text();
+	await (await fetch(`${app.url}/echo`, { headers: reader.headers })).text();
+	await expect.poll(async () => (await recordedRequests(app.data)).items.length).toBe(3);
+	const actors = async (headers: Readonly<Record<string, string>>) => {
+		const page = Schema.decodeUnknownSync(
+			Schema.Struct({ items: Schema.Array(Schema.Struct({ type: Schema.String, actor: Schema.String })) }),
+		)(await (await fetch(`${app.url}/_boot/events?limit=200`, { headers })).json());
+		return page.items.filter((event) => event.type === "http.request").map((event) => event.actor);
+	};
+	expect(await actors(builder.headers)).toEqual(["rahul", "boot", "reader"]);
+	expect(await actors(reader.headers)).toEqual(["reader"]);
+	expect(await actors({ cookie: app.cookie })).toEqual(["rahul", "boot", "reader"]);
+}, 10000);
+
 it("finishes HTTP response and traffic cleanup while its diagnostic writer waits on the boot SQL connection", async (test) => {
 	const child = spawn("bun", [join(import.meta.dirname, "fixtures/request-event-contention.ts")], {
 		stdio: ["ignore", "pipe", "pipe"],
@@ -278,15 +366,19 @@ it("finishes HTTP response and traffic cleanup while its diagnostic writer waits
 		await fetch(`${url}/release`);
 		await holding;
 	}
-	await expect.poll(stats, { timeout: 2000 }).toMatchObject({ written: 257 });
+	await expect.poll(stats, { timeout: 2000 }).toMatchObject({ written: 257, lost: 0 });
+	// The next queued record reports the 44 records the full queue dropped.
+	await (await fetch(`${url}/request`)).text();
+	await expect.poll(stats).toMatchObject({ written: 258, lost: 44 });
 	await fetch(`${url}/fail`);
 	expect(await (await fetch(`${url}/request`)).text()).toBe("response complete");
 	await expect.poll(() => output).toContain("http.request event write failed");
 	expect(output).not.toContain("private-diagnostic-secret");
-	expect(await stats()).toMatchObject({ written: 257, traffic: { admitted: 0 } });
+	expect(await stats()).toMatchObject({ written: 258, traffic: { admitted: 0 } });
 	await fetch(`${url}/repair`);
 	await (await fetch(`${url}/request`)).text();
-	await expect.poll(stats).toMatchObject({ written: 258 });
+	// The next written record reports the refused write.
+	await expect.poll(stats).toMatchObject({ written: 259, lost: 45 });
 }, 7000);
 
 it("records boot auth and enrollment failures and app-down replies once without feed self-logging", async (test) => {
