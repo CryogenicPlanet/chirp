@@ -6,7 +6,7 @@ const maxParameters = 32,
 	maxValue = 256,
 	maxTotal = 2048;
 // Matching is by word, so `code` covers `code` and `user_code` while `code_challenge_method` stays readable.
-const secretWords: ReadonlySet<string> = new Set([
+const secretWords: readonly string[] = Object.freeze([
 	"assertion",
 	"auth",
 	"authorization",
@@ -37,9 +37,19 @@ const secretWords: ReadonlySet<string> = new Set([
 	"verifier",
 ]);
 // Joined names such as `accesstoken` or `clientsecret` have no word boundary.
-const secretFragments = ["apikey", "cookie", "credential", "nonce", "passw", "secret", "session", "signature", "token"];
+const secretFragments: readonly string[] = Object.freeze([
+	"apikey",
+	"cookie",
+	"credential",
+	"nonce",
+	"passw",
+	"secret",
+	"session",
+	"signature",
+	"token",
+]);
 // OAuth names the client, its redirect and the protected resource publicly; a failed authorization turns on them.
-const publicNames: ReadonlySet<string> = new Set(["client_id", "redirect_uri", "resource"]);
+const publicNames: readonly string[] = Object.freeze(["client_id", "redirect_uri", "resource"]);
 
 const words = (name: string) =>
 	name
@@ -52,7 +62,7 @@ const secretName = (name: string) => {
 	const joined = parts.join("");
 	return (
 		parts.at(-1) === "code" ||
-		parts.some((part) => secretWords.has(part)) ||
+		parts.some((part) => secretWords.includes(part)) ||
 		secretFragments.some((fragment) => joined.includes(fragment))
 	);
 };
@@ -81,7 +91,7 @@ const storedValue = (name: string, value: string) => {
 	const url = withoutNested(value);
 	if (parsedUserinfo(url)) return redacted;
 	const readable = url.replace(userinfo, `$1${redacted}@`);
-	return !publicNames.has(name) && credentialShaped(readable) ? redacted : clip(readable, maxValue);
+	return !publicNames.includes(name) && credentialShaped(readable) ? redacted : clip(readable, maxValue);
 };
 
 /** The payload fields describing a URL query: ordered [name, value] pairs, bounded in count and size. */

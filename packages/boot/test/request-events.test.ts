@@ -424,10 +424,11 @@ it("finishes HTTP response and traffic cleanup while its diagnostic writer waits
 	expect(output).not.toContain("private-diagnostic-secret");
 	expect(await stats()).toMatchObject({ written: 259, traffic: { admitted: 0 } });
 	await fetch(`${url}/repair`);
+	// The refused write was the last request, so boot retries its count on its own once the store accepts it.
+	await expect.poll(stats, { timeout: 5000 }).toMatchObject({ written: 260, lost: 45 });
 	await (await fetch(`${url}/request`)).text();
-	// The next written record reports the refused write.
-	await expect.poll(stats).toMatchObject({ written: 260, lost: 45 });
-}, 7000);
+	await expect.poll(stats).toMatchObject({ written: 261, lost: 45 });
+}, 15000);
 
 it("records boot auth and enrollment failures and app-down replies once without feed self-logging", async (test) => {
 	const app = await launch(test, "exit");

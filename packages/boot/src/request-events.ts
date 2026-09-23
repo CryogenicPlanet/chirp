@@ -1,4 +1,4 @@
-import { Cause, Clock, Effect, Option, Queue, Ref, Schema, Semaphore } from "effect";
+import { Cause, Clock, Duration, Effect, Option, Queue, Ref, Schema, Semaphore } from "effect";
 import type { HttpServerResponse } from "effect/unstable/http";
 import type { VerifiedIdentity } from "./enrollment.ts";
 import type { EventRecord, Events } from "./events.ts";
@@ -24,7 +24,7 @@ type Stored<Payload> = Omit<typeof EventRecord.Type, "seq" | "payload"> & { read
 type RequestRecord = Stored<RequestPayload>;
 // Missing records per actor: the agent, or `boot` for anonymous and boot-refused requests.
 type Counts = ReadonlyMap<string, number>;
-const none: Counts = new Map();
+const empty = (): Counts => new Map();
 const take = (counts: Counts, actor: string): readonly [number, Counts] => {
 	const count = counts.get(actor) ?? 0;
 	if (count === 0) return [0, counts];
@@ -56,13 +56,15 @@ export const requestEvents = (events: Events["Service"]) =>
 		// A missing record is counted as `lost` on a later stored record of the same actor, so a reader who sees
 		// only one actor's records can still tell a quiet period from lost history. A drop is carried by that
 		// actor's next record queued, a failed write by its next record written, and either, once the queue
-		// drains, by a `lost` record of its own. A request that finished between two stored records of an actor
-		// is therefore stored between them or counted by one of them, unless boot stopped with records queued.
-		const dropped = yield* Ref.make(none);
+		// drains, by a `lost` record of its own; refused writes are retried that way until stored, even without
+		// further traffic. A request that finished between two stored records of an actor is therefore stored
+		// between them or counted by one of them, unless boot stopped with records queued or refused.
+		const dropped = yield* Ref.make(empty());
 		// Taking the drop count and offering its carrier must not interleave with another finalizer, or a
 		// record could be queued without drops that happened before it while the count waits for a later one.
 		const handoff = yield* Semaphore.make(1);
-		const failed = yield* Ref.make(none);
+		const retry = Duration.seconds(2);
+		const failed = yield* Ref.make(empty());
 		const withLost = (payload: RequestPayload, count: number): RequestPayload =>
 			count === 0 ? payload : { ...payload, lost: (payload.lost ?? 0) + count };
 		const write = (event: Stored<RequestPayload | LostPayload>) =>
@@ -77,7 +79,13 @@ export const requestEvents = (events: Events["Service"]) =>
 						() =>
 							Ref.update(failed, (counts) =>
 								add(counts, event.actor, lost + (payload.outcome === "lost" ? 0 : 1)),
-							).pipe(Effect.andThen(Effect.logError("http.request event write failed")), Effect.as(false)),
+							).pipe(
+								// Retried lost records would log once per interval for as long as the store refuses them.
+								Effect.andThen(
+									payload.outcome === "lost" ? Effect.void : Effect.logError("http.request event write failed"),
+								),
+								Effect.as(false),
+							),
 					),
 				);
 			});
@@ -99,16 +107,24 @@ export const requestEvents = (events: Events["Service"]) =>
 				})),
 			);
 		yield* Effect.gen(function* () {
-			const event = yield* Queue.take(pending);
-			const stored = yield* write(event);
+			// While refused writes are outstanding, wait for the next record at most one retry interval, then retry
+			// them on their own: the refused request may have been the last one, and the store may have recovered.
+			const waiting = (yield* Ref.get(failed)).size > 0;
+			const next = waiting
+				? yield* Queue.take(pending).pipe(Effect.timeoutOption(retry))
+				: Option.some(yield* Queue.take(pending));
+			const stored = Option.isSome(next) ? yield* write(next.value) : false;
 			const drained = yield* handoff.withPermit(
 				Queue.size(pending).pipe(
-					Effect.flatMap((size) => (size === 0 ? Ref.getAndSet(dropped, none) : Effect.succeed(none))),
+					Effect.flatMap((size) => (size === 0 ? Ref.getAndSet(dropped, empty()) : Effect.succeed(empty()))),
 				),
 			);
-			// Refused writes start records of their own only after a write succeeded; otherwise a failing store
-			// would refuse those records in a loop.
-			const refused = stored && (yield* Queue.size(pending)) === 0 ? yield* Ref.getAndSet(failed, none) : none;
+			// Right after a refused write, wait for the retry interval rather than retry at once, so a failing
+			// store is asked at most once per interval.
+			const refused =
+				(stored || Option.isNone(next)) && (yield* Queue.size(pending)) === 0
+					? yield* Ref.getAndSet(failed, empty())
+					: empty();
 			yield* Effect.forEach(
 				new Set([...drained.keys(), ...refused.keys()]),
 				(actor) => lostRecord(actor, (drained.get(actor) ?? 0) + (refused.get(actor) ?? 0)).pipe(Effect.flatMap(write)),
