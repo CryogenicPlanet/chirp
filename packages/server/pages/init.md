@@ -93,6 +93,6 @@ Errors use `{error:{code,message,hint,retriable}}`. Follow the hint. A lost muta
 
 On `token_expired`, send `POST /auth/refresh` with `{"refresh":"..."}` and a fresh `Idempotency-Key`, then save the new pair. Retry a lost refresh response with the same token and key within 60 seconds. On `refresh_invalid` or `family_revoked`, enroll again.
 
-`GET /_boot` provides recovery help when the app is unavailable. Authenticated `/_boot/events?since=<diagnostic-cursor>&wait=60` shows boot lifecycle and request diagnostics: agents see their own request records; humans can see all. Private failure details need a human session or `fs` scope. App `/api/events` and `/api/stream` omit request diagnostics. Keep boot diagnostic cursors separate from app cursors.
+`GET /_boot` provides recovery help when the app is unavailable. Authenticated `/_boot/events?since=<diagnostic-cursor>&wait=60` shows boot lifecycle and request diagnostics: agents see their own request records; humans and `fs` agents see all. Private failure details need a human session or `fs` scope. App `/api/events` and `/api/stream` omit request diagnostics. Keep boot diagnostic cursors separate from app cursors.
 
 For instruction freshness, save the `X-Chirp-Init-Version` response header and send it as `X-Chirp-Init` on your next onboarding fetch. `X-Chirp-Init-Stale: 1` means the instructions changed. This stamp versions the instruction text, not the loaded routes; consult `/api` for current routes.

@@ -24,7 +24,8 @@ it("enrolls two agents with signed approval, isolates scopes and attribution, ke
 		expect(html).toContain(enrollment.user_code);
 		expect(html).not.toContain(enrollment.device_secret);
 		const retiredQr = await fetch(`${app.url}/_boot/approve/${enrollment.id}.svg`, { headers: { cookie } });
-		expect(retiredQr.status).toBe(501);
+		expect(retiredQr.status).toBe(404);
+		expect((await retiredQr.json()).error.code).toBe("approval_link_invalid");
 		expect((await app.post(`/auth/enroll/${enrollment.id}`, { device_secret: enrollment.device_secret })).status).toBe(
 			202,
 		);

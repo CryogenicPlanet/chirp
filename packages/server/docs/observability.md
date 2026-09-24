@@ -18,7 +18,7 @@ Boot remains the diagnostic surface when editable app routes are unavailable. Re
 
 ## Read boot diagnostics
 
-Use your existing authenticated browser session to open `/_boot/events`, or your enrolled agent's bearer token. Agent tokens need `read` scope. Humans can read all request diagnostics; agents can read their own. Private failure details additionally require a human session or `fs` scope.
+Use your existing authenticated browser session to open `/_boot/events`, or your enrolled agent's bearer token. Agent tokens need `read` scope. Humans and agents with `fs` scope read every request record, including anonymous ones; other agents read only their own. Private failure details additionally require a human session or `fs` scope.
 
 `GET /_boot/events` accepts only these query parameters:
 
@@ -30,9 +30,11 @@ Use your existing authenticated browser session to open `/_boot/events`, or your
 
 Without `since`, the response shows recent records. Read `items` and save the returned `cursor` after consuming the response. Continue with that cursor to inspect later records. Keep this boot diagnostics cursor separate from application feed cursors: recovery diagnostics can advance while app publication is blocked. Match a UI/API request ID against each event's `request_id` field locally; this endpoint does not accept request-ID or event-type filters.
 
-Boot records `http.request` with the method, path, status, generation, verified attribution, duration and outcome. Duration includes streaming and interruption, so a long-lived stream produces its completed record only when its HTTP scope ends. Application feeds deliberately omit these records: querying `/api/events` for them will not provide boot request diagnostics.
+Boot records `http.request` with the method, path, query parameters, user agent, status, generation, verified attribution, duration and outcome. Duration includes streaming and interruption, so a long-lived stream produces its completed record only when its HTTP scope ends. Application feeds deliberately omit these records: querying `/api/events` for them will not provide boot request diagnostics.
 
-Request diagnostics use a bounded queue and may be dropped under load or storage failure. Absence of a record does not prove a request never ran. Use the API result and durable product/recovery evidence to establish whether a mutation committed.
+`query` lists up to 32 `[name, value]` pairs in request order, about 2 KB in total; `query_truncated` marks a cut. A value reads `[redacted]` when its name looks like a credential, such as `code`, `user_code`, `state`, `token`, `key`, `secret`, `password`, `signature`, `session` or `nonce`, or when the value contains a key- or token-like run of 20 or more characters mixing letter case or digits. The same check replaces such a parameter name. `client_id`, `redirect_uri` and `resource` skip the value check because OAuth makes them public. A nested URL query or fragment inside a value becomes `?[redacted]` or `#[redacted]`. Values and the user agent keep their first 256 characters. `error_code` appears only when boot itself refused the request; boot never reads app response bodies, so an app refusal shows only its status.
+
+Request diagnostics use a bounded queue and may be dropped under load or storage failure. Missing records are counted per actor (the agent, or `boot` for anonymous and boot-refused requests): that actor's next stored record carries the count as `lost`, or, once the queue drains, boot writes it on its own as an `http.request` record for that actor with `outcome: "lost"`, `lost`, generation `0` (it can span generations) and no request fields. While writes are refused, boot retries those counts this way every two seconds until the store accepts them, even with no further requests. Records are written when requests finish. A request that finished between two stored records of the same actor is stored between them or counted in `lost` on a record of that actor after the first, up to and including the second. When neither holds and boot did not restart in between, boot did not finish that request. Boot never records `/health`, `/_boot/status`, `/_boot/events`, `/api/events` or `/api/stream`, and records still queued, or counts not yet stored, when boot stops are lost without a count. Use the API result and durable product/recovery evidence to establish whether a mutation committed.
 
 ## Add useful extension diagnostics
 
