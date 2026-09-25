@@ -10,6 +10,7 @@ import {
 	InvalidDeploymentTransition,
 } from "./deployment.ts";
 import type { ProviderMutation } from "./operation.ts";
+import { legacyVolumeName } from "./provisioning-settings.ts";
 import { boardDeployments, boardOperations, boardRoutes, boards } from "./schema.ts";
 
 const nextState: Readonly<Partial<Record<DeploymentState, DeploymentState>>> = {
@@ -55,6 +56,7 @@ const make = Effect.gen(function* () {
 			.select({
 				board_id: boardOperations.board_id,
 				checkpoint: boardOperations.checkpoint,
+				ambiguous_mutations: boardOperations.ambiguous_mutations,
 			})
 			.from(boardOperations)
 			.where(
@@ -74,7 +76,20 @@ const make = Effect.gen(function* () {
 					rows[0] ? Effect.succeed(rows[0]) : Effect.fail(new DeploymentFenceLost({ operationId: input.operationId })),
 				),
 			);
-	const assertSpec = (deployment: Deployment, storageEngine: string, spec: DeploymentSpec) => {
+	const assertSpec = (
+		deployment: Deployment,
+		boardSlug: string,
+		storageEngine: string,
+		spec: DeploymentSpec,
+		allowPendingVolumeSize: boolean,
+	) => {
+		if (
+			deployment.volume_name !== spec.volume_name &&
+			(deployment.volume_id === null || deployment.volume_name !== legacyVolumeName(boardSlug))
+		)
+			return Effect.fail(new DeploymentDrift({ boardId: deployment.board_id, field: "volume_name" }));
+		if (deployment.volume_id === null && deployment.volume_size_gb !== spec.volume_size_gb && !allowPendingVolumeSize)
+			return Effect.fail(new DeploymentDrift({ boardId: deployment.board_id, field: "volume_size_gb" }));
 		const values: ReadonlyArray<readonly [string, string | number, string | number]> = [
 			["storage_engine", deployment.storage_engine, storageEngine],
 			["hostname", deployment.hostname, spec.hostname],
@@ -120,9 +135,47 @@ const make = Effect.gen(function* () {
 						yield* db.select().from(boardDeployments).where(eq(boardDeployments.board_id, locked.board_id)).limit(1),
 					);
 					if (Option.isNone(found)) return yield* Effect.die("Deployment insert returned no row");
-					if (found.value.state !== locked.checkpoint)
+					let deployment = found.value;
+					if (deployment.state !== locked.checkpoint)
 						return yield* new DeploymentDrift({ boardId: locked.board_id, field: "checkpoint" });
-					return yield* assertSpec(found.value, board.storage_engine, input.spec);
+					const volumeCreatePending = locked.ambiguous_mutations.includes("volume_create");
+					const normalizeLegacyVolumeName =
+						deployment.volume_name === legacyVolumeName(board.slug) && input.spec.volume_name === "chirp_data";
+					const growVolume =
+						deployment.volume_name === input.spec.volume_name && deployment.volume_size_gb < input.spec.volume_size_gb;
+					if (
+						!volumeCreatePending &&
+						deployment.volume_id === null &&
+						deployment.machine_id === null &&
+						(normalizeLegacyVolumeName || growVolume)
+					) {
+						const upgraded = one(
+							yield* db
+								.update(boardDeployments)
+								.set({
+									...(normalizeLegacyVolumeName ? { volume_name: input.spec.volume_name } : {}),
+									...(deployment.volume_size_gb < input.spec.volume_size_gb
+										? { volume_size_gb: input.spec.volume_size_gb }
+										: {}),
+									row_version: sql`${boardDeployments.row_version} + 1`,
+									updated_at: now,
+								})
+								.where(
+									and(
+										eq(boardDeployments.board_id, deployment.board_id),
+										eq(boardDeployments.row_version, deployment.row_version),
+										isNull(boardDeployments.volume_id),
+										isNull(boardDeployments.machine_id),
+										eq(boardDeployments.volume_name, deployment.volume_name),
+										eq(boardDeployments.volume_size_gb, deployment.volume_size_gb),
+									),
+								)
+								.returning(),
+						);
+						if (Option.isNone(upgraded)) return yield* new DeploymentFenceLost({ operationId: input.operationId });
+						deployment = upgraded.value;
+					}
+					return yield* assertSpec(deployment, board.slug, board.storage_engine, input.spec, volumeCreatePending);
 				}),
 			),
 		get: (boardId: string) =>

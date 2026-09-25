@@ -1,13 +1,18 @@
 import { Effect, Layer, Redacted, Result } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
-import { expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { FlySetupApi, flySetupApiLayer } from "../src/fly-setup-api.ts";
 
+afterEach(() => vi.restoreAllMocks());
+
 test("fixed exec argv, strict ephemeral payload and sanitized provider failures", async () => {
+	const now = Date.parse("2026-01-01T00:00:00.000Z");
+	vi.spyOn(Date, "now").mockReturnValue(now);
 	for (const mode of [
 		"ok",
 		"closed",
 		"expired",
+		"skewed",
 		"long",
 		"extra",
 		"exit",
@@ -16,13 +21,19 @@ test("fixed exec argv, strict ephemeral payload and sanitized provider failures"
 		"near-missing-script",
 		"status",
 	] as const) {
-		const now = Date.now();
 		const stdout =
 			mode === "closed"
 				? { error: "setup_closed" }
 				: {
 						code: "a".repeat(32),
-						expires_at: mode === "expired" ? now - 1 : mode === "long" ? now + 910000 : now + 890000,
+						expires_at:
+							mode === "expired"
+								? now - 1
+								: mode === "skewed"
+									? now + 959000
+									: mode === "long"
+										? now + 961000
+										: now + 890000,
 						...(mode === "extra" ? { secret: "raw-secret" } : {}),
 					};
 		const layer = flySetupApiLayer({ token: Redacted.make("secret"), baseUrl: "https://fly.test" }).pipe(
@@ -68,7 +79,7 @@ test("fixed exec argv, strict ephemeral payload and sanitized provider failures"
 		const result = await Effect.runPromise(
 			FlySetupApi.use((api) => Effect.result(api.issue("app", "machine"))).pipe(Effect.provide(layer)),
 		);
-		expect(Result.isSuccess(result)).toBe(mode === "ok");
+		expect(Result.isSuccess(result)).toBe(mode === "ok" || mode === "skewed");
 		expect(JSON.stringify(result)).not.toContain("raw-secret");
 		if (mode === "missing-script" || mode === "unsupported")
 			expect(result).toMatchObject({ failure: { code: "setup_code_unsupported" } });

@@ -1,6 +1,6 @@
-import { Effect, Option, Redacted } from "effect";
+import { Effect, Fiber, Option, Redacted } from "effect";
 import { describe, expect, test, vi } from "vitest";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Client } from "pg";
 import { PostgresStorage, postgresStorageLayerWithLocal } from "../src/postgres-storage.ts";
 import { FlySecrets, FlySecretsError } from "../src/fly-secrets.ts";
@@ -15,6 +15,7 @@ import { PostgresBootstrapError } from "../src/postgres-bootstrap.ts";
 import { boardOperations, boardPostgresSecrets } from "../src/schema.ts";
 import { Boards } from "../src/boards.ts";
 import { realPostgres, runFresh } from "./fixture.ts";
+import { encryptLegacyBootstrap } from "./fixtures/legacy-cloud-secret.ts";
 
 const url = "postgresql://admin:example-private-password@database.example.com/main?sslmode=require";
 const input = {
@@ -92,6 +93,142 @@ describe("Postgres onboarding persistence", () => {
 			Redacted.make("f".repeat(64)),
 		);
 	});
+});
+
+test("converts historical prepared credentials under the active lease without rotating passwords", async () => {
+	const key = "e".repeat(64);
+	await runFresh(
+		Effect.gen(function* () {
+			yield* migrateCloudDatabase;
+			const board = yield* (yield* Dashboard).create("owner", input);
+			const operation = yield* nextClaim("legacy-worker");
+			if (!operation.lease_token) return yield* Effect.die("Claim returned no lease token");
+			const payload = {
+				adminUrl: url,
+				bootPassword: "a".repeat(64),
+				appPassword: "b".repeat(64),
+			};
+			yield* (yield* Database)
+				.update(boardPostgresSecrets)
+				.set({
+					prepared: true,
+					bootstrap_ciphertext: encryptLegacyBootstrap(key, board.id, payload, "board"),
+					runtime_ciphertext: null,
+					fly_secrets_version: 17,
+				})
+				.where(eq(boardPostgresSecrets.board_id, board.id));
+			yield* (yield* PostgresStorage).prepare(board.id, {
+				operationId: operation.id,
+				leaseToken: operation.lease_token,
+				workerId: "legacy-worker",
+			});
+			const row = (yield* (yield* Database).select().from(boardPostgresSecrets))[0];
+			expect(row).toMatchObject({ prepared: true, bootstrap_ciphertext: null, fly_secrets_version: 17 });
+			if (!row?.runtime_ciphertext) return yield* Effect.die("Legacy conversion produced no runtime credentials");
+			const runtime = Redacted.value(yield* (yield* CloudSecrets).decryptRuntime(board.id, row.runtime_ciphertext));
+			expect(new URL(runtime.bootUrl).password).toBe(payload.bootPassword);
+			expect(new URL(runtime.appUrl).password).toBe(payload.appPassword);
+		}),
+		Redacted.make(key),
+	);
+});
+
+test("converts completed historical credentials without changing operation history", async () => {
+	const key = "e".repeat(64);
+	await runFresh(
+		Effect.gen(function* () {
+			yield* migrateCloudDatabase;
+			const board = yield* (yield* Dashboard).create("owner", {
+				...input,
+				idempotency_key: "completed-legacy",
+			});
+			const database = yield* Database;
+			yield* database
+				.update(boardOperations)
+				.set({ state: "succeeded", finished_at: sql`clock_timestamp()` })
+				.where(eq(boardOperations.board_id, board.id));
+			const payload = {
+				adminUrl: url,
+				bootPassword: "c".repeat(64),
+				appPassword: "d".repeat(64),
+			};
+			yield* database
+				.update(boardPostgresSecrets)
+				.set({
+					prepared: true,
+					bootstrap_ciphertext: encryptLegacyBootstrap(key, board.id, payload, "purpose"),
+					runtime_ciphertext: null,
+					fly_secrets_version: 17,
+				})
+				.where(eq(boardPostgresSecrets.board_id, board.id));
+			const storage = yield* PostgresStorage;
+			expect(yield* storage.upgradeLegacy).toBe(1);
+			expect(yield* storage.upgradeLegacy).toBe(0);
+			const row = (yield* database.select().from(boardPostgresSecrets))[0];
+			expect(row).toMatchObject({ prepared: true, bootstrap_ciphertext: null, fly_secrets_version: 17 });
+			if (!row?.runtime_ciphertext) return yield* Effect.die("Legacy conversion produced no runtime credentials");
+			const runtime = Redacted.value(yield* (yield* CloudSecrets).decryptRuntime(board.id, row.runtime_ciphertext));
+			expect(new URL(runtime.bootUrl).password).toBe(payload.bootPassword);
+			expect(new URL(runtime.appUrl).password).toBe(payload.appPassword);
+			expect(Option.getOrThrow(yield* (yield* Operations).latest(board.id, "provision")).state).toBe("succeeded");
+		}),
+		Redacted.make(key),
+	);
+});
+
+test.skipIf(!realPostgres)("waits for a concurrent legacy-row lock instead of completing early", async () => {
+	const databaseUrl = process.env["CLOUD_TEST_DATABASE_URL"];
+	if (!databaseUrl) return;
+	const key = "e".repeat(64);
+	await runFresh(
+		Effect.gen(function* () {
+			yield* migrateCloudDatabase;
+			const board = yield* (yield* Dashboard).create("owner", {
+				...input,
+				idempotency_key: "locked-legacy",
+			});
+			const database = yield* Database;
+			yield* database
+				.update(boardPostgresSecrets)
+				.set({
+					prepared: true,
+					bootstrap_ciphertext: encryptLegacyBootstrap(
+						key,
+						board.id,
+						{ adminUrl: url, bootPassword: "a".repeat(64), appPassword: "b".repeat(64) },
+						"board",
+					),
+					runtime_ciphertext: null,
+					fly_secrets_version: 17,
+				})
+				.where(eq(boardPostgresSecrets.board_id, board.id));
+			const blocker = yield* Effect.promise(async () => {
+				const client = new Client({ connectionString: databaseUrl });
+				await client.connect();
+				await client.query("BEGIN");
+				await client.query("SELECT board_id FROM board_postgres_secrets WHERE board_id = $1 FOR UPDATE", [board.id]);
+				return client;
+			});
+			yield* Effect.acquireUseRelease(
+				Effect.succeed(blocker),
+				(client) =>
+					Effect.gen(function* () {
+						const conversion = yield* Effect.forkChild((yield* PostgresStorage).upgradeLegacy);
+						yield* Effect.sleep("100 millis");
+						expect(conversion.pollUnsafe()).toBeUndefined();
+						yield* Effect.promise(() => client.query("ROLLBACK"));
+						expect(yield* Fiber.join(conversion)).toBe(1);
+					}),
+				(client) =>
+					Effect.promise(async () => {
+						await client.query("ROLLBACK").catch(() => undefined);
+						await client.end().catch(() => undefined);
+					}),
+			);
+			expect((yield* database.select().from(boardPostgresSecrets))[0]?.bootstrap_ciphertext).toBe(null);
+		}),
+		Redacted.make(key),
+	);
 });
 
 test("retries secret upload durably and never leaks URLs to Machine configuration", async () => {

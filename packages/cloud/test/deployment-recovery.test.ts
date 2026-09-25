@@ -2,13 +2,16 @@ import { Effect, Exit, Option } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import { describe, expect, test } from "vitest";
 import { Boards } from "../src/boards.ts";
+import { Database } from "../src/database.ts";
 import { retryBlockedDeployment } from "../src/deployment-recovery.ts";
 import { Deployments } from "../src/deployments.ts";
 import { migrateCloudDatabase } from "../src/migrations.ts";
+import * as provisioningTemplateV2 from "../src/migrations/0013_provisioning_template_v2.ts";
 import { Operations } from "../src/operations.ts";
 import { Provisioner } from "../src/provisioner.ts";
+import { deploymentSpec, legacyVolumeName } from "../src/provisioning-settings.ts";
 import { realPostgres, runFresh } from "./fixture.ts";
-import { makeFakeProvider, nextClaim, provisionerFor, request, settings } from "./fixtures/provisioner.ts";
+import { imageRef, makeFakeProvider, nextClaim, provisionerFor, request, settings } from "./fixtures/provisioner.ts";
 
 const prepare = (provider: ReturnType<typeof makeFakeProvider>) =>
 	Effect.gen(function* () {
@@ -100,6 +103,69 @@ describe("deployment recovery", () => {
 				const retry = yield* nextClaim("recovery-worker");
 				expect(retry).toMatchObject({ id, ambiguous_mutations: [] });
 			}).pipe(Effect.provide(provisionerFor(provider))),
+		);
+	});
+
+	test("normalizes confirmed-absent legacy Volume intent under the retry lease", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				const board = yield* (yield* Boards).request(request);
+				const operations = yield* Operations;
+				const failed = Option.getOrThrow(yield* operations.claim("worker", 30_000));
+				if (!failed.lease_token) return yield* Effect.die("Missing lease");
+				const lease = { operationId: failed.id, leaseToken: failed.lease_token, workerId: "worker" };
+				const deployments = yield* Deployments;
+				let deployment = yield* deployments.ensure({
+					...lease,
+					spec: {
+						...deploymentSpec(board.slug, imageRef, settings),
+						volume_name: legacyVolumeName(board.slug),
+						volume_size_gb: 1,
+					},
+				});
+				for (const next of ["storage_configuration_verified", "app_created"] as const)
+					deployment = yield* deployments.transition({
+						...lease,
+						expectedCheckpoint: deployment.state,
+						expectedRowVersion: deployment.row_version,
+						next,
+						...(next === "app_created" ? { appId: "app-id" } : {}),
+					});
+				yield* operations.markAmbiguousMutation({
+					id: failed.id,
+					leaseToken: failed.lease_token,
+					workerId: "worker",
+					mutation: "volume_create",
+				});
+				yield* provisioningTemplateV2.effect(yield* Database);
+				expect(Option.getOrThrow(yield* deployments.get(board.id)).volume_name).toBe(legacyVolumeName(board.slug));
+				const blocked = yield* deployments.block({
+					...lease,
+					errorCode: "volume_create_ambiguous",
+					errorMessage: "Operator confirmation required",
+				});
+				const retryId = yield* retryBlockedDeployment({
+					failedOperationId: failed.id,
+					expectedRowVersion: blocked.row_version,
+					confirmedAbsentMutations: ["volume_create"],
+				});
+				const retry = Option.getOrThrow(yield* operations.claim("recovery-worker", 30_000));
+				expect(retry).toMatchObject({ id: retryId, checkpoint: "app_created", ambiguous_mutations: [] });
+				if (!retry.lease_token) return yield* Effect.die("Missing retry lease");
+				expect(
+					yield* deployments.ensure({
+						operationId: retry.id,
+						leaseToken: retry.lease_token,
+						workerId: "recovery-worker",
+						spec: deploymentSpec(board.slug, imageRef, settings),
+					}),
+				).toMatchObject({
+					state: "app_created",
+					volume_name: "chirp_data",
+					volume_size_gb: settings.volumeSizeGb,
+				});
+			}),
 		);
 	});
 

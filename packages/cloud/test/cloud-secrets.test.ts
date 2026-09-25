@@ -1,6 +1,7 @@
 import { ConfigProvider, Effect, Exit, Redacted } from "effect";
 import { describe, expect, test } from "vitest";
 import { CloudSecrets, cloudSecretsLayer, cloudSecretsLayerWithKey } from "../src/cloud-secrets.ts";
+import { encryptLegacyBootstrap } from "./fixtures/legacy-cloud-secret.ts";
 
 const key = Redacted.make("3f".repeat(32));
 const adminUrl = Redacted.make("postgres://admin:private-password@database.example/board");
@@ -15,6 +16,8 @@ describe("CloudSecrets", () => {
 				const first = yield* secrets.prepare("board-a", adminUrl);
 				const second = yield* secrets.prepare("board-a", adminUrl);
 				expect(first).not.toBe(second);
+				expect(first.split(".")).toHaveLength(5);
+				expect(first.split(".")[1]).toBe(second.split(".")[1]);
 				expect(first).not.toContain("private-password");
 				const payload = yield* secrets.decryptBootstrap("board-a", first);
 				const other = yield* secrets.decryptBootstrap("board-a", second);
@@ -37,8 +40,9 @@ describe("CloudSecrets", () => {
 		for (const [boardId, envelope] of [
 			["board-b", ciphertext],
 			["board-a", ciphertext.replace("v1.", "v2.")],
+			["board-a", ciphertext.replace(/^v1\.[^.]+/, "v1.wrong-key")],
 			["board-a", `${ciphertext.slice(0, -8)}AAAAAAAA`],
-			["board-a", "v1.bad.bad.bad"],
+			["board-a", "v1.bad.bad.bad.bad"],
 		]) {
 			const exit = await run(
 				Effect.gen(function* () {
@@ -73,6 +77,20 @@ describe("CloudSecrets", () => {
 				expect(Exit.isFailure(yield* Effect.exit(secrets.decryptBootstrap("board-a", ciphertext)))).toBe(true);
 			}),
 		);
+	});
+
+	test("reads authenticated historical bootstrap envelopes without rotating credentials", async () => {
+		const payload = {
+			adminUrl: Redacted.value(adminUrl),
+			bootPassword: "a".repeat(64),
+			appPassword: "b".repeat(64),
+		};
+		for (const aad of ["board", "purpose"] as const) {
+			const ciphertext = encryptLegacyBootstrap(Redacted.value(key), "board-a", payload, aad);
+			expect(ciphertext.split(".")).toHaveLength(4);
+			const decrypted = await run(CloudSecrets.use((secrets) => secrets.decryptBootstrap("board-a", ciphertext)));
+			expect(Redacted.value(decrypted)).toEqual(payload);
+		}
 	});
 
 	test("uses stable key-dependent request fingerprints", async () => {
