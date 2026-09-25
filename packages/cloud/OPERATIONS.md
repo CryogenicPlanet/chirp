@@ -59,6 +59,12 @@ flyctl deploy --config packages/cloud/fly.toml --dockerfile packages/cloud/Docke
 
 The Cloud hostname needs DNS-only `A`/`AAAA` records at the addresses reported by `flyctl ips list --config packages/cloud/fly.toml`, plus a Fly certificate. Do not proxy those records: this interferes with certificate validation and accurate client-IP reporting.
 
+## Product analytics
+
+Set `POSTHOG_PROJECT_TOKEN` to send dashboard analytics to PostHog; leave it unset to turn analytics off. `POSTHOG_HOST` defaults to `https://us.i.posthog.com`; use `https://eu.i.posthog.com` for an EU project. A project token only authorizes sending events, so [fly.toml](fly.toml) carries it as plain configuration. An invalid host is logged and turns analytics off without affecting the dashboard.
+
+Browsers send events to Cloud's `/ingest` route, which forwards only the content type, content encoding, user agent, and client IP to PostHog, never Cloud cookies. Cloud records page views and the events named in [src/app/analytics.tsx](src/app/analytics.tsx), and identifies signed-in accounts by ID, email, and name. URL fragments are never recorded, so invitation tokens stay private. Autocapture and session recording are off, and PostHog never loads its own scripts into Cloud, so project settings cannot turn them on. PostHog keeps its identifiers in localStorage rather than a cookie that board subdomains would receive. Boards send nothing.
+
 ## Board networking
 
 Cloudflare must be authoritative for the active zone containing `BOARDS_DOMAIN` (default `boards.chirp.wiki`). Do not delegate the boards subdomain elsewhere. Set `CLOUDFLARE_ZONE_ID` to the zone's 32-character ID and scope the token to that zone with **Zone / DNS / Edit** and **Zone / Zone / Read** permissions.

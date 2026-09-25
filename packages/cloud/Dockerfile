@@ -28,6 +28,7 @@ COPY --from=dependencies /opt/chirp /opt/chirp
 COPY tsconfig.base.json tsconfig.json ./
 COPY packages/cloud/src packages/cloud/src
 COPY packages/cloud/public packages/cloud/public
+COPY packages/cloud/next.config.ts packages/cloud/next.config.ts
 COPY --from=build /opt/chirp/packages/cloud/.next packages/cloud/.next
 WORKDIR /opt/chirp/packages/cloud
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=8080 NEXT_TELEMETRY_DISABLED=1
