@@ -5,7 +5,7 @@ import { motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import type { OAuthProvider } from "../auth-settings.ts";
 import { DashboardBoardsResponse, type DashboardBoardList } from "../dashboard-contract.ts";
-import { track } from "./analytics.ts";
+import { track, useAnalyticsIdentity } from "./analytics.ts";
 import { AuthButtons } from "./auth-buttons.tsx";
 import { Button } from "./components/ui/button.tsx";
 import { CloudOnboardingArt } from "./cloud-onboarding-art.tsx";
@@ -32,6 +32,7 @@ export function CloudApp({
 	const [listing, setListing] = useState<DashboardBoardList>();
 	const [loadError, setLoadError] = useState<string>();
 	const reducedMotion = useReducedMotion();
+	useAnalyticsIdentity(sessionUser);
 	const load = useCallback((signal?: AbortSignal) => {
 		setLoadError(undefined);
 		void fetch("/api/boards", { cache: "no-store", signal: signal ?? null })

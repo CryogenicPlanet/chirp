@@ -4,7 +4,6 @@ import Link from "next/link";
 import { Layers3 } from "lucide-react";
 import { InviteDialog } from "./invite-dialog.tsx";
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { identify } from "./analytics.ts";
 import { AuthButtons } from "./auth-buttons.tsx";
 
 export interface CloudClientUser {
@@ -34,9 +33,6 @@ export function DashboardShell({ children, user }: { readonly children: ReactNod
 	const menu = useRef<HTMLButtonElement>(null);
 	const restoreMenuFocus = useRef(false);
 	const sidebar = useRef<HTMLElement>(null);
-	useEffect(() => {
-		if (user) identify(user);
-	}, [user]);
 	useEffect(() => {
 		const query = window.matchMedia("(max-width: 760px)");
 		const update = () => setMobileNavigation(query.matches);

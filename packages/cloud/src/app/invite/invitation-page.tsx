@@ -4,6 +4,7 @@ import { Schema } from "effect";
 import { useEffect, useState } from "react";
 import type { OAuthProvider } from "../../auth-settings.ts";
 import { InvitationToken } from "../../invitation-token.ts";
+import { useAnalyticsIdentity } from "../analytics.ts";
 import { AuthButtons } from "../auth-buttons.tsx";
 
 export function InvitationPage({
@@ -14,6 +15,8 @@ export function InvitationPage({
 	readonly authUnavailable?: boolean;
 }) {
 	const [token, setToken] = useState<InvitationToken | null>();
+	// An invitation creates a new account, so it never continues a previous account's identity.
+	useAnalyticsIdentity(null);
 
 	useEffect(() => {
 		const value = globalThis.location.hash.slice(1);

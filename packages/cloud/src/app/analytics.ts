@@ -36,14 +36,17 @@ export function Analytics({ projectToken }: { readonly projectToken: string }) {
 	return null;
 }
 
-export const identify = (user: { readonly id: string; readonly name: string; readonly email: string }) => {
-	if (posthog.__loaded) posthog.identify(user.id, { email: user.email, name: user.name });
+/** Keeps PostHog's identity in step with the Cloud session, so signed-out visits are never credited to the last account. */
+export const useAnalyticsIdentity = (
+	user: { readonly id: string; readonly name: string; readonly email: string } | null,
+) => {
+	useEffect(() => {
+		if (!posthog.__loaded) return;
+		if (user) posthog.identify(user.id, { email: user.email, name: user.name });
+		else if (posthog._isIdentified()) posthog.reset();
+	}, [user]);
 };
 
 export const track = (event: CloudEvent, properties?: Readonly<Record<string, string | boolean>>) => {
 	if (posthog.__loaded) posthog.capture(event, properties);
-};
-
-export const resetAnalytics = () => {
-	if (posthog.__loaded) posthog.reset();
 };

@@ -42,7 +42,7 @@ export const loadPostHogSettings = () =>
 		),
 	);
 
-const forwardedHeaders = ["content-type", "content-encoding", "user-agent"];
+const forwardedHeaders = ["content-type", "content-encoding", "user-agent"] as const;
 
 /** Builds the upstream request for `/ingest/*`, forwarding only what PostHog needs and never Cloud cookies. */
 export const postHogRequest = (request: Request, path: ReadonlyArray<string>, settings: PostHogSettings) => {

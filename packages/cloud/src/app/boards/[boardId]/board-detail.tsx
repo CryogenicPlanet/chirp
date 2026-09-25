@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DashboardBoardResponse, type DashboardBoard } from "../../../dashboard-contract.ts";
-import { track } from "../../analytics.ts";
+import { track, useAnalyticsIdentity } from "../../analytics.ts";
 import { dashboardErrorMessage, readDashboardResponse } from "../../dashboard-response.ts";
 import { type CloudClientUser, DashboardShell } from "../../dashboard-shell.tsx";
 import { pollDashboardBoard } from "../../poll-dashboard-board.ts";
@@ -39,6 +39,7 @@ export function BoardDetail({
 	const router = useRouter();
 	const deletionObserved = useRef(false);
 	const [board, setBoard] = useState<DashboardBoard>();
+	useAnalyticsIdentity(sessionUser);
 	const [error, setError] = useState<string>();
 	const [pollVersion, setPollVersion] = useState(0);
 
