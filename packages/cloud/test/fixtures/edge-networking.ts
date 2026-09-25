@@ -116,7 +116,7 @@ export const makeNetworking = () => {
 				dnsCall(`list:${name}`, () => state.records.filter((record) => record.name === name)),
 			createRecord: (name: string, type: "A" | "TXT", content: string) =>
 				dnsCall(`create:${type}`, () => {
-					state.records.push({ id: String(state.records.length), name, type, content, proxied: false });
+					state.records.push({ id: String(state.records.length), name, type, content, ttl: 60, proxied: false });
 				}),
 		},
 	};

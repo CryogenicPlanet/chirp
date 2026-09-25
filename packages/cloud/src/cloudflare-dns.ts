@@ -28,6 +28,7 @@ const DnsRecord = Schema.Struct({
 	name: Schema.String,
 	type: Schema.String,
 	content: Schema.String,
+	ttl: Schema.optionalKey(Schema.Int),
 	proxied: Schema.optionalKey(Schema.Boolean),
 });
 export type DnsRecord = typeof DnsRecord.Type;

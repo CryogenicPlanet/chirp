@@ -6,8 +6,8 @@ export const recoveryPage = `<!doctype html><html lang="en"><meta charset="utf-8
 <p><a href="/auth/login">Sign in with a passkey</a> · <a href="/_boot/status">Boot diagnostics</a> · <a href="/_boot">open recovery help</a> · <a href="/">Open board</a></p>
 <script>(() => {
  const button=document.getElementById("revert"), status=document.getElementById("status");
- const request=async(path,method="GET",body,headers={}) => {
-  const response=await fetch(path,{method,headers:{"content-type":"application/json",...headers},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(120000)});
+ const request=async(path,method="GET",body,headers={},timeout=120000) => {
+  const response=await fetch(path,{method,headers:{"content-type":"application/json",...headers},...(body===undefined?{}:{body:JSON.stringify(body)}),...(timeout===null?{}:{signal:AbortSignal.timeout(timeout)})});
   const value=await response.json();
   if(!response.ok) throw new Error(value.error?.hint || "Request refused. Sign in again if needed, then check boot diagnostics.");
   return value;
@@ -21,7 +21,7 @@ export const recoveryPage = `<!doctype html><html lang="en"><meta charset="utf-8
     try {await request("/_boot/lock","POST",{});}
     catch(error) {if(!(await request("/_boot/lock")).lock) throw error;}
    }
-   const result=await request("/_boot/revert","POST",{},{"Idempotency-Key":key});
+   const result=await request("/_boot/revert","POST",{},{"Idempotency-Key":key},null);
    if(result.status!=="live" && result.status!=="failed") throw new Error("Unreadable revert response. Check boot diagnostics.");
    status.textContent=result.status==="live" ? "Source reverted. Open the board to check it." : "Revert failed: "+(result.error || "check boot diagnostics")+". Repair source before another change.";
   } catch(error) {status.textContent=(error instanceof Error?error.message:"The response was lost.")+" An undo may have completed. Check boot diagnostics before leaving this page or starting another undo.";}
