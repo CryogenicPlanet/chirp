@@ -5,6 +5,7 @@ import { ArrowUpRight, Check, Copy, Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "./components/ui/button.tsx";
 import { Input } from "./components/ui/input.tsx";
+import { track } from "./analytics.ts";
 
 const setupResponse = Schema.Struct({ code: Schema.String, expires_at: Schema.String, onboarding_url: Schema.String });
 const setupError = Schema.Struct({ error: Schema.Struct({ code: Schema.String }) });
@@ -92,6 +93,7 @@ export function BoardSetupPanel({ boardId, hostname }: { readonly boardId: strin
 			}
 			setIssued(value);
 			setExpired(false);
+			track("setup_code_generated", { board_id: boardId });
 			await copy(value.code, controller.signal);
 		} catch {
 			if (!controller.signal.aborted) setError("We couldn't reach your board. Check your connection and try again.");
@@ -117,7 +119,12 @@ export function BoardSetupPanel({ boardId, hostname }: { readonly boardId: strin
 				</p>
 				{closed ? (
 					<Button asChild>
-						<a href={`https://${hostname}`} target="_blank" rel="noreferrer">
+						<a
+							href={`https://${hostname}`}
+							target="_blank"
+							rel="noreferrer"
+							onClick={() => track("board_opened", { board_id: boardId })}
+						>
 							Sign in to board <ArrowUpRight />
 						</a>
 					</Button>
@@ -175,7 +182,12 @@ export function BoardSetupPanel({ boardId, hostname }: { readonly boardId: strin
 							</Button>
 							{issued ? (
 								<Button asChild>
-									<a href={issued.onboarding_url} target="_blank" rel="noreferrer">
+									<a
+										href={issued.onboarding_url}
+										target="_blank"
+										rel="noreferrer"
+										onClick={() => track("onboarding_opened", { board_id: boardId })}
+									>
 										Continue to onboarding <ArrowUpRight />
 									</a>
 								</Button>

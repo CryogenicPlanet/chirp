@@ -17,6 +17,7 @@ import {
 } from "./components/ui/alert-dialog.tsx";
 import { Button } from "./components/ui/button.tsx";
 import { Input } from "./components/ui/input.tsx";
+import { track } from "./analytics.ts";
 
 const deletedResponse = Schema.Struct({ deleted: Schema.Literal(true) });
 
@@ -57,6 +58,7 @@ export function DeleteBoardDialog({
 			}
 			if (response.status === 202) {
 				Schema.decodeUnknownSync(DashboardBoardResponse)(await response.json());
+				track("board_deleted", { board_id: board.id });
 				requestKey.current = undefined;
 				setName("");
 				setError(undefined);
@@ -64,6 +66,7 @@ export function DeleteBoardDialog({
 				onDeleted();
 			} else {
 				Schema.decodeUnknownSync(deletedResponse)(await response.json());
+				track("board_deleted", { board_id: board.id });
 				setOpen(false);
 				router.push("/");
 			}

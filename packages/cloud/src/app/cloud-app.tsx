@@ -5,6 +5,7 @@ import { motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import type { OAuthProvider } from "../auth-settings.ts";
 import { DashboardBoardsResponse, type DashboardBoardList } from "../dashboard-contract.ts";
+import { track } from "./analytics.ts";
 import { AuthButtons } from "./auth-buttons.tsx";
 import { Button } from "./components/ui/button.tsx";
 import { CloudOnboardingArt } from "./cloud-onboarding-art.tsx";
@@ -193,6 +194,7 @@ export function CloudApp({
 											href={`https://${board.hostname}`}
 											target="_blank"
 											rel="noreferrer"
+											onClick={() => track("board_opened", { board_id: board.id })}
 										>
 											Open board
 											<ArrowUpRight className="size-3.5" />

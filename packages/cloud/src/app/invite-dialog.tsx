@@ -13,6 +13,7 @@ import {
 	DialogTrigger,
 } from "./components/ui/dialog.tsx";
 import { Input } from "./components/ui/input.tsx";
+import { track } from "./analytics.ts";
 
 const invitationResponse = Schema.Struct({ url: Schema.String, expires_at: Schema.String });
 const permissionResponse = Schema.Struct({ can_invite: Schema.Boolean });
@@ -57,6 +58,7 @@ export function InviteDialog() {
 				return;
 			}
 			setInvitation(Schema.decodeUnknownSync(invitationResponse)(await response.json()));
+			track("invitation_created");
 		} catch {
 			setError("We couldn't create the invitation. Check your connection and try again.");
 		} finally {

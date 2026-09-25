@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DashboardBoardResponse, type DashboardBoard } from "../../../dashboard-contract.ts";
+import { track } from "../../analytics.ts";
 import { dashboardErrorMessage, readDashboardResponse } from "../../dashboard-response.ts";
 import { type CloudClientUser, DashboardShell } from "../../dashboard-shell.tsx";
 import { pollDashboardBoard } from "../../poll-dashboard-board.ts";
@@ -170,6 +171,7 @@ export function BoardDetail({
 									<a
 										className="inline-flex min-h-9 items-center justify-center whitespace-nowrap rounded-md border border-transparent bg-primary px-3.5 py-2 text-[13px] font-medium leading-none text-primary-foreground no-underline hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
 										href={`https://${board.hostname}`}
+										onClick={() => track("board_opened", { board_id: board.id })}
 										rel="noreferrer"
 										target="_blank"
 									>

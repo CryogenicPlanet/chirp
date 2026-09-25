@@ -17,6 +17,7 @@ import {
 } from "./components/ui/dropdown-menu.tsx";
 import type { OAuthProvider } from "../auth-settings.ts";
 import type { InvitationToken } from "../invitation-token.ts";
+import { resetAnalytics, track } from "./analytics.ts";
 
 interface AuthButtonsProps {
 	readonly providers?: ReadonlyArray<OAuthProvider>;
@@ -34,6 +35,7 @@ export function AuthButtons({ invitation, user, providers = [] }: AuthButtonsPro
 		setPending(true);
 		setError(undefined);
 		setNotice(undefined);
+		track("sign_in_started", { method: provider, invited: invitation !== undefined });
 		Effect.tryPromise(() =>
 			auth.signIn.social({
 				provider,
@@ -54,6 +56,7 @@ export function AuthButtons({ invitation, user, providers = [] }: AuthButtonsPro
 		setPending(true);
 		setError(undefined);
 		setNotice(undefined);
+		track("sign_in_started", { method: "passkey", invited: false });
 		Effect.tryPromise(() => auth.signIn.passkey()).pipe(
 			Effect.tap((result) =>
 				result?.error
@@ -88,7 +91,10 @@ export function AuthButtons({ invitation, user, providers = [] }: AuthButtonsPro
 			Effect.tap((result) =>
 				result.error
 					? Effect.sync(() => setError(result.error.message ?? "Sign-out failed"))
-					: Effect.sync(() => window.location.assign("/")),
+					: Effect.sync(() => {
+							resetAnalytics();
+							window.location.assign("/");
+						}),
 			),
 			Effect.catch(() => Effect.sync(() => setError("Sign-out is temporarily unavailable"))),
 			Effect.ensuring(Effect.sync(() => setPending(false))),
