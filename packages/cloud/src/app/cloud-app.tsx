@@ -5,7 +5,7 @@ import { motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import type { OAuthProvider } from "../auth-settings.ts";
 import { DashboardBoardsResponse, type DashboardBoardList } from "../dashboard-contract.ts";
-import { track, useAnalyticsIdentity } from "./analytics.ts";
+import { track, useAnalyticsIdentity } from "./analytics.tsx";
 import { AuthButtons } from "./auth-buttons.tsx";
 import { Button } from "./components/ui/button.tsx";
 import { CloudOnboardingArt } from "./cloud-onboarding-art.tsx";

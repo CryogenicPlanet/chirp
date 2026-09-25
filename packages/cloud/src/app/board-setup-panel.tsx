@@ -5,7 +5,7 @@ import { ArrowUpRight, Check, Copy, Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "./components/ui/button.tsx";
 import { Input } from "./components/ui/input.tsx";
-import { track } from "./analytics.ts";
+import { track } from "./analytics.tsx";
 
 const setupResponse = Schema.Struct({ code: Schema.String, expires_at: Schema.String, onboarding_url: Schema.String });
 const setupError = Schema.Struct({ error: Schema.Struct({ code: Schema.String }) });

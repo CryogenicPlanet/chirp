@@ -17,7 +17,7 @@ import {
 } from "./components/ui/dropdown-menu.tsx";
 import type { OAuthProvider } from "../auth-settings.ts";
 import type { InvitationToken } from "../invitation-token.ts";
-import { track } from "./analytics.ts";
+import { track } from "./analytics.tsx";
 
 interface AuthButtonsProps {
 	readonly providers?: ReadonlyArray<OAuthProvider>;

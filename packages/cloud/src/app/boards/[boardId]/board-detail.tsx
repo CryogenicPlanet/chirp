@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DashboardBoardResponse, type DashboardBoard } from "../../../dashboard-contract.ts";
-import { track, useAnalyticsIdentity } from "../../analytics.ts";
+import { track, useAnalyticsIdentity } from "../../analytics.tsx";
 import { dashboardErrorMessage, readDashboardResponse } from "../../dashboard-response.ts";
 import { type CloudClientUser, DashboardShell } from "../../dashboard-shell.tsx";
 import { pollDashboardBoard } from "../../poll-dashboard-board.ts";

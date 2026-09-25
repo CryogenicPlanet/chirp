@@ -17,7 +17,7 @@ import {
 } from "./components/ui/dialog.tsx";
 import { Input } from "./components/ui/input.tsx";
 import { dashboardErrorMessage, readDashboardResponse } from "./dashboard-response.ts";
-import { track } from "./analytics.ts";
+import { track } from "./analytics.tsx";
 
 export function CreateBoardDialog({
 	first = false,

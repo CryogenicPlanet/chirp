@@ -4,7 +4,7 @@ import { Schema } from "effect";
 import { useEffect, useState } from "react";
 import type { OAuthProvider } from "../../auth-settings.ts";
 import { InvitationToken } from "../../invitation-token.ts";
-import { useAnalyticsIdentity } from "../analytics.ts";
+import { useAnalyticsIdentity } from "../analytics.tsx";
 import { AuthButtons } from "../auth-buttons.tsx";
 
 export function InvitationPage({
