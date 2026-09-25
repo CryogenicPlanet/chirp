@@ -17,7 +17,7 @@ import {
 } from "./components/ui/dropdown-menu.tsx";
 import type { OAuthProvider } from "../auth-settings.ts";
 import type { InvitationToken } from "../invitation-token.ts";
-import { track } from "./analytics.tsx";
+import { useTrack } from "./analytics.tsx";
 
 interface AuthButtonsProps {
 	readonly providers?: ReadonlyArray<OAuthProvider>;
@@ -26,6 +26,7 @@ interface AuthButtonsProps {
 }
 
 export function AuthButtons({ invitation, user, providers = [] }: AuthButtonsProps) {
+	const track = useTrack();
 	const auth = useMemo(() => createAuthClient({ plugins: [passkeyClient()] }), []);
 	const [error, setError] = useState<string>();
 	const [notice, setNotice] = useState<string>();

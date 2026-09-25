@@ -1,7 +1,7 @@
 "use client";
 
-import posthog from "posthog-js";
-import { createContext, type ReactNode, useContext, useEffect } from "react";
+import { PostHog } from "posthog-js";
+import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from "react";
 
 /** The product events Cloud records. Board names, addresses, and content never become properties. */
 export type CloudEvent =
@@ -19,8 +19,14 @@ interface AnalyticsUser {
 	readonly email: string;
 }
 
-const ProjectToken = createContext<string | undefined>(undefined);
+interface Analytics {
+	readonly client: PostHog;
+	readonly projectToken: string;
+}
 
+const AnalyticsContext = createContext<Analytics | undefined>(undefined);
+
+/** Owns the page's PostHog client. Analytics stay off without a project token. */
 export function AnalyticsProvider({
 	projectToken,
 	children,
@@ -28,12 +34,13 @@ export function AnalyticsProvider({
 	readonly projectToken: string | undefined;
 	readonly children: ReactNode;
 }) {
-	return <ProjectToken value={projectToken}>{children}</ProjectToken>;
+	const [analytics] = useState(() => (projectToken ? { client: new PostHog(), projectToken } : undefined));
+	return <AnalyticsContext value={analytics}>{children}</AnalyticsContext>;
 }
 
-const syncIdentity = (user: AnalyticsUser | null) => {
-	if (user) posthog.identify(user.id, { email: user.email, name: user.name });
-	else if (posthog._isIdentified()) posthog.reset();
+const syncIdentity = (client: PostHog, user: AnalyticsUser | null) => {
+	if (user) client.identify(user.id, { email: user.email, name: user.name });
+	else if (client._isIdentified()) client.reset();
 };
 
 /**
@@ -41,18 +48,19 @@ const syncIdentity = (user: AnalyticsUser | null) => {
  * so signed-out visits are never credited to the last account.
  */
 export const useAnalyticsIdentity = (user: AnalyticsUser | null) => {
-	const projectToken = useContext(ProjectToken);
+	const analytics = useContext(AnalyticsContext);
 	useEffect(() => {
-		if (!projectToken) return;
-		if (posthog.__loaded) {
-			syncIdentity(user);
+		if (!analytics) return;
+		const { client, projectToken } = analytics;
+		if (client.__loaded) {
+			syncIdentity(client, user);
 			return;
 		}
-		posthog.init(projectToken, {
+		client.init(projectToken, {
 			api_host: "/ingest",
 			defaults: "2026-08-30",
 			// PostHog captures the first pageview after `loaded`, so it carries this session's identity.
-			loaded: () => syncIdentity(user),
+			loaded: () => syncIdentity(client, user),
 			// Invitation links carry their token in the URL fragment.
 			disable_capture_url_hashes: true,
 			// Named events only: autocapture and replay would record board names, emails, and anything else on screen.
@@ -66,9 +74,21 @@ export const useAnalyticsIdentity = (user: AnalyticsUser | null) => {
 			persistence: "localStorage",
 			cross_subdomain_cookie: false,
 		});
-	}, [projectToken, user]);
+	}, [analytics, user]);
 };
 
-export const track = (event: CloudEvent, properties?: Readonly<Record<string, string | boolean>>) => {
-	if (posthog.__loaded) posthog.capture(event, properties);
+/** Starts analytics on a server-rendered page reached while signing in. */
+export function SignedOutAnalytics() {
+	useAnalyticsIdentity(null);
+	return null;
+}
+
+export const useTrack = () => {
+	const analytics = useContext(AnalyticsContext);
+	return useCallback(
+		(event: CloudEvent, properties?: Readonly<Record<string, string | boolean>>) => {
+			if (analytics?.client.__loaded) analytics.client.capture(event, properties);
+		},
+		[analytics],
+	);
 };

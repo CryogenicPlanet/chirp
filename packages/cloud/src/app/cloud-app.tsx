@@ -5,7 +5,7 @@ import { motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import type { OAuthProvider } from "../auth-settings.ts";
 import { DashboardBoardsResponse, type DashboardBoardList } from "../dashboard-contract.ts";
-import { track, useAnalyticsIdentity } from "./analytics.tsx";
+import { useAnalyticsIdentity, useTrack } from "./analytics.tsx";
 import { AuthButtons } from "./auth-buttons.tsx";
 import { Button } from "./components/ui/button.tsx";
 import { CloudOnboardingArt } from "./cloud-onboarding-art.tsx";
@@ -29,6 +29,7 @@ export function CloudApp({
 	readonly providers: ReadonlyArray<OAuthProvider>;
 	readonly sessionUser: CloudClientUser | null;
 }) {
+	const track = useTrack();
 	const [listing, setListing] = useState<DashboardBoardList>();
 	const [loadError, setLoadError] = useState<string>();
 	const reducedMotion = useReducedMotion();

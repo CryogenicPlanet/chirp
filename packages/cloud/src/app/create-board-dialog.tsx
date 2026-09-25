@@ -17,7 +17,7 @@ import {
 } from "./components/ui/dialog.tsx";
 import { Input } from "./components/ui/input.tsx";
 import { dashboardErrorMessage, readDashboardResponse } from "./dashboard-response.ts";
-import { track } from "./analytics.tsx";
+import { useTrack } from "./analytics.tsx";
 
 export function CreateBoardDialog({
 	first = false,
@@ -28,6 +28,7 @@ export function CreateBoardDialog({
 	readonly postgresAvailable?: boolean;
 	readonly boardsDomain?: string | undefined;
 }) {
+	const track = useTrack();
 	const router = useRouter();
 	const [open, setOpen] = useState(false);
 	const [name, setName] = useState("");

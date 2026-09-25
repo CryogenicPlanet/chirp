@@ -5,12 +5,13 @@ import { ArrowUpRight, Check, Copy, Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "./components/ui/button.tsx";
 import { Input } from "./components/ui/input.tsx";
-import { track } from "./analytics.tsx";
+import { useTrack } from "./analytics.tsx";
 
 const setupResponse = Schema.Struct({ code: Schema.String, expires_at: Schema.String, onboarding_url: Schema.String });
 const setupError = Schema.Struct({ error: Schema.Struct({ code: Schema.String }) });
 
 export function BoardSetupPanel({ boardId, hostname }: { readonly boardId: string; readonly hostname: string }) {
+	const track = useTrack();
 	const [issued, setIssued] = useState<typeof setupResponse.Type>();
 	const [pending, setPending] = useState(false);
 	const [copied, setCopied] = useState(false);

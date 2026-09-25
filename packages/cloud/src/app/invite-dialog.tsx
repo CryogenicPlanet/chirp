@@ -13,12 +13,13 @@ import {
 	DialogTrigger,
 } from "./components/ui/dialog.tsx";
 import { Input } from "./components/ui/input.tsx";
-import { track } from "./analytics.tsx";
+import { useTrack } from "./analytics.tsx";
 
 const invitationResponse = Schema.Struct({ url: Schema.String, expires_at: Schema.String });
 const permissionResponse = Schema.Struct({ can_invite: Schema.Boolean });
 
 export function InviteDialog() {
+	const track = useTrack();
 	const [allowed, setAllowed] = useState(false);
 	const [open, setOpen] = useState(false);
 	const [pending, setPending] = useState(false);
