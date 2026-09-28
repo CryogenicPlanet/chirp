@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
-import type { DashboardBoard } from "../src/dashboard-contract.ts";
-import { pollDashboardBoard } from "../src/app/poll-dashboard-board.ts";
+import type { DashboardBoard } from "../../src/dashboard-contract.ts";
+import { pollDashboardBoard } from "../../src/app/poll-dashboard-board.ts";
 
 const board = (phase: DashboardBoard["phase"]): DashboardBoard => ({
 	id: "board-1",
@@ -74,14 +74,15 @@ describe("pollDashboardBoard", () => {
 		vi.useRealTimers();
 	});
 
-	test("retains the last board and stops when a request fails", async () => {
+	test("retains the last board and recovers after a transient request failure", async () => {
 		vi.useFakeTimers();
 		const controller = new AbortController();
 		const failure = new Error("status unavailable");
 		const load = vi
 			.fn<(_: AbortSignal) => Promise<DashboardBoard>>()
 			.mockResolvedValueOnce(board("provisioning"))
-			.mockRejectedValueOnce(failure);
+			.mockRejectedValueOnce(failure)
+			.mockResolvedValueOnce(board("ready"));
 		const seen: DashboardBoard[] = [];
 		const onError = vi.fn();
 		const polling = pollDashboardBoard({
@@ -90,11 +91,26 @@ describe("pollDashboardBoard", () => {
 			onBoard: (value) => seen.push(value),
 			onError,
 		});
-		await vi.advanceTimersByTimeAsync(2_000);
+		await vi.advanceTimersByTimeAsync(4_000);
 		await polling;
-		expect(seen.at(-1)?.phase).toBe("provisioning");
+		expect(seen.map(({ phase }) => phase)).toEqual(["provisioning", "ready"]);
 		expect(onError).toHaveBeenCalledWith(failure);
 		vi.useRealTimers();
+	});
+
+	test("stops after a terminal request failure", async () => {
+		const failure = new Error("not found");
+		const load = vi.fn<(_: AbortSignal) => Promise<DashboardBoard>>().mockRejectedValue(failure);
+		const onError = vi.fn();
+		await pollDashboardBoard({
+			signal: new AbortController().signal,
+			load,
+			onBoard: vi.fn(),
+			onError,
+			shouldRetry: (error) => error !== failure,
+		});
+		expect(load).toHaveBeenCalledTimes(1);
+		expect(onError).toHaveBeenCalledWith(failure);
 	});
 	test("keeps checking deletion until its terminal state", async () => {
 		vi.useFakeTimers();

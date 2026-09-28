@@ -99,6 +99,11 @@ export const machineMatches = (machine: FlyMachine, deployment: Deployment) => {
 	const mountName = mount?.name;
 	const mountSize = mount?.size_gb;
 	const mountEncrypted = mount?.encrypted;
+	const guestMatches =
+		exactKeys(config.guest, ["cpu_kind", "cpus", "memory_mb"]) &&
+		config.guest.cpu_kind === expected.guest.cpu_kind &&
+		((config.guest.cpus === expected.guest.cpus && config.guest.memory_mb === expected.guest.memory_mb) ||
+			(config.guest.cpus === 1 && config.guest.memory_mb === 512));
 	return (
 		machine.name === deployment.machine_name &&
 		machine.region === deployment.region &&
@@ -156,10 +161,7 @@ export const machineMatches = (machine: FlyMachine, deployment: Deployment) => {
 		service.force_instance_key == null &&
 		portsMatch &&
 		checksMatch &&
-		exactKeys(config.guest, ["cpu_kind", "cpus", "memory_mb"]) &&
-		config.guest.cpu_kind === "shared" &&
-		config.guest.cpus > 0 &&
-		config.guest.memory_mb >= 512 &&
+		guestMatches &&
 		exactKeys(config.stop_config, ["signal", "timeout"]) &&
 		config.stop_config.signal === expected.stop_config.signal &&
 		config.stop_config.timeout === expected.stop_config.timeout

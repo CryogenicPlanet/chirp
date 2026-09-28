@@ -70,3 +70,5 @@ export const deploymentSpec = (slug: string, imageRef: string, settings: Provisi
 	machine_name: `board-${slug}`,
 	volume_size_gb: settings.volumeSizeGb,
 });
+
+export const legacyVolumeName = (slug: string) => `chirp_data_${slug}`;

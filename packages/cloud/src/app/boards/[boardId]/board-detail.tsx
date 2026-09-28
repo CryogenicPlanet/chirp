@@ -15,6 +15,7 @@ import { boardStatusBanner } from "../../board-status-banner.ts";
 import { StatusBadge } from "../../status-badge.tsx";
 
 class BoardNotFound extends Error {}
+class SessionExpired extends Error {}
 
 const storageLabels = { sqlite: "Managed SQLite", postgres: "External PostgreSQL", mysql: "External MySQL" } as const;
 
@@ -50,6 +51,7 @@ export function BoardDetail({
 				cache: "no-store",
 				signal: signal ?? null,
 			});
+			if (response.status === 401) throw new SessionExpired();
 			if (response.status === 404) throw new BoardNotFound();
 			return (await readDashboardResponse(response, DashboardBoardResponse)).board;
 		},
@@ -66,6 +68,7 @@ export function BoardDetail({
 			onBoard: (value) => {
 				deletionObserved.current = value.phase === "deleting";
 				setBoard(value);
+				setError(undefined);
 			},
 			onError: (cause) => {
 				if (cause instanceof BoardNotFound) {
@@ -74,8 +77,10 @@ export function BoardDetail({
 						setBoard(undefined);
 						setError("This board was not found.");
 					}
-				} else setError(dashboardErrorMessage(cause));
+				} else if (cause instanceof SessionExpired) setError("Your session expired. Sign in again to continue.");
+				else setError(dashboardErrorMessage(cause));
 			},
+			shouldRetry: (cause) => !(cause instanceof BoardNotFound) && !(cause instanceof SessionExpired),
 		});
 		return () => controller.abort();
 	}, [load, pollVersion, sessionUser, router]);

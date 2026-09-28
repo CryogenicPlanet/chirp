@@ -51,6 +51,7 @@ describe("readable slug provider ownership", () => {
 					prepare: () => Effect.succeed(undefined),
 					stage,
 					assertReady: () => Effect.succeed(1),
+					upgradeLegacy: Effect.succeed(0),
 				}),
 			),
 		);

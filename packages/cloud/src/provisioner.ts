@@ -646,7 +646,7 @@ const make = (settings: ProvisioningSettings) =>
 									if (deployment.storage_engine === "postgres") {
 										const storage = yield* PostgresStorage;
 										minSecretsVersion = yield* storage
-											.assertReady(board.id)
+											.assertReady(board.id, lease)
 											.pipe(
 												Effect.catchTag("PostgresStorageError", () =>
 													Effect.fail(issue("postgres_configuration_failed", false, "PostgreSQL setup is incomplete")),

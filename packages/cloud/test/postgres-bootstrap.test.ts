@@ -2,6 +2,7 @@ import { Effect, Exit, Redacted } from "effect";
 import { describe, expect, test } from "vitest";
 import {
 	derivePostgresUrls,
+	firstAllowedPostgresAddress,
 	isAllowedPostgresAddress,
 	isTransientPostgresFailure,
 	validatePostgresUrl,
@@ -26,6 +27,10 @@ describe("Postgres bootstrap configuration", () => {
 		expect(isAllowedPostgresAddress("8.8.8.8")).toBe(true);
 		expect(isAllowedPostgresAddress("127.0.0.1", true)).toBe(true);
 		expect(isAllowedPostgresAddress("169.254.169.254", true)).toBe(false);
+	});
+	test("pins a safe IPv4 answer when a hostname is dual-stack", () => {
+		expect(firstAllowedPostgresAddress([{ address: "2001:4860:4860::8888" }, { address: "8.8.8.8" }])).toBe("8.8.8.8");
+		expect(firstAllowedPostgresAddress([{ address: "::1" }, { address: "10.0.0.1" }])).toBeUndefined();
 	});
 	test("rejects connection overrides, TLS downgrades and unsupported binding requirements", async () => {
 		for (const query of [

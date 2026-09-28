@@ -88,7 +88,7 @@ const make = (settings: FlyApiSettings) =>
 						const payload = yield* Effect.try({ try: () => decodePayload(result.stdout), catch: unavailable });
 						if ("error" in payload) return yield* new SetupCodeIssue({ code: "setup_closed" });
 						const now = Date.now();
-						if (payload.expires_at <= now || payload.expires_at > now + 900_000) return yield* unavailable();
+						if (payload.expires_at <= now || payload.expires_at > now + 960_000) return yield* unavailable();
 						return { code: payload.code, expires_at: new Date(payload.expires_at).toISOString() };
 					}),
 				).pipe(Effect.timeout("8 seconds"), Effect.catchTag("TimeoutError", unavailable)),

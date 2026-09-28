@@ -97,6 +97,21 @@ describe("managed Fly Machine intent", () => {
 		).toBe(true);
 	});
 
+	test("accepts the exact prior guest shape without accepting arbitrary downsizing", () => {
+		const machine = observedMachine();
+		const priorMachine = {
+			...machine,
+			config: { ...machine.config, guest: { ...machine.config.guest, cpus: 1, memory_mb: 512 } },
+		};
+		expect(machineMatches(priorMachine, deployment)).toBe(true);
+		expect(
+			machineMatches(
+				{ ...machine, config: { ...machine.config, guest: { ...machine.config.guest, cpus: 1, memory_mb: 768 } } },
+				deployment,
+			),
+		).toBe(false);
+	});
+
 	test("rejects extra environment, metadata, and configuration", () => {
 		const machine = observedMachine();
 		expect(

@@ -73,6 +73,11 @@ export const isAllowedPostgresAddress = (address: string, allowLocal = false): b
 	return !blocked.check(address);
 };
 
+export const firstAllowedPostgresAddress = (
+	addresses: ReadonlyArray<{ readonly address: string }>,
+	allowLocal = false,
+) => addresses.find(({ address }) => isAllowedPostgresAddress(address, allowLocal))?.address;
+
 export const validatePostgresUrl = (secret: Redacted.Redacted<string>, allowLocal = false) =>
 	Effect.try({
 		try: () => {
@@ -154,9 +159,8 @@ export const bootstrapPostgres = (input: PostgresBootstrapInput) =>
 				try: () => lookup(hostname, { all: true }),
 				catch: () => new PostgresBootstrapError({ reason: "connection_failed" }),
 			});
-			if (!addresses.length || addresses.some(({ address }) => !isAllowedPostgresAddress(address, input.allowLocal)))
-				return yield* new PostgresBootstrapError({ reason: "unsafe_endpoint" });
-			const address = addresses[0]!.address;
+			const address = firstAllowedPostgresAddress(addresses, input.allowLocal);
+			if (!address) return yield* new PostgresBootstrapError({ reason: "unsafe_endpoint" });
 			if (!result.tls && addresses.some(({ address }) => address !== "127.0.0.1" && address !== "::1"))
 				return yield* new PostgresBootstrapError({ reason: "unsafe_endpoint" });
 			const connect = (

@@ -1,11 +1,14 @@
 import { Clock, Effect, Exit, Layer, Option } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import { describe, expect, test } from "vitest";
+import { TestClock } from "effect/testing";
 import { Boards } from "../src/boards.ts";
+import { Database } from "../src/database.ts";
 import { Deployments } from "../src/deployments.ts";
 import { FlyApiError } from "../src/fly-board-api.ts";
 import { machineConfig } from "../src/machine-spec.ts";
 import { migrateCloudDatabase } from "../src/migrations.ts";
+import * as provisioningTemplateV2 from "../src/migrations/0013_provisioning_template_v2.ts";
 import { Operations } from "../src/operations.ts";
 import { Provisioner } from "../src/provisioner.ts";
 import { runFresh } from "./fixture.ts";
@@ -190,20 +193,29 @@ describe("Provisioner", () => {
 
 	test("does not finalize after the last provider validation crosses the lifetime", async () => {
 		const provider = makeFakeProvider();
-		provider.networking.state.checkCertificateDelayAt = 3;
-		provider.networking.state.checkCertificateDelayMs = 1_100;
+		const checkCertificate = provider.fake.checkCertificate;
+		provider.fake.checkCertificate = () =>
+			checkCertificate().pipe(
+				Effect.tap(() =>
+					provider.networking.state.checkCertificateCalls === 3 ? TestClock.adjust("1100 millis") : Effect.void,
+				),
+			);
 		await runFresh(
 			Effect.gen(function* () {
 				yield* migrateCloudDatabase;
 				yield* (yield* Boards).request(request);
 				const operation = yield* nextClaim("worker");
+				yield* TestClock.setTime(operation.created_at.getTime());
 				expect(yield* (yield* Provisioner).run(operation, "worker")).toBe("blocked");
 				expect(provider.resources()).toEqual({ apps: 1, volumes: 1, machines: 1 });
 				const sql = yield* SqlClient.SqlClient;
 				expect(
 					yield* sql`SELECT checkpoint, failure_count, last_error_code FROM board_operations WHERE id = ${operation.id}`,
 				).toEqual([{ checkpoint: "child_route_observed", failure_count: 0, last_error_code: "retry_exhausted" }]);
-			}).pipe(Effect.provide(provisionerFor(provider, { ...settings, maxOperationAgeMs: 1_000 }))),
+			}).pipe(
+				Effect.provide(provisionerFor(provider, { ...settings, maxOperationAgeMs: 1_000 })),
+				Effect.provide(TestClock.layer()),
+			),
 		);
 	});
 
@@ -624,6 +636,127 @@ describe("Provisioner", () => {
 				expect(provider.resources()).toEqual({ apps: 1, volumes: 1, machines: 1 });
 				expect(Option.getOrThrow(yield* deployments.get(board.id)).state).toBe("provisioned");
 			}).pipe(Effect.provide(provisionerFor(provider))),
+		);
+	});
+
+	test("resumes a tracked Machine created with the prior guest template", async () => {
+		const provider = makeFakeProvider();
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				const board = yield* (yield* Boards).request(request);
+				const operation = Option.getOrThrow(yield* (yield* Operations).claim("worker-1", 30_000));
+				if (!operation.lease_token) return yield* Effect.die("Claim returned no lease token");
+				const lease = { operationId: operation.id, leaseToken: operation.lease_token, workerId: "worker-1" };
+				const deployments = yield* Deployments;
+				let deployment = yield* deployments.ensure({
+					...lease,
+					spec: {
+						hostname: `${board.slug}.${settings.boardsDomain}`,
+						region: settings.region,
+						image_ref: imageRef,
+						app_name: `chirp-${board.slug}`,
+						network_name: `chirp-${board.slug}`,
+						volume_name: "chirp_data",
+						machine_name: `board-${board.slug}`,
+						volume_size_gb: 1,
+					},
+				});
+				for (const next of [
+					"storage_configuration_verified",
+					"app_created",
+					"volume_created",
+					"machine_created",
+				] as const)
+					deployment = yield* deployments.transition({
+						...lease,
+						expectedCheckpoint: deployment.state,
+						expectedRowVersion: deployment.row_version,
+						next,
+						...(next === "app_created" ? { appId: "app-id" } : {}),
+						...(next === "volume_created" ? { volumeId: "volume-id" } : {}),
+						...(next === "machine_created" ? { machineId: "machine-id" } : {}),
+					});
+				provider.set.app(appFor(board.slug));
+				provider.set.volume(volumeFor());
+				const config = machineConfig(deployment);
+				provider.set.machine({
+					id: "machine-id",
+					name: deployment.machine_name,
+					state: "started",
+					region: deployment.region,
+					instance_id: "legacy-machine-version",
+					config: { ...config, guest: { ...config.guest, cpus: 1, memory_mb: 512 } },
+					checks: [{ status: "passing" }],
+				});
+				expect(yield* (yield* Provisioner).run(operation, "worker-1")).toBe("succeeded");
+				expect(provider.calls.createMachine).toBe(0);
+			}).pipe(Effect.provide(provisionerFor(provider, { ...settings, volumeSizeGb: 5 }))),
+		);
+	});
+
+	test("observes an ambiguous normalized Volume before upgrading its prior size intent", async () => {
+		const provider = makeFakeProvider();
+		await runFresh(
+			Effect.gen(function* () {
+				yield* migrateCloudDatabase;
+				const board = yield* (yield* Boards).request(request);
+				const operations = yield* Operations;
+				const operation = Option.getOrThrow(yield* operations.claim("worker-1", 30_000));
+				if (!operation.lease_token) return yield* Effect.die("Claim returned no lease token");
+				const lease = { operationId: operation.id, leaseToken: operation.lease_token, workerId: "worker-1" };
+				const deployments = yield* Deployments;
+				let deployment = yield* deployments.ensure({
+					...lease,
+					spec: {
+						hostname: `${board.slug}.${settings.boardsDomain}`,
+						region: settings.region,
+						image_ref: imageRef,
+						app_name: `chirp-${board.slug}`,
+						network_name: `chirp-${board.slug}`,
+						volume_name: "chirp_data",
+						machine_name: `board-${board.slug}`,
+						volume_size_gb: 1,
+					},
+				});
+				for (const next of ["storage_configuration_verified", "app_created"] as const)
+					deployment = yield* deployments.transition({
+						...lease,
+						expectedCheckpoint: deployment.state,
+						expectedRowVersion: deployment.row_version,
+						next,
+						...(next === "app_created" ? { appId: "app-id" } : {}),
+					});
+				yield* operations.markAmbiguousMutation({
+					id: operation.id,
+					leaseToken: operation.lease_token,
+					workerId: "worker-1",
+					mutation: "volume_create",
+				});
+				yield* provisioningTemplateV2.effect(yield* Database);
+				yield* operations.requeue({
+					id: operation.id,
+					leaseToken: operation.lease_token,
+					workerId: "worker-1",
+					availableAt: new Date(yield* Clock.currentTimeMillis),
+					errorCode: "volume_create_ambiguous",
+					errorMessage: "simulated accepted create before checkpoint",
+				});
+				provider.set.app(appFor(board.slug));
+				provider.set.volume(volumeFor());
+				const resumed = yield* nextClaim("worker-2");
+				expect(
+					yield* Provisioner.use((service) => service.run(resumed, "worker-2")).pipe(
+						Effect.provide(provisionerFor(provider, { ...settings, volumeSizeGb: 5 })),
+					),
+				).toBe("succeeded");
+				expect(provider.calls.createVolume).toBe(0);
+				expect(Option.getOrThrow(yield* deployments.get(board.id))).toMatchObject({
+					volume_id: "volume-id",
+					volume_size_gb: 1,
+					state: "provisioned",
+				});
+			}),
 		);
 	});
 

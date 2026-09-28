@@ -36,5 +36,5 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: >
           flyctl deploy --config packages/cloud/fly.toml --dockerfile packages/cloud/Dockerfile
-          --ignorefile packages/cloud/dockerignore --depot --ha=false
+          --ignorefile packages/cloud/Dockerfile.dockerignore --depot --ha=false
           --image-label "cloud-${{ github.event.workflow_run.head_sha }}"

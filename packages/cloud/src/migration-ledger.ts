@@ -4,6 +4,7 @@ export interface MigrationMetadata {
 	readonly id: number;
 	readonly name: string;
 	readonly compatibleSchemaVersions: ReadonlyArray<number>;
+	readonly acceptedCompatibleSchemaVersions?: ReadonlyArray<ReadonlyArray<number>>;
 }
 
 export class CloudMigrationError extends Data.TaggedError("CloudMigrationError")<{
@@ -16,6 +17,16 @@ export const validateMigrationLedger = (
 ) =>
 	Effect.gen(function* () {
 		const imageVersion = registry.at(-1)?.id ?? 0;
+		const sameVersions = (left: ReadonlyArray<number>, right: ReadonlyArray<number>) =>
+			left.length === right.length && left.every((version, index) => version === right[index]);
+		const validVersions = (entry: MigrationMetadata, versions: ReadonlyArray<number>) =>
+			!versions.some(
+				(version, position) =>
+					!Number.isSafeInteger(version) ||
+					version < 1 ||
+					version >= entry.id ||
+					version <= (versions[position - 1] ?? 0),
+			);
 		for (const [label, entries] of [
 			["registry", registry],
 			["ledger", applied],
@@ -24,12 +35,12 @@ export const validateMigrationLedger = (
 				if (
 					entry.id !== index + 1 ||
 					entry.name.length === 0 ||
-					entry.compatibleSchemaVersions.some(
-						(version, position) =>
-							!Number.isSafeInteger(version) ||
-							version < 1 ||
-							version >= entry.id ||
-							version <= (entry.compatibleSchemaVersions[position - 1] ?? 0),
+					!validVersions(entry, entry.compatibleSchemaVersions) ||
+					(entry.acceptedCompatibleSchemaVersions ?? []).some(
+						(versions, acceptedIndex, accepted) =>
+							!validVersions(entry, versions) ||
+							sameVersions(versions, entry.compatibleSchemaVersions) ||
+							accepted.slice(0, acceptedIndex).some((earlier) => sameVersions(versions, earlier)),
 					)
 				)
 					return yield* new CloudMigrationError({
@@ -42,9 +53,8 @@ export const validateMigrationLedger = (
 			if (expected) {
 				if (
 					receipt.name !== expected.name ||
-					receipt.compatibleSchemaVersions.length !== expected.compatibleSchemaVersions.length ||
-					receipt.compatibleSchemaVersions.some(
-						(version, index) => version !== expected.compatibleSchemaVersions[index],
+					![expected.compatibleSchemaVersions, ...(expected.acceptedCompatibleSchemaVersions ?? [])].some((versions) =>
+						sameVersions(receipt.compatibleSchemaVersions, versions),
 					)
 				)
 					return yield* new CloudMigrationError({

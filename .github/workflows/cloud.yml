@@ -58,7 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP"
-          curl --fail --location --silent --show-error --retry 3 --output bun.zip \
+          curl --fail --location --silent --show-error --retry 3 --retry-all-errors --retry-delay 2 --output bun.zip \
             https://github.com/oven-sh/bun/releases/download/bun-v1.4.0/bun-linux-x64.zip
           printf '%s\n' '2d03fb5fb83ac8b567aca0a281b2ce1a1a19d488f56c2968d88c3f25e92fe452  bun.zip' | sha256sum --check -
           unzip -q bun.zip
@@ -79,3 +79,5 @@ jobs:
         env:
           CLOUD_TEST_DATABASE_URL: postgres://chirp:chirp@127.0.0.1:5432/chirp_cloud
         run: bun run --filter @comms/cloud test:production
+      - name: Build Cloud deployment image
+        run: docker build --file packages/cloud/Dockerfile --tag chirp-cloud:acceptance .

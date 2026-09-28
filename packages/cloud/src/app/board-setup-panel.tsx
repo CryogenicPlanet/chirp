@@ -15,18 +15,30 @@ export function BoardSetupPanel({ boardId, hostname }: { readonly boardId: strin
 	const [issued, setIssued] = useState<typeof setupResponse.Type>();
 	const [pending, setPending] = useState(false);
 	const [copied, setCopied] = useState(false);
+	const [focusCode, setFocusCode] = useState(false);
 	const [expired, setExpired] = useState(false);
 	const [closed, setClosed] = useState(false);
 	const [error, setError] = useState<string>();
 	const request = useRef<AbortController | null>(null);
 	const codeField = useRef<HTMLInputElement>(null);
+	const closedHeading = useRef<HTMLHeadingElement>(null);
 
 	useEffect(() => () => request.current?.abort(), []);
+	useEffect(() => {
+		if (closed) closedHeading.current?.focus();
+	}, [closed]);
+	useEffect(() => {
+		if (!issued || !focusCode) return;
+		codeField.current?.focus();
+		codeField.current?.select();
+		setFocusCode(false);
+	}, [focusCode, issued]);
 	useEffect(() => {
 		if (!issued) return;
 		const expire = () => {
 			setIssued(undefined);
 			setCopied(false);
+			setFocusCode(false);
 			setExpired(true);
 		};
 		const remaining = Date.parse(issued.expires_at) - Date.now();
@@ -41,13 +53,15 @@ export function BoardSetupPanel({ boardId, hostname }: { readonly boardId: strin
 	const copy = async (code: string, signal?: AbortSignal) => {
 		try {
 			await navigator.clipboard.writeText(code);
-			if (!signal?.aborted) setCopied(true);
+			if (!signal?.aborted) {
+				setCopied(true);
+				setFocusCode(false);
+			}
 		} catch {
 			if (signal?.aborted) return;
 			setCopied(false);
 			setError("Your code is ready. Select and copy it below, or try Copy again.");
-			codeField.current?.focus();
-			codeField.current?.select();
+			setFocusCode(true);
 		}
 	};
 
@@ -58,6 +72,7 @@ export function BoardSetupPanel({ boardId, hostname }: { readonly boardId: strin
 		setPending(true);
 		setIssued(undefined);
 		setCopied(false);
+		setFocusCode(false);
 		setError(undefined);
 		try {
 			const response = await fetch(`/api/boards/${encodeURIComponent(boardId)}/setup-code`, {
@@ -110,7 +125,12 @@ export function BoardSetupPanel({ boardId, hostname }: { readonly boardId: strin
 				{closed ? "Board passkey is set up" : "First-time board setup"}
 			</summary>
 			<div className="pt-3">
-				<h2 id="board-setup" className="mt-2 mb-0 text-xl font-normal tracking-tight">
+				<h2
+					id="board-setup"
+					ref={closedHeading}
+					tabIndex={-1}
+					className="mt-2 mb-0 text-xl font-normal tracking-tight focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+				>
 					{closed ? "Your board is already set up" : "Add your first passkey"}
 				</h2>
 				<p className="mt-2 mb-4 max-w-xl text-sm leading-relaxed text-muted-foreground">

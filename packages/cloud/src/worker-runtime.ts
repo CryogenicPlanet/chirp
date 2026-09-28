@@ -9,7 +9,7 @@ import { Boards, boardsLayer } from "./boards.ts";
 import { cloudflareDnsLayer, cloudflareSettings } from "./cloudflare-dns.ts";
 import { cloudSecretsLayer } from "./cloud-secrets.ts";
 import { flySecretsLayer } from "./fly-secrets.ts";
-import { postgresStorageLayer } from "./postgres-storage.ts";
+import { PostgresStorage, postgresStorageLayer } from "./postgres-storage.ts";
 import { databaseLayer } from "./database.ts";
 import { Deployments, deploymentsLayer } from "./deployments.ts";
 import { edgeProbeLayer } from "./edge-probe.ts";
@@ -100,7 +100,13 @@ export const startWorkerRuntime = (): Promise<WorkerRuntime> => {
 	const runtime = ManagedRuntime.make(workerLayer);
 	return runtime
 		.runPromise(
-			Effect.all([Boards, Deployments, Operations, Provisioner, BackupObserver, BackupScheduler], { discard: true }),
+			Effect.gen(function* () {
+				yield* Effect.all([Boards, Deployments, Operations, Provisioner, BackupObserver, BackupScheduler], {
+					discard: true,
+				});
+				const postgres = yield* PostgresStorage;
+				while ((yield* postgres.upgradeLegacy) > 0) {}
+			}),
 		)
 		.then(() => {
 			const fiber = runtime.runFork(loop);

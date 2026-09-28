@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
 import { Config, Context, Data, Effect, Layer, Option, Redacted, Schema } from "effect";
 
 const BootstrapPayload = Schema.Struct({
@@ -25,9 +25,11 @@ const make = (configuredKey?: Redacted.Redacted<string>) =>
 			return yield* new CloudSecretsError({ reason: "configuration" });
 		// The key belongs to this scoped service instance, never to module state.
 		const key = configuredKey ? Redacted.make(Buffer.from(Redacted.value(configuredKey), "hex")) : undefined;
+		const keyId = key ? createHash("sha256").update(Redacted.value(key)).digest("base64url").slice(0, 22) : undefined;
 		const requireKey = () => (key ? Effect.succeed(key) : Effect.fail(new CloudSecretsError({ reason: "disabled" })));
 		const aad = (boardId: string, purpose: "bootstrap" | "runtime") =>
 			Buffer.from(JSON.stringify(["chirp-cloud-postgres", 1, purpose, boardId]));
+		const legacyAad = (boardId: string) => Buffer.from(JSON.stringify(["chirp-cloud-postgres", 1, boardId]));
 		const encrypt = (boardId: string, purpose: "bootstrap" | "runtime", plaintext: string) =>
 			Effect.gen(function* () {
 				const encryptionKey = yield* requireKey();
@@ -39,6 +41,7 @@ const make = (configuredKey?: Redacted.Redacted<string>) =>
 						const encrypted = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
 						return [
 							"v1",
+							keyId,
 							nonce.toString("base64url"),
 							cipher.getAuthTag().toString("base64url"),
 							encrypted.toString("base64url"),
@@ -53,20 +56,44 @@ const make = (configuredKey?: Redacted.Redacted<string>) =>
 				return yield* Effect.try({
 					try: () => {
 						const parts = ciphertext.split(".");
-						const [version, nonceText, tagText, bodyText] = parts;
-						if (parts.length !== 4 || version !== "v1" || !nonceText || !tagText || !bodyText)
+						const [version, first, second, third, fourth] = parts;
+						if (version !== "v1") throw new Error("Invalid encrypted envelope");
+						const identified = parts.length === 5;
+						const envelopeKeyId = identified ? first : undefined;
+						const nonceText = identified ? second : first;
+						const tagText = identified ? third : second;
+						const bodyText = identified ? fourth : third;
+						if (
+							(parts.length !== 4 && !identified) ||
+							(identified && (!envelopeKeyId || envelopeKeyId !== keyId)) ||
+							!nonceText ||
+							!tagText ||
+							!bodyText
+						)
 							throw new Error("Invalid encrypted envelope");
-						if (![nonceText, tagText, bodyText].every((part) => /^[A-Za-z0-9_-]+$/.test(part)))
+						if (
+							![...(envelopeKeyId ? [envelopeKeyId] : []), nonceText, tagText, bodyText].every((part) =>
+								/^[A-Za-z0-9_-]+$/.test(part),
+							)
+						)
 							throw new Error("Invalid encrypted encoding");
 						const nonce = Buffer.from(nonceText, "base64url");
 						const tag = Buffer.from(tagText, "base64url");
 						if (nonce.length !== 12 || tag.length !== 16) throw new Error("Invalid encrypted lengths");
-						const decipher = createDecipheriv("aes-256-gcm", Redacted.value(encryptionKey), nonce);
-						decipher.setAAD(aad(boardId, purpose));
-						decipher.setAuthTag(tag);
-						return Buffer.concat([decipher.update(Buffer.from(bodyText, "base64url")), decipher.final()]).toString(
-							"utf8",
-						);
+						const open = (associatedData: Buffer) => {
+							const decipher = createDecipheriv("aes-256-gcm", Redacted.value(encryptionKey), nonce);
+							decipher.setAAD(associatedData);
+							decipher.setAuthTag(tag);
+							return Buffer.concat([decipher.update(Buffer.from(bodyText, "base64url")), decipher.final()]).toString(
+								"utf8",
+							);
+						};
+						if (identified || purpose === "runtime") return open(aad(boardId, purpose));
+						try {
+							return open(aad(boardId, purpose));
+						} catch {
+							return open(legacyAad(boardId));
+						}
 					},
 					catch: () => new CloudSecretsError({ reason: "decrypt" }),
 				});

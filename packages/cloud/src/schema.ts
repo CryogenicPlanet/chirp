@@ -186,6 +186,7 @@ export const boardPostgresSecrets = pgTable(
 			sql`(
 				(NOT ${table.prepared} AND ${table.bootstrap_ciphertext} IS NOT NULL AND ${table.runtime_ciphertext} IS NULL)
 				OR (${table.prepared} AND ${table.bootstrap_ciphertext} IS NULL AND ${table.runtime_ciphertext} IS NOT NULL)
+				OR (${table.prepared} AND ${table.bootstrap_ciphertext} IS NOT NULL AND ${table.runtime_ciphertext} IS NULL)
 			)`,
 		),
 	],

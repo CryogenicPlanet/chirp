@@ -79,6 +79,26 @@ describe("Cloud image rollback compatibility", () => {
 		);
 	});
 
+	test("accepts an explicitly declared historical receipt variant without rewriting it", async () => {
+		await runFresh(
+			Effect.gen(function* () {
+				const historical = { id: 2, name: "second", compatibleSchemaVersions: [], effect: () => Effect.void };
+				yield* runCloudMigrations([foundation, historical]);
+				const sql = yield* SqlClient.SqlClient;
+				const before = yield* sql`SELECT * FROM cloud_migrations ORDER BY migration_id`;
+				yield* runCloudMigrations([
+					foundation,
+					{
+						...historical,
+						compatibleSchemaVersions: [1],
+						acceptedCompatibleSchemaVersions: [[]],
+					},
+				]);
+				expect(yield* sql`SELECT * FROM cloud_migrations ORDER BY migration_id`).toEqual(before);
+			}),
+		);
+	});
+
 	test("does not accept a missing known receipt as a compatible upgrade", async () => {
 		await runFresh(
 			Effect.gen(function* () {

@@ -154,7 +154,10 @@ const makeAuth = (config: AuthConfig) =>
 				yield* Ref.set(setup, null);
 				return null;
 			}
-			return (yield* Ref.get(setup)) ?? (yield* rotateSetup());
+			const state = yield* Ref.get(setup);
+			if (state !== null && state.expiresAt !== null && state.expiresAt <= (yield* Clock.currentTimeMillis))
+				return yield* rotateSetup();
+			return state ?? (yield* rotateSetup());
 		});
 		// Every boot invalidates setup ceremonies created under an earlier stdout code.
 		yield* sql`DELETE FROM auth_challenges WHERE ceremony = 'setup'`;
