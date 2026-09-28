@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { SignedOutAnalytics } from "../../analytics.tsx";
 
 export const metadata: Metadata = { title: "Sign-in help · Chirp Cloud" };
 
@@ -24,6 +25,7 @@ export default async function AuthErrorPage({
 
 	return (
 		<main className="grid min-h-svh place-items-center p-6 max-[460px]:p-4">
+			<SignedOutAnalytics />
 			<section
 				aria-labelledby="auth-error-title"
 				className="w-full max-w-[430px] rounded-md border border-border bg-card p-8 shadow-card max-[460px]:px-5 max-[460px]:py-6"

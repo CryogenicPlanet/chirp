@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { cp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Schema } from "effect";
-import { expect, it } from "vitest";
+import { expect, it, type TestContext } from "vitest";
 import { conversation } from "./fixtures/conversation.ts";
 
 const stringField = (value: unknown, name: string) => {
@@ -21,18 +21,21 @@ it("keeps MCP absent until its extension package is installed", async (test) => 
 	expect((await fetch(`${app.url}/mcp`, { headers: { cookie } })).status).toBeGreaterThanOrEqual(400);
 }, 20000);
 
-it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) => {
+const installed = async (test: TestContext, mcpOrigin?: string) => {
 	const fixture = await conversation(test);
 	const seed = join(fixture.root, "seed");
 	await cp(join(import.meta.dirname, "../src"), seed, { recursive: true });
 	await cp(join(import.meta.dirname, "../../../examples/extensions/mcp"), join(seed, "ext/mcp"), { recursive: true });
 	for (const file of ["index.ts", "oauth.ts", "tools.ts"]) {
 		const path = join(seed, `ext/mcp/${file}`);
+		const source = (await readFile(path, "utf8"))
+			.replace("../../../packages/server/src/kernel/extension-api.ts", "../../kernel/extension-api.ts")
+			.replace("https://your-board.example", "https://comms.test");
 		await writeFile(
 			path,
-			(await readFile(path, "utf8"))
-				.replace("../../../packages/server/src/kernel/extension-api.ts", "../../kernel/extension-api.ts")
-				.replace("https://your-board.example", "https://comms.test"),
+			mcpOrigin === undefined
+				? source
+				: source.replace("const mcpOrigin = boardOrigin;", `const mcpOrigin = ${JSON.stringify(mcpOrigin)};`),
 		);
 	}
 	await writeFile(join(fixture.root, "boot.config.json"), JSON.stringify({ applicationManagedIngress: true }));
@@ -40,6 +43,79 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 	await app.setup();
 	const cookie = await app.login();
 	await app.ready(cookie);
+	return { fixture, app, cookie };
+};
+
+it("serves MCP at a separate origin while consent stays on the board origin", async (test) => {
+	const { app, cookie } = await installed(test, "https://mcp.test");
+	expect(await (await fetch(`${app.url}/.well-known/oauth-protected-resource/mcp`)).json()).toMatchObject({
+		resource: "https://mcp.test/mcp",
+		authorization_servers: ["https://comms.test"],
+	});
+	expect(await (await fetch(`${app.url}/.well-known/oauth-authorization-server`)).json()).toMatchObject({
+		issuer: "https://comms.test",
+		authorization_endpoint: "https://comms.test/mcp/oauth/authorize",
+	});
+	const call = (headers: Record<string, string>) =>
+		fetch(`${app.url}/mcp`, {
+			method: "POST",
+			headers: { accept: "application/json, text/event-stream", "content-type": "application/json", ...headers },
+			body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }),
+		});
+	expect((await call({})).headers.get("www-authenticate")).toContain(
+		'resource_metadata="https://mcp.test/.well-known/oauth-protected-resource/mcp"',
+	);
+	const registration = await fetch(`${app.url}/mcp/oauth/register`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ client_name: "Split client", redirect_uris: ["https://client.test/callback"] }),
+	});
+	const clientId = stringField(await registration.json(), "client_id");
+	const verifier = createHash("sha256").update("split-verifier").digest("base64url");
+	const query = new URLSearchParams({
+		response_type: "code",
+		client_id: clientId,
+		redirect_uri: "https://client.test/callback",
+		code_challenge: createHash("sha256").update(verifier).digest("base64url"),
+		code_challenge_method: "S256",
+		resource: "https://comms.test/mcp",
+		scope: "read",
+	});
+	const mismatched = await fetch(`${app.url}/mcp/oauth/authorize?${query}`, { headers: { cookie } });
+	expect(mismatched.status).toBe(400);
+	expect(await mismatched.json()).toMatchObject({
+		error: "invalid_request",
+		error_description: "resource must be https://mcp.test/mcp; connect the client to exactly that URL.",
+	});
+	query.set("resource", "https://mcp.test/mcp");
+	expect((await fetch(`${app.url}/mcp/oauth/authorize?${query}`, { headers: { cookie } })).status).toBe(200);
+	const approval = await fetch(`${app.url}/mcp/oauth/authorize`, {
+		method: "POST",
+		redirect: "manual",
+		headers: { cookie, origin: "https://comms.test", "content-type": "application/x-www-form-urlencoded" },
+		body: new URLSearchParams({ ...Object.fromEntries(query), decision: "approve" }),
+	});
+	const code = new URL(approval.headers.get("location") ?? "").searchParams.get("code");
+	if (!code) throw new Error("authorization code is missing");
+	const exchanged = await fetch(`${app.url}/mcp/oauth/token`, {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded" },
+		body: new URLSearchParams({
+			grant_type: "authorization_code",
+			client_id: clientId,
+			redirect_uri: "https://client.test/callback",
+			resource: "https://mcp.test/mcp",
+			code,
+			code_verifier: verifier,
+		}),
+	});
+	expect(exchanged.status).toBe(200);
+	const access = stringField(await exchanged.json(), "access_token");
+	expect((await call({ authorization: `Bearer ${access}`, origin: "https://mcp.test" })).status).toBe(200);
+}, 30000);
+
+it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) => {
+	const { fixture, app, cookie } = await installed(test);
 
 	const metadata = await (await fetch(`${app.url}/.well-known/oauth-protected-resource/mcp`)).json();
 	expect(metadata).toMatchObject({
@@ -102,6 +178,7 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 		expect(signedOut.headers.get("location")).toContain("/auth/login?next=");
 		const consent = await fetch(`${app.url}${authorize}`, { headers: { cookie } });
 		expect(consent.status).toBe(200);
+		expect(consent.headers.get("content-security-policy")).toContain("form-action 'self' https://client.test;");
 		expect(await consent.text()).toContain(`Authorize ${clientName}`);
 		const approvalBody = { ...Object.fromEntries(query), decision: "approve" };
 		if (marker === "reader") {

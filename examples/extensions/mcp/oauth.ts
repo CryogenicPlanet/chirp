@@ -143,12 +143,35 @@ const authorizeInput = (query: Context["query"]) => ({
 	resource: one(query.resource),
 	scopes: scopes(one(query.scope)),
 });
+/** Returns the checked request, or names the first failed check so the person at the consent page can fix the client. */
+const authorization = (ctx: Context, query: Context["query"], resource: string) =>
+	Effect.gen(function* () {
+		const input = authorizeInput(query);
+		const registered = input.clientId ? yield* client(ctx, input.clientId) : undefined;
+		if (!input.clientId || !registered) return "client_id is not registered with this board.";
+		if (!input.redirectUri || !registered.redirect_uris.includes(input.redirectUri))
+			return "redirect_uri is not registered for this client.";
+		if (input.responseType !== "code") return "response_type must be code.";
+		if (input.resource !== resource) return `resource must be ${resource}; connect the client to exactly that URL.`;
+		if (input.state !== undefined && input.state.length > 2048) return "state must be at most 2048 characters.";
+		if (input.challengeMethod !== "S256" || !input.challenge || !/^[A-Za-z0-9_-]{43,128}$/.test(input.challenge))
+			return "code_challenge must be an S256 PKCE challenge.";
+		if (!input.scopes) return "scope must be read, optionally with write.";
+		return {
+			clientId: input.clientId,
+			clientName: registered.client_name,
+			redirectUri: input.redirectUri,
+			challenge: input.challenge,
+			scopes: input.scopes,
+			state: input.state,
+		};
+	});
 
-export const installOAuth = (api: Api, origin: string) =>
+export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) =>
 	Effect.gen(function* () {
 		const sql = yield* SqlClient.SqlClient;
 		const crypto = yield* Crypto.Crypto;
-		const resource = `${origin}/mcp`;
+		const resource = `${resourceOrigin}/mcp`;
 		yield* api.migrate(
 			"oauth_credentials",
 			on(sql, {
@@ -256,41 +279,27 @@ export const installOAuth = (api: Api, origin: string) =>
 								"cache-control": "no-store",
 							},
 						});
-					const input = authorizeInput(ctx.query);
-					const clientId = input.clientId;
-					const registered = clientId ? yield* client(ctx, clientId) : undefined;
-					if (
-						!clientId ||
-						!registered ||
-						!input.redirectUri ||
-						!registered.redirect_uris.includes(input.redirectUri) ||
-						input.responseType !== "code" ||
-						input.resource !== resource ||
-						(input.state !== undefined && input.state.length > 2048) ||
-						input.challengeMethod !== "S256" ||
-						!input.challenge ||
-						!/^[A-Za-z0-9_-]{43,128}$/.test(input.challenge) ||
-						!input.scopes
-					)
-						return oauthError("invalid_request", "The authorization request is invalid.");
+					const checked = yield* authorization(ctx, ctx.query, resource);
+					if (typeof checked === "string") return oauthError("invalid_request", checked);
 					const hidden = new URLSearchParams({
-						client_id: clientId,
-						redirect_uri: input.redirectUri,
-						code_challenge: input.challenge,
+						client_id: checked.clientId,
+						redirect_uri: checked.redirectUri,
+						code_challenge: checked.challenge,
 						code_challenge_method: "S256",
 						response_type: "code",
 						resource,
-						scope: input.scopes.join(" "),
-						...(input.state === undefined ? {} : { state: input.state }),
+						scope: checked.scopes.join(" "),
+						...(checked.state === undefined ? {} : { state: checked.state }),
 					});
 					return new Response(
-						`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Authorize MCP</title></head><body><main><h1>Authorize ${escape(registered.client_name)}</h1><p>This client is requesting: ${escape(input.scopes.join(", "))}.</p><form method="post" action="/mcp/oauth/authorize">${[...hidden].map(([name, value]) => `<input type="hidden" name="${escape(name)}" value="${escape(value)}">`).join("")}<button name="decision" value="approve">Authorize</button><button name="decision" value="deny">Deny</button></form></main></body></html>`,
+						`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Authorize MCP</title></head><body><main><h1>Authorize ${escape(checked.clientName)}</h1><p>This client is requesting: ${escape(checked.scopes.join(", "))}.</p><form method="post" action="/mcp/oauth/authorize">${[...hidden].map(([name, value]) => `<input type="hidden" name="${escape(name)}" value="${escape(value)}">`).join("")}<button name="decision" value="approve">Authorize</button><button name="decision" value="deny">Deny</button></form></main></body></html>`,
 						{
 							headers: {
 								"content-type": "text/html; charset=utf-8",
 								"cache-control": "no-store",
 								"content-security-policy":
-									"default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+									// Chromium applies form-action to the redirect after submit, so allow the client's callback origin.
+									`default-src 'none'; form-action 'self' ${new URL(checked.redirectUri).origin}; base-uri 'none'; frame-ancestors 'none'`,
 							},
 						},
 					);
@@ -307,27 +316,12 @@ export const installOAuth = (api: Api, origin: string) =>
 					const text = yield* boundedText(request);
 					if (text === null) return oauthError("invalid_request", "Request body is too large or timed out.");
 					const form = Object.fromEntries(new URLSearchParams(text));
-					const clientId = form.client_id;
-					const registered = clientId ? yield* client(ctx, clientId) : undefined;
-					const requested = scopes(form.scope);
-					if (
-						!clientId ||
-						!registered ||
-						!form.redirect_uri ||
-						!registered.redirect_uris.includes(form.redirect_uri) ||
-						form.response_type !== "code" ||
-						form.resource !== resource ||
-						(form.state !== undefined && form.state.length > 2048) ||
-						form.code_challenge_method !== "S256" ||
-						!form.code_challenge ||
-						!/^[A-Za-z0-9_-]{43,128}$/.test(form.code_challenge) ||
-						!requested
-					)
-						return oauthError("invalid_request", "The authorization request is invalid.");
+					const checked = yield* authorization(ctx, form, resource);
+					if (typeof checked === "string") return oauthError("invalid_request", checked);
 					if (form.decision !== "approve")
-						return redirect(form.redirect_uri, {
+						return redirect(checked.redirectUri, {
 							error: "access_denied",
-							...(form.state ? { state: form.state } : {}),
+							...(checked.state ? { state: checked.state } : {}),
 						});
 					const code = yield* random(crypto, "mcp_code_");
 					const codeDigest = yield* digest(crypto, code);
@@ -336,21 +330,21 @@ export const installOAuth = (api: Api, origin: string) =>
 						store(ctx, {
 							id: codeDigest,
 							kind: "code",
-							clientId,
+							clientId: checked.clientId,
 							family: "",
 							payload: yield* Schema.encodeEffect(Schema.fromJsonString(Grant))({
-								redirect_uri: form.redirect_uri,
-								code_challenge: form.code_challenge,
+								redirect_uri: checked.redirectUri,
+								code_challenge: checked.challenge,
 								resource,
-								scopes: requested,
+								scopes: checked.scopes,
 								subject: ctx.identity.agent,
 							}),
 							expires: now + 5 * 60 * 1000,
 						}),
 					);
-					return redirect(form.redirect_uri, {
+					return redirect(checked.redirectUri, {
 						code,
-						...(form.state ? { state: form.state } : {}),
+						...(checked.state ? { state: checked.state } : {}),
 					});
 				}),
 		});

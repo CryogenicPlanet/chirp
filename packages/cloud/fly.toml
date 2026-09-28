@@ -15,6 +15,9 @@ FLY_ORGANIZATION = "rahul-tarak"
 FLY_REGION = "sjc"
 BOARDS_DOMAIN = "boards.chirp.wiki"
 FLY_VOLUME_SIZE_GB = "5"
+# PostHog project tokens are public: they only authorize sending events.
+POSTHOG_PROJECT_TOKEN = "phc_pA7gr5CLPuEbwNPvcyZH7Tkbf7vWnw83jZdZdEaPycDm"
+POSTHOG_HOST = "https://us.i.posthog.com"
 
 [http_service]
 internal_port = 8080

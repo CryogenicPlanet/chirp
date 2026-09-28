@@ -6,6 +6,20 @@ import { callTool, ToolCall, toolError, tools } from "./tools.ts";
 const protocolVersion = "2025-11-25";
 const supportedVersions: ReadonlyArray<string> = ["2025-03-26", "2025-06-18", protocolVersion];
 const boardOrigin = "https://your-board.example";
+/**
+ * The origin of the `/mcp` URL clients are given; clients send that URL as the OAuth resource, so it must match exactly.
+ * Set it to another address of this board to serve MCP there while sign-in, consent and citation links stay on boardOrigin.
+ */
+const mcpOrigin = boardOrigin;
+const validOrigin = (origin: string) => {
+	const configured = new URL(origin);
+	return (
+		origin !== "https://your-board.example" &&
+		origin === configured.origin &&
+		(configured.protocol === "https:" ||
+			(configured.protocol === "http:" && ["127.0.0.1", "[::1]", "localhost"].includes(configured.hostname)))
+	);
+};
 const RpcMessage = Schema.Struct({
 	jsonrpc: Schema.Literal("2.0"),
 	id: Schema.optionalKey(Schema.Union([Schema.String, Schema.Finite, Schema.Null])),
@@ -40,15 +54,10 @@ const unauthorized = (origin: string) =>
 export default (api: Api) =>
 	Effect.gen(function* () {
 		const origin = boardOrigin.replace(/\/$/, "");
-		const configured = new URL(origin);
-		if (
-			origin === "https://your-board.example" ||
-			origin !== configured.origin ||
-			(configured.protocol !== "https:" &&
-				!(configured.protocol === "http:" && ["127.0.0.1", "[::1]", "localhost"].includes(configured.hostname)))
-		)
-			return yield* Effect.die("Set boardOrigin to this board's exact HTTPS origin before enabling MCP");
-		const authenticate = yield* installOAuth(api, origin);
+		const resourceOrigin = mcpOrigin.replace(/\/$/, "");
+		if (!validOrigin(origin) || !validOrigin(resourceOrigin))
+			return yield* Effect.die("Set boardOrigin and mcpOrigin to this board's exact HTTPS origins before enabling MCP");
+		const authenticate = yield* installOAuth(api, origin, resourceOrigin);
 		api.route("GET", "/mcp", {
 			description: "Decline the optional MCP server event stream because this extension is stateless.",
 			access: "application-managed",
@@ -60,10 +69,14 @@ export default (api: Api) =>
 			access: "application-managed",
 			handler: (request, ctx) =>
 				Effect.gen(function* () {
-					if (request.headers.origin !== undefined && request.headers.origin !== origin)
+					if (
+						request.headers.origin !== undefined &&
+						request.headers.origin !== origin &&
+						request.headers.origin !== resourceOrigin
+					)
 						return new Response(null, { status: 403 });
 					const caller = yield* authenticate(ctx, request.headers.authorization);
-					if (!caller) return unauthorized(origin);
+					if (!caller) return unauthorized(resourceOrigin);
 					const accept = request.headers.accept ?? "";
 					if (!accept.includes("application/json") || !accept.includes("text/event-stream"))
 						return Response.json(

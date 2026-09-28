@@ -5,6 +5,7 @@ import { motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import type { OAuthProvider } from "../auth-settings.ts";
 import { DashboardBoardsResponse, type DashboardBoardList } from "../dashboard-contract.ts";
+import { useAnalyticsIdentity, useTrack } from "./analytics.tsx";
 import { AuthButtons } from "./auth-buttons.tsx";
 import { Button } from "./components/ui/button.tsx";
 import { CloudOnboardingArt } from "./cloud-onboarding-art.tsx";
@@ -28,9 +29,11 @@ export function CloudApp({
 	readonly providers: ReadonlyArray<OAuthProvider>;
 	readonly sessionUser: CloudClientUser | null;
 }) {
+	const track = useTrack();
 	const [listing, setListing] = useState<DashboardBoardList>();
 	const [loadError, setLoadError] = useState<string>();
 	const reducedMotion = useReducedMotion();
+	useAnalyticsIdentity(sessionUser);
 	const load = useCallback((signal?: AbortSignal) => {
 		setLoadError(undefined);
 		void fetch("/api/boards", { cache: "no-store", signal: signal ?? null })
@@ -193,6 +196,7 @@ export function CloudApp({
 											href={`https://${board.hostname}`}
 											target="_blank"
 											rel="noreferrer"
+											onClick={() => track("board_opened", { board_id: board.id })}
 										>
 											Open board
 											<ArrowUpRight className="size-3.5" />

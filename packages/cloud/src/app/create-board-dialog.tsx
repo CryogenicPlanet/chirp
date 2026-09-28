@@ -17,6 +17,7 @@ import {
 } from "./components/ui/dialog.tsx";
 import { Input } from "./components/ui/input.tsx";
 import { dashboardErrorMessage, readDashboardResponse } from "./dashboard-response.ts";
+import { useTrack } from "./analytics.tsx";
 
 export function CreateBoardDialog({
 	first = false,
@@ -27,6 +28,7 @@ export function CreateBoardDialog({
 	readonly postgresAvailable?: boolean;
 	readonly boardsDomain?: string | undefined;
 }) {
+	const track = useTrack();
 	const router = useRouter();
 	const [open, setOpen] = useState(false);
 	const [name, setName] = useState("");
@@ -58,6 +60,7 @@ export function CreateBoardDialog({
 			});
 			const { board } = await readDashboardResponse(response, DashboardBoardResponse);
 			pendingCreate.current = undefined;
+			track("board_created", { board_id: board.id, storage_engine: storage, channel, first_board: first });
 			setOpen(false);
 			router.push(`/boards/${encodeURIComponent(board.id)}`);
 		} catch (cause) {

@@ -1,12 +1,14 @@
 import { BunHttpServer, BunRuntime, BunServices } from "@effect/platform-bun";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
-import { Clock, Console, Deferred, Effect, Layer, Ref } from "effect";
+import { Clock, Console, Deferred, Effect, Layer, Option, Ref, Schema } from "effect";
 import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { SqlClient } from "effect/unstable/sql";
 import { Events, eventsSchema, layer } from "../../src/events.ts";
 import { eventFilterSchema, eventRoutingSchema } from "../../src/boot-schema.ts";
 import { requestEvents } from "../../src/request-events.ts";
 import { traffic } from "../../src/traffic.ts";
+
+const reported = Schema.decodeUnknownOption(Schema.Struct({ lost: Schema.Int }));
 
 const main = Effect.gen(function* () {
 	yield* eventsSchema;
@@ -20,12 +22,20 @@ const main = Effect.gen(function* () {
 		const release = yield* Deferred.make<void>();
 		const attempts = yield* Ref.make(0);
 		const written = yield* Ref.make(0);
+		// Stored records report every record the queue dropped or the store refused.
+		const lost = yield* Ref.make(0);
 		const store: Events["Service"] = {
 			...events,
 			writeBoot: (event) =>
 				Ref.update(attempts, (n) => n + 1).pipe(
 					Effect.andThen(events.writeBoot(event)),
 					Effect.tap(() => Ref.update(written, (n) => n + 1)),
+					Effect.tap(() =>
+						Ref.update(
+							lost,
+							(n) => n + Option.match(reported(event.payload), { onNone: () => 0, onSome: (p) => p.lost }),
+						),
+					),
 				),
 		};
 		const observe = yield* requestEvents(store);
@@ -52,6 +62,7 @@ const main = Effect.gen(function* () {
 					held: yield* Ref.get(held),
 					attempts: yield* Ref.get(attempts),
 					written: yield* Ref.get(written),
+					lost: yield* Ref.get(lost),
 					traffic: yield* admission.state,
 				});
 			yield* admission.awaitDestination;
@@ -59,11 +70,13 @@ const main = Effect.gen(function* () {
 				started: yield* Clock.monotonicTimeNanos,
 				method: request.method,
 				path: request.url,
+				search: "",
+				userAgent: undefined,
 				identity: null,
 				generation: 1,
 				requestId: "request-test",
 			});
-			yield* observed.status(200);
+			yield* observed.respond(HttpServerResponse.empty({ status: 200 }));
 			return HttpServerResponse.text("response complete");
 		});
 		yield* HttpRouter.add("*", "/*", handler).pipe(

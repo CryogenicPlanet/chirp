@@ -35,6 +35,20 @@ const decisionInput = Schema.Struct({
 	scopes: EnrollmentDecision.fields.scopes,
 	long_lived: Schema.Boolean,
 });
+// A link copied with a trailing backtick, quote or period, or one whose enrollment is gone, must not
+// fall through to boot's generic not_implemented refusal.
+const approvalLinkInvalid = () =>
+	HttpServerResponse.jsonUnsafe(
+		{
+			error: {
+				code: "approval_link_invalid",
+				message: "No enrollment matches this approval link.",
+				hint: "Open the approval link exactly as your agent printed it, without trailing characters such as a backtick, quote or period. If the link is exact, the enrollment no longer exists: ask the agent to enroll again.",
+				retriable: false,
+			},
+		},
+		{ status: 404, headers: { "cache-control": "no-store" } },
+	);
 const pageHeaders = Object.freeze({
 	"cache-control": "no-store",
 	"x-content-type-options": "nosniff",
@@ -52,6 +66,7 @@ export const enrollmentRoute = (auth: Auth["Service"], config: AuthConfig, editi
 		const decide =
 			request.method === "POST" ? /^\/_boot\/enroll\/(e_[A-Za-z0-9_-]{43})\/approve$/.exec(path)?.[1] : undefined;
 		const page = request.method === "GET" ? /^\/(?:_boot\/)?approve\/(e_[A-Za-z0-9_-]{43})$/.exec(path) : null;
+		if (!page && request.method === "GET" && /^\/(?:_boot\/)?approve(?:\/|$)/.test(path)) return approvalLinkInvalid();
 		const challenge = request.method === "POST" && path === "/_boot/auth/challenge";
 		if (request.method === "GET" && path === "/_boot/auth/approval.js")
 			return HttpServerResponse.text(approvalClient, { contentType: "text/javascript", headers: pageHeaders });
@@ -60,8 +75,16 @@ export const enrollmentRoute = (auth: Auth["Service"], config: AuthConfig, editi
 			Effect.gen(function* () {
 				const approveUrl = (id: string) => `${config.expectedOrigin}/approve/${id}`;
 				if (page?.[1]) {
-					const info = yield* auth.enrollmentInfo(page[1]);
-					return HttpServerResponse.text(approvalPage(info), { contentType: "text/html", headers: pageHeaders });
+					const info = yield* auth
+						.enrollmentInfo(page[1])
+						.pipe(
+							Effect.catchTag("AuthError", (error) =>
+								error.code === "enrollment_invalid" ? Effect.succeed(null) : Effect.fail(error),
+							),
+						);
+					return info === null
+						? approvalLinkInvalid()
+						: HttpServerResponse.text(approvalPage(info), { contentType: "text/html", headers: pageHeaders });
 				}
 				if (create) {
 					if (url.search) return yield* new AuthError({ code: "invalid_request" });

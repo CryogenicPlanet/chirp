@@ -133,6 +133,8 @@ export const proxy = Effect.gen(function* () {
 				started,
 				method: request.method,
 				path,
+				search: url.search,
+				userAgent: request.headers["user-agent"],
 				identity: null,
 				generation: 0,
 				requestId,
@@ -505,7 +507,7 @@ export const proxy = Effect.gen(function* () {
 				);
 			}),
 		);
-	}).pipe(Effect.tap((response) => (observed ? observed.status(response.status) : Effect.void)));
+	}).pipe(Effect.tap((response) => (observed ? observed.respond(response) : Effect.void)));
 	return yield* observed ? routed.pipe(Effect.withParentSpan(observed.span)) : routed;
 });
 

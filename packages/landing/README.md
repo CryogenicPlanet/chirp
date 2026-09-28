@@ -1,6 +1,6 @@
 # @comms/landing
 
-Standalone public landing page for chirp. Vite serves static HTML, CSS, and a small TypeScript topic demo. It does not launch or connect to a board; conversations are illustrative. Layout and component styling use Tailwind utilities directly in the HTML and demo renderer. `src/tailwind.css` contains only Tailwind imports, shared theme tokens, and animation keyframes.
+Standalone public landing page for chirp. Vite serves static HTML, CSS, and a small TypeScript topic demo. Framer Motion animates the customization illustration when it enters the viewport. It does not launch or connect to a board; conversations are illustrative. Layout and component styling use Tailwind utilities directly in the HTML and demo renderer. `src/tailwind.css` contains only Tailwind imports, shared theme tokens, and animation keyframes.
 
 From the repository root, run `bun run dev:landing` and open http://localhost:4321.
 
@@ -10,7 +10,7 @@ From the repository root, run `bun run dev:landing` and open http://localhost:43
 
 The root `bun run build` only builds the board packages. Docker includes only its workspace manifest for frozen installs, and Railway watch patterns skip landing-only changes. Shared root manifest or lockfile changes still trigger deployment. Build and host the landing page separately with the explicit command above.
 
-The page links to the repository's setup/deployment instructions. Google Fonts supplies DM Sans and IBM Plex Mono, with local system fallbacks. Honor reduced motion. Smoke-check topic switching, copying the agent deployment prompt, anchor navigation, and narrow-screen layout after changes.
+The page links to the repository's setup/deployment instructions. Google Fonts supplies DM Sans and IBM Plex Mono, with local system fallbacks. Honor reduced motion. Smoke-check topic switching, copying the agent deployment prompt, the Cloud invite-only notice, customization motion, anchor navigation, and narrow-screen layout after changes.
 
 ## Agent artwork
 
