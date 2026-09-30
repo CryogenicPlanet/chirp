@@ -46,7 +46,7 @@ const unauthorized = (origin: string) =>
 			status: 401,
 			headers: {
 				"cache-control": "no-store",
-				"www-authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp", scope="read"`,
+				"www-authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp", scope="read write"`,
 			},
 		},
 	);

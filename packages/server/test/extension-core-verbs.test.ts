@@ -58,6 +58,8 @@ export default (api: Api) => Effect.gen(function* () {
   ctx.mutate(protocol(ctx, ctx.query.mode ?? "valid", request.headers["idempotency-key"])).pipe(Effect.map(Response.json))});
  api.route("GET", "/api/protocol-topic", {description:"Read a topic through the public capability", scope:"read", handler:(_request,ctx) =>
   ctx.topics.read(String(ctx.query.path ?? "")).pipe(Effect.result, Effect.map(result => Response.json(result._tag === "Failure" ? {code:result.failure.code} : {path:result.success.path})))});
+ api.route("POST", "/api/protocol-author", {description:"Attempt to post under another name for a signed-in caller", scope:"write", handler:(_request,ctx) =>
+  ctx.messages.create({topic:"verbs", body:"forged"}, undefined, {agent:"forged", instance:"elsewhere"}).pipe(Effect.map(Response.json))});
  api.route("GET", "/api/protocol-read", {description:"Attempt mutation from a read capability", scope:"read", handler:(_request,ctx) =>
   ctx.mutate(ctx.query.mode === "effect"
    ? ctx.db\`INSERT INTO protocol_entries VALUES('read-effect',0)\`.pipe(Effect.asVoid)
@@ -112,6 +114,9 @@ export default (api: Api) => Effect.gen(function* () {
 		expect(refused.status, mode).toBe(400);
 		expect(await refused.json()).toMatchObject({ error: { code: "input_invalid" } });
 	}
+	const forged = await app.post("/api/protocol-author", {}, cookie);
+	expect(forged.status).toBe(400);
+	expect(await forged.json()).toMatchObject({ error: { code: "input_invalid", field: "author" } });
 	for (const mode of ["effect", "protocol"]) {
 		const refused = await get(`/api/protocol-read?mode=${mode}`);
 		expect(refused.status, mode).toBe(403);
@@ -125,4 +130,30 @@ export default (api: Api) => Effect.gen(function* () {
 	expect(await fixture.sql("SELECT COUNT(*) AS count FROM idempotency WHERE kind='protocol.saved'")).toEqual([
 		{ count: 1 },
 	]);
+}, 30000);
+
+it("lets a context without a signed-in caller post only under an unreserved name", async (test) => {
+	const fixture = await conversation(test);
+	const seed = join(fixture.root, "seed");
+	await cp(join(import.meta.dirname, "../src"), seed, { recursive: true });
+	await writeFile(
+		join(seed, "ext/relay.ts"),
+		`import { Effect } from "effect";
+import type { Api } from "../kernel/extension-api.ts";
+export default (api: Api) => {
+ api.route("POST", "/relay", {description:"Post under a requested author", access:"application-managed", handler:(_request,ctx) =>
+  ctx.messages.create({topic:"relay", body:"relayed"}, undefined, {agent:String(ctx.query.agent), instance:"client-1"}).pipe(
+   Effect.result,
+   Effect.map(result => Response.json(result._tag === "Failure" ? {code:result.failure.code} : {agent:result.success.agent, instance:result.success.instance})))});
+};`,
+	);
+	await writeFile(join(fixture.root, "boot.config.json"), JSON.stringify({ applicationManagedIngress: true }));
+	const app = await fixture.launch(join(seed, "server.ts"));
+	await app.setup();
+	await app.ready(await app.login());
+	const relay = async (agent: string) =>
+		(await fetch(`${app.url}/relay?agent=${encodeURIComponent(agent)}`, { method: "POST" })).json();
+	for (const agent of ["system", "boot", "rahul", "Relay", "a".repeat(65)])
+		expect(await relay(agent), agent).toEqual({ code: "input_invalid" });
+	expect(await relay("relay-bot")).toEqual({ agent: "relay-bot", instance: "extension:relay.ts:client-1" });
 }, 30000);

@@ -1,7 +1,7 @@
 import { HttpServerResponse } from "effect/unstable/http";
 import { servePage } from "../../page-serving.ts";
 import { mysqlSearchConfig } from "./mysql-search-config.ts";
-import type { ExtensionCapabilities } from "../../kernel/extension-capabilities.ts";
+import type { ExtensionCapabilities, MessageAuthor } from "../../kernel/extension-capabilities.ts";
 import { markRead } from "./read-marks.ts";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 import { Pages } from "./pages.ts";
@@ -16,6 +16,11 @@ import type { Identity } from "../../kernel/identity.ts";
 import { HealthProbe } from "../../kernel/health-probe.ts";
 import { Lifecycle, RequestMutation } from "../../kernel/lifecycle.ts";
 import { makeTopics } from "./topics.ts";
+
+// Mirrors boot's enrollment rule: boot reserves the human owner (packages/boot/src/human-agent.ts) and itself.
+const authorName = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+const reservedAuthors: ReadonlyArray<string> = ["system", "boot", "rahul"];
+const authorInstance = /^[A-Za-z0-9._-]{1,128}$/;
 
 /** Bind product operations to the caller; persistence stays in the shared mutation service. */
 export const extensionCapabilities = Effect.gen(function* () {
@@ -55,38 +60,66 @@ export const extensionCapabilities = Effect.gen(function* () {
 			read: (fence: number) => Effect.Effect<A, E, R>,
 		): Effect.Effect<A, E | KernelError | SqlError | Schema.SchemaError, R> =>
 			publication.read(read).pipe(Effect.provideService(Lifecycle, lifecycle));
-		const mutate = <A, E, R>(input: Effect.Effect<A, E, R> | Omit<Mutation<A, E, R>, "guard">) =>
-			write(
-				Effect.gen(function* () {
-					if (Effect.isEffect(input)) return yield* publication.change(input);
-					if ("guard" in input) return yield* new KernelError({ code: "input_invalid" });
-					if (
-						input.idempotency &&
-						(input.idempotency.instance !== caller.instance || input.idempotency.scope !== undefined)
-					)
-						return yield* new KernelError({ code: "input_invalid" });
-					return yield* publication.mutate({
-						...(input.idempotency ? { idempotency: input.idempotency } : {}),
-						body: (reserve) =>
-							input
-								.body(reserve)
-								.pipe(
-									Effect.flatMap((result) =>
-										result.events.some(
-											(event) =>
-												event.actor !== caller.agent ||
-												event.instance !== caller.instance ||
-												event.request_id !== caller.request ||
-												event.generation !== boot.generation,
-										)
-											? Effect.fail(new KernelError({ code: "input_invalid" }))
-											: Effect.succeed(result),
+		const mutateAs =
+			(actor: Identity) =>
+			<A, E, R>(input: Effect.Effect<A, E, R> | Omit<Mutation<A, E, R>, "guard">) =>
+				write(
+					Effect.gen(function* () {
+						if (Effect.isEffect(input)) return yield* publication.change(input);
+						if ("guard" in input) return yield* new KernelError({ code: "input_invalid" });
+						if (
+							input.idempotency &&
+							(input.idempotency.instance !== actor.instance || input.idempotency.scope !== undefined)
+						)
+							return yield* new KernelError({ code: "input_invalid" });
+						return yield* publication.mutate({
+							...(input.idempotency ? { idempotency: input.idempotency } : {}),
+							body: (reserve) =>
+								input
+									.body(reserve)
+									.pipe(
+										Effect.flatMap((result) =>
+											result.events.some(
+												(event) =>
+													event.actor !== actor.agent ||
+													event.instance !== actor.instance ||
+													event.request_id !== actor.request ||
+													event.generation !== boot.generation,
+											)
+												? Effect.fail(new KernelError({ code: "input_invalid" }))
+												: Effect.succeed(result),
+										),
 									),
-								),
-					});
-				}),
-			);
+						});
+					}),
+				);
+		const mutate = mutateAs(caller);
 		const messages = makeMessages(sql, { read, mutate }, boot, crypto, mysql);
+		const createAs = (input: typeof MessageInput.Type, key: string | undefined, author: MessageAuthor) => {
+			// A signed-in caller already names the author; only system-authority contexts may attribute a post.
+			if (
+				who ||
+				reservedAuthors.includes(author.agent) ||
+				!authorName.test(author.agent) ||
+				!authorInstance.test(author.instance)
+			)
+				return Effect.fail(
+					new KernelError({
+						code: "input_invalid",
+						detail: {
+							field: "author",
+							hint: "Name an author only without a signed-in caller, using an unreserved lowercase agent name of at most 64 characters.",
+						},
+					}),
+				);
+			const actor = {
+				agent: author.agent,
+				instance: `extension:${extension}:${author.instance}`,
+				request: "",
+				kind: "agent",
+			} satisfies Identity;
+			return makeMessages(sql, { read, mutate: mutateAs(actor) }, boot, crypto, mysql).create(actor, input, key);
+		};
 		const topics = makeTopics(sql, read, pages);
 		return {
 			pages: {
@@ -101,7 +134,8 @@ export const extensionCapabilities = Effect.gen(function* () {
 			messages: {
 				query: (input: Parameters<typeof messages.list>[0]) =>
 					messages.list(input).pipe(Effect.provideService(Lifecycle, lifecycle)),
-				create: (input: typeof MessageInput.Type, key?: string) => messages.create(caller, input, key),
+				create: (input: typeof MessageInput.Type, key?: string, author?: MessageAuthor) =>
+					author ? createAs(input, key, author) : messages.create(caller, input, key),
 			},
 			topics: {
 				read: (path: string, options: { readonly depth?: number; readonly archived?: boolean } = {}) =>
