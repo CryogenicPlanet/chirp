@@ -1,9 +1,14 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
+import { once } from "node:events";
 import { cp, readFile, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import { createServer as createNetServer } from "node:net";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { Schema } from "effect";
 import { expect, it, type TestContext } from "vitest";
 import { conversation } from "./fixtures/conversation.ts";
+import { publicCallbackAddress } from "./fixtures/mcp-callback-addresses.ts";
 
 const stringField = (value: unknown, name: string) => {
 	if (typeof value !== "object" || value === null) throw new Error(`${name} response is not an object`);
@@ -21,16 +26,17 @@ it("keeps MCP absent until its extension package is installed", async (test) => 
 	expect((await fetch(`${app.url}/mcp`, { headers: { cookie } })).status).toBeGreaterThanOrEqual(400);
 }, 20000);
 
-const installed = async (test: TestContext, mcpOrigin?: string) => {
+const installed = async (test: TestContext, mcpOrigin?: string, localCallbacks = false) => {
 	const fixture = await conversation(test);
 	const seed = join(fixture.root, "seed");
 	await cp(join(import.meta.dirname, "../src"), seed, { recursive: true });
 	await cp(join(import.meta.dirname, "../../../examples/extensions/mcp"), join(seed, "ext/mcp"), { recursive: true });
-	for (const file of ["index.ts", "oauth.ts", "tools.ts"]) {
+	for (const file of ["index.ts", "oauth.ts", "tools.ts", "events.ts"]) {
 		const path = join(seed, `ext/mcp/${file}`);
 		const source = (await readFile(path, "utf8"))
 			.replace("../../../packages/server/src/kernel/extension-api.ts", "../../kernel/extension-api.ts")
-			.replace("https://your-board.example", "https://comms.test");
+			.replace("https://your-board.example", "https://comms.test")
+			.replace("const allowLocalCallbacks = false;", `const allowLocalCallbacks = ${localCallbacks};`);
 		await writeFile(
 			path,
 			mcpOrigin === undefined
@@ -456,3 +462,349 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 		expect(Reflect.get(row, "id")).toMatch(/^[a-f0-9]{64}$/);
 	}
 }, 60000);
+
+/** Registers a client and approves read and write under `agent`, returning its access token. */
+const connect = async (url: string, cookie: string, clientName: string, agent: string) => {
+	const registration = await fetch(`${url}/mcp/oauth/register`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ client_name: clientName, redirect_uris: ["https://client.test/callback"] }),
+	});
+	const clientId = stringField(await registration.json(), "client_id");
+	const verifier = createHash("sha256").update(`verifier-${clientName}`).digest("base64url");
+	const query = {
+		response_type: "code",
+		client_id: clientId,
+		redirect_uri: "https://client.test/callback",
+		code_challenge: createHash("sha256").update(verifier).digest("base64url"),
+		code_challenge_method: "S256",
+		resource: "https://comms.test/mcp",
+		scope: "read write",
+	};
+	const approval = await fetch(`${url}/mcp/oauth/authorize`, {
+		method: "POST",
+		redirect: "manual",
+		headers: { cookie, origin: "https://comms.test", "content-type": "application/x-www-form-urlencoded" },
+		body: new URLSearchParams({ ...query, decision: "approve", agent }),
+	});
+	const code = new URL(approval.headers.get("location") ?? "").searchParams.get("code");
+	if (!code) throw new Error("authorization code is missing");
+	const exchanged = await fetch(`${url}/mcp/oauth/token`, {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded" },
+		body: new URLSearchParams({
+			grant_type: "authorization_code",
+			client_id: clientId,
+			redirect_uri: "https://client.test/callback",
+			resource: "https://comms.test/mcp",
+			code,
+			code_verifier: verifier,
+		}),
+	});
+	return { clientId, access: stringField(await exchanged.json(), "access_token") };
+};
+
+/** An MCP 2.0 request: version and capabilities travel in `_meta`, mirrored by the standard headers. */
+const modern = (
+	url: string,
+	token: string,
+	id: number,
+	method: string,
+	params: Record<string, unknown> = {},
+	options: { readonly headers?: Record<string, string>; readonly version?: string; readonly meta?: object } = {},
+) =>
+	fetch(`${url}/mcp`, {
+		method: "POST",
+		headers: {
+			authorization: `Bearer ${token}`,
+			accept: "application/json, text/event-stream",
+			"content-type": "application/json",
+			"mcp-protocol-version": options.version ?? "2026-07-28",
+			"mcp-method": method,
+			...(method === "tools/call" ? { "mcp-name": String(params.name) } : {}),
+			...options.headers,
+		},
+		body: JSON.stringify({
+			jsonrpc: "2.0",
+			id,
+			method,
+			params: {
+				...params,
+				_meta: options.meta ?? {
+					"io.modelcontextprotocol/protocolVersion": options.version ?? "2026-07-28",
+					"io.modelcontextprotocol/clientCapabilities": {},
+				},
+			},
+		}),
+	});
+
+const hookReceiver = async (test: TestContext) => {
+	const received: Array<{
+		readonly headers: Readonly<Record<string, string | string[] | undefined>>;
+		readonly body: string;
+	}> = [];
+	const state = { echo: true };
+	const server = createServer((request, response) => {
+		const chunks: Buffer[] = [];
+		request.on("data", (chunk: Buffer) => chunks.push(chunk));
+		request.on("end", () => {
+			const body = Buffer.concat(chunks).toString("utf8");
+			received.push({ headers: request.headers, body });
+			const parsed: unknown = JSON.parse(body);
+			const challenge = Reflect.get(Object(parsed), "challenge");
+			response.writeHead(200, { "content-type": "application/json" });
+			response.end(
+				JSON.stringify(typeof challenge === "string" ? { challenge: state.echo ? challenge : "wrong" } : {}),
+			);
+		});
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	test.onTestFinished(async () => {
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error("receiver has no address");
+	return { url: `http://127.0.0.1:${address.port}/hook`, received, state };
+};
+
+const signatureOf = (secret: string, headers: Readonly<Record<string, string | string[] | undefined>>, body: string) =>
+	`v1,${createHmac("sha256", Buffer.from(secret.slice(6), "base64"))
+		.update(`${String(headers["webhook-id"])}.${String(headers["webhook-timestamp"])}.${body}`)
+		.digest("base64")}`;
+
+const eventually = async <A>(check: () => A | undefined) => {
+	for (let attempt = 0; attempt < 200; attempt++) {
+		const value = check();
+		if (value !== undefined) return value;
+		await delay(50);
+	}
+	throw new Error("condition was not met within 10 seconds");
+};
+
+it("serves MCP 2.0 discovery and delivers signed mention events to a verified webhook", async (test) => {
+	const { app, cookie } = await installed(test, undefined, true);
+	const { access } = await connect(app.url, cookie, "Event client", "gpt-bot");
+	const secret = `whsec_${Buffer.alloc(32, 7).toString("base64")}`;
+	const hook = await hookReceiver(test);
+	const rpc = async (response: Response) => ({ status: response.status, body: await response.json() });
+
+	const discovered = await rpc(await modern(app.url, access, 1, "server/discover"));
+	expect(discovered.status).toBe(200);
+	expect(discovered.body.result).toMatchObject({
+		resultType: "complete",
+		supportedVersions: ["2026-07-28"],
+		capabilities: { tools: {}, events: {} },
+		cacheScope: "public",
+		_meta: { "io.modelcontextprotocol/serverInfo": { name: "chirp" } },
+	});
+	expect(discovered.body.result.ttlMs).toBeGreaterThanOrEqual(0);
+	expect(
+		await rpc(await modern(app.url, access, 2, "server/discover", {}, { headers: { "mcp-method": "tools/list" } })),
+	).toMatchObject({ status: 400, body: { error: { code: -32020 } } });
+	expect(await rpc(await modern(app.url, access, 3, "server/discover", {}, { version: "2099-01-01" }))).toMatchObject({
+		status: 400,
+		body: {
+			error: { code: -32022, data: { requested: "2099-01-01", supported: expect.arrayContaining(["2026-07-28"]) } },
+		},
+	});
+	expect(
+		await rpc(
+			await modern(
+				app.url,
+				access,
+				4,
+				"server/discover",
+				{},
+				{
+					meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" },
+				},
+			),
+		),
+	).toMatchObject({ status: 400, body: { error: { code: -32602 } } });
+	expect(await rpc(await modern(app.url, access, 5, "ping"))).toMatchObject({
+		status: 404,
+		body: { error: { code: -32601 } },
+	});
+	expect((await rpc(await modern(app.url, access, 6, "tools/list"))).body.result).toMatchObject({
+		resultType: "complete",
+		cacheScope: "public",
+		tools: expect.arrayContaining([expect.objectContaining({ name: "post_message" })]),
+	});
+	expect(
+		(await rpc(await modern(app.url, access, 7, "tools/call", { name: "search", arguments: { query: "anything" } })))
+			.body.result,
+	).toMatchObject({ resultType: "complete", structuredContent: { results: [] } });
+	expect((await rpc(await modern(app.url, access, 8, "events/list"))).body.result).toMatchObject({
+		resultType: "complete",
+		events: [{ name: "mention.created", delivery: ["webhook"] }],
+	});
+
+	const subscription = (overrides: Record<string, unknown> = {}) => ({
+		name: "mention.created",
+		arguments: {},
+		delivery: { mode: "webhook", url: hook.url, secret },
+		cursor: null,
+		...overrides,
+	});
+	for (const [overrides, code] of [
+		[{ delivery: { mode: "webhook", url: hook.url, secret: "whsec_short" } }, -32602],
+		[{ arguments: { topic: "plans" } }, -32602],
+		[{ name: "message.deleted" }, -32011],
+		[{ delivery: { mode: "poll", url: hook.url, secret } }, -32014],
+	] as const)
+		expect(
+			(await rpc(await modern(app.url, access, 9, "events/subscribe", subscription(overrides)))).body.error.code,
+		).toBe(code);
+	hook.state.echo = false;
+	expect((await rpc(await modern(app.url, access, 10, "events/subscribe", subscription()))).body.error).toMatchObject({
+		code: -32015,
+		message: "CallbackEndpointError",
+		data: { reason: "challenge_failed" },
+	});
+	hook.state.echo = true;
+	const verificationsBefore = hook.received.length;
+	const subscribed = await rpc(await modern(app.url, access, 11, "events/subscribe", subscription()));
+	expect(subscribed.body.result).toMatchObject({ resultType: "complete", cursor: null, truncated: false });
+	const subscriptionId = subscribed.body.result.id;
+	expect(subscriptionId).toMatch(/^sub_[0-9a-f]{32}$/);
+	expect(Date.parse(subscribed.body.result.refreshBefore)).toBeGreaterThan(Date.now() + 23 * 60 * 60 * 1000);
+	const verification = hook.received[verificationsBefore];
+	if (!verification) throw new Error("verification was not sent");
+	expect(JSON.parse(verification.body)).toMatchObject({ type: "verification", challenge: expect.any(String) });
+	expect(verification.headers["webhook-id"]).toMatch(/^msg_verification_/);
+	expect(verification.headers["x-mcp-subscription-id"]).toBe(subscriptionId);
+	expect(verification.headers["webhook-signature"]).toBe(signatureOf(secret, verification.headers, verification.body));
+
+	const refreshed = await rpc(await modern(app.url, access, 12, "events/subscribe", subscription({ ttlMs: 60_000 })));
+	expect(refreshed.body.result.id).toBe(subscriptionId);
+	expect(Date.parse(refreshed.body.result.refreshBefore)).toBeGreaterThan(Date.now() + 4 * 60 * 1000);
+	expect(hook.received.length).toBe(verificationsBefore + 1);
+
+	const deliveries = () => hook.received.filter((item) => !String(item.headers["webhook-id"]).startsWith("msg_"));
+	const mentioned = await (
+		await app.post("/api/messages", { topic: "plans", body: "Ship it, @gpt-bot?" }, cookie)
+	).json();
+	const first = await eventually(() => deliveries()[0]);
+	expect(first.headers["webhook-signature"]).toBe(signatureOf(secret, first.headers, first.body));
+	expect(first.headers["x-mcp-subscription-id"]).toBe(subscriptionId);
+	expect(JSON.parse(first.body)).toEqual({
+		eventId: `evt_${mentioned.seq}`,
+		name: "mention.created",
+		timestamp: new Date(mentioned.created_at).toISOString(),
+		data: {
+			id: `message:${mentioned.seq}`,
+			topic: "plans",
+			author: "rahul",
+			text: "Ship it, @gpt-bot?",
+			truncated: false,
+			url: `https://comms.test/?message=${mentioned.seq}#message-${mentioned.seq}`,
+		},
+		cursor: null,
+	});
+	expect(first.headers["webhook-id"]).toBe(`evt_${mentioned.seq}`);
+
+	await app.post("/api/messages", { topic: "plans", body: "Nobody is mentioned here" }, cookie);
+	await modern(app.url, access, 13, "tools/call", {
+		name: "post_message",
+		arguments: { topic: "plans", body: "Noting this for @gpt-bot", idempotencyKey: "own-mention" },
+	});
+	const everyone = await (await app.post("/api/messages", { topic: "plans", body: "@here standup" }, cookie)).json();
+	const second = await eventually(() => deliveries()[1]);
+	expect(JSON.parse(second.body).data.id).toBe(`message:${everyone.seq}`);
+	expect(deliveries()).toHaveLength(2);
+
+	expect(
+		(
+			await rpc(
+				await modern(app.url, access, 14, "events/unsubscribe", {
+					name: "mention.created",
+					arguments: {},
+					delivery: { mode: "webhook", url: hook.url },
+				}),
+			)
+		).body.result,
+	).toEqual({ resultType: "complete" });
+	expect(
+		(
+			await rpc(
+				await modern(app.url, access, 15, "events/unsubscribe", {
+					name: "mention.created",
+					delivery: { url: hook.url },
+				}),
+			)
+		).body.result,
+	).toEqual({ resultType: "complete" });
+	await app.post("/api/messages", { topic: "plans", body: "Still there, @gpt-bot?" }, cookie);
+	await delay(1500);
+	expect(deliveries()).toHaveLength(2);
+}, 60000);
+
+it("refuses callbacks that are not public HTTPS endpoints without connecting to them", async (test) => {
+	const { app, cookie } = await installed(test);
+	const { access } = await connect(app.url, cookie, "Event client", "gpt-bot");
+	const secret = `whsec_${Buffer.alloc(32, 9).toString("base64")}`;
+	const listener = createNetServer((socket) => {
+		connections.count++;
+		socket.destroy();
+	});
+	const connections = { count: 0 };
+	listener.listen(0, "127.0.0.1");
+	await once(listener, "listening");
+	test.onTestFinished(() => new Promise<void>((resolve) => listener.close(() => resolve())));
+	const address = listener.address();
+	if (!address || typeof address === "string") throw new Error("listener has no address");
+	const subscribe = async (url: string) =>
+		(
+			await (
+				await modern(app.url, access, 1, "events/subscribe", {
+					name: "mention.created",
+					delivery: { mode: "webhook", url, secret },
+				})
+			).json()
+		).error;
+	expect(await subscribe(`http://127.0.0.1:${address.port}/hook`)).toMatchObject({ code: -32602 });
+	expect(await subscribe("https://user:pw@example.com/hook")).toMatchObject({ code: -32602 });
+	for (const url of [
+		`https://127.0.0.1:${address.port}/hook`,
+		`https://localhost:${address.port}/hook`,
+		`https://[::ffff:127.0.0.1]:${address.port}/hook`,
+		"https://169.254.169.254/latest",
+	])
+		expect(await subscribe(url), url).toMatchObject({ code: -32015, data: { reason: "connection_refused" } });
+	expect(connections.count).toBe(0);
+	// Each unverified callback spends the client's verification budget, capping how many hosts it can probe.
+	for (let attempt = 4; attempt < 10; attempt++)
+		expect(await subscribe(`https://127.0.0.${attempt}/hook`)).toMatchObject({ code: -32015 });
+	expect(await subscribe("https://127.0.0.99/hook")).toMatchObject({
+		code: -32013,
+		data: { limit: "verifications", max: 10 },
+	});
+}, 30000);
+
+it("treats only globally routable addresses as public", () => {
+	for (const address of ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"])
+		expect(publicCallbackAddress(address), address).toBe(true);
+	for (const address of [
+		"127.0.0.1",
+		"10.1.2.3",
+		"172.16.0.1",
+		"192.168.1.1",
+		"169.254.169.254",
+		"100.64.0.1",
+		"0.0.0.0",
+		"224.0.0.1",
+		"255.255.255.255",
+		"::1",
+		"::",
+		"fe80::1",
+		"fc00::1",
+		"::ffff:127.0.0.1",
+		"2001:db8::1",
+		"2002::1",
+		"64:ff9b::a00:1",
+		"not-an-ip",
+	])
+		expect(publicCallbackAddress(address), address).toBe(false);
+});
