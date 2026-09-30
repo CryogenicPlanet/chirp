@@ -292,7 +292,11 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 	const seq = Reflect.get(message, "seq");
 	if (typeof seq !== "number") throw new Error("created message has no sequence");
 	const searched = await (
-		await call(reader.access, 3, "tools/call", { name: "search", arguments: { query: "quarterly launch" } })
+		await call(reader.access, 3, "tools/call", {
+			name: "search",
+			arguments: { query: "quarterly launch" },
+			_meta: { progressToken: 3 },
+		})
 	).json();
 	expect(searched.result.structuredContent.results).toContainEqual({
 		id: `message:${seq}`,

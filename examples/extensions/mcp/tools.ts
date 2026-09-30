@@ -17,6 +17,7 @@ const PostInput = Schema.Struct({
 export const ToolCall = Schema.Struct({
 	name: Schema.String,
 	arguments: Schema.optionalKey(Schema.Unknown),
+	_meta: Schema.optionalKey(Schema.Unknown),
 });
 
 const decode = <A>(schema: Schema.ConstraintDecoder<A>, input: unknown) =>
