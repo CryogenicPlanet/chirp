@@ -22,7 +22,7 @@ export const ToolCall = Schema.Struct({
 
 const decode = <A>(schema: Schema.ConstraintDecoder<A>, input: unknown) =>
 	Schema.decodeOption(schema, { onExcessProperty: "error" })(input);
-const messageUrl = (origin: string, seq: number) => `${origin}/?message=${seq}#message-${seq}`;
+export const messageUrl = (origin: string, seq: number) => `${origin}/?message=${seq}#message-${seq}`;
 const title = (message: {
 	readonly seq: number;
 	readonly topic: string;
