@@ -7,10 +7,10 @@ import type { SqlError } from "effect/unstable/sql/SqlError";
 import { Pages } from "./pages.ts";
 import type { Mutation } from "../../kernel/mutate.ts";
 import { Publication } from "../../kernel/publication.ts";
-import { Crypto, Deferred, Effect, FileSystem, Option, Ref, type Schema } from "effect";
+import { Crypto, Deferred, Effect, FileSystem, Option, Ref, Schema } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import { BootChannel, KernelError } from "../../kernel/boot-channel.ts";
-import { type MessageInput } from "@comms/protocol/messages";
+import { MessageInput } from "@comms/protocol/messages";
 import { makeMessages, topicPathDetail, validTopic } from "./messages.ts";
 import type { Identity } from "../../kernel/identity.ts";
 import { HealthProbe } from "../../kernel/health-probe.ts";
@@ -32,7 +32,12 @@ export const extensionCapabilities = Effect.gen(function* () {
 	const crypto = yield* Crypto.Crypto;
 	const lifecycle = yield* Lifecycle;
 	const mysql = yield* mysqlSearchConfig(sql);
-	return (extension: string, who?: Identity, writable = true): ExtensionCapabilities => {
+	return (
+		extension: string,
+		who?: Identity,
+		writable = true,
+		authenticatedManagedRequest = false,
+	): ExtensionCapabilities => {
 		const caller = who ?? { agent: "system", instance: `extension:${extension}`, request: "", kind: "agent" };
 		const write = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 			Effect.gen(function* () {
@@ -99,6 +104,7 @@ export const extensionCapabilities = Effect.gen(function* () {
 			// A signed-in caller already names the author; only system-authority contexts may attribute a post.
 			if (
 				who ||
+				authenticatedManagedRequest ||
 				reservedAuthors.includes(author.agent) ||
 				!authorName.test(author.agent) ||
 				!authorInstance.test(author.instance)
@@ -112,13 +118,34 @@ export const extensionCapabilities = Effect.gen(function* () {
 						},
 					}),
 				);
+			const composed = `extension:${extension}:${author.instance}`;
+			if (composed.length > 256)
+				return Effect.fail(
+					new KernelError({
+						code: "input_invalid",
+						detail: {
+							field: "author",
+							hint: `The composed instance extension:${extension}:${author.instance} exceeds the 256-character storage limit.`,
+						},
+					}),
+				);
 			const actor = {
 				agent: author.agent,
-				instance: `extension:${extension}:${author.instance}`,
+				instance: composed,
 				request: "",
 				kind: "agent",
 			} satisfies Identity;
-			return makeMessages(sql, { read, mutate: mutateAs(actor) }, boot, crypto, mysql).create(actor, input, key);
+			return Effect.gen(function* () {
+				const normalized = { topic: input.topic, body: input.body, tags: input.tags ?? [], meta: input.meta ?? {} };
+				const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(MessageInput))(normalized);
+				const inputWithAuthor = JSON.stringify({ input: encoded, agent: author.agent });
+				return yield* makeMessages(sql, { read, mutate: mutateAs(actor) }, boot, crypto, mysql).create(
+					actor,
+					input,
+					key,
+					inputWithAuthor,
+				);
+			});
 		};
 		const topics = makeTopics(sql, read, pages);
 		return {

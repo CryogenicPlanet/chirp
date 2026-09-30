@@ -145,15 +145,57 @@ export default (api: Api) => {
   ctx.messages.create({topic:"relay", body:"relayed"}, undefined, {agent:String(ctx.query.agent), instance:"client-1"}).pipe(
    Effect.result,
    Effect.map(result => Response.json(result._tag === "Failure" ? {code:result.failure.code} : {agent:result.success.agent, instance:result.success.instance})))});
+ api.route("POST", "/relay-auth", {description:"Post under a requested author with authentication", access:"application-managed", handler:(_request,ctx) =>
+  ctx.messages.create({topic:"relay", body:"authenticated relayed"}, undefined, {agent:"auth-bot", instance:"client-2"}).pipe(
+   Effect.result,
+   Effect.map(result => Response.json(result._tag === "Failure" ? {code:result.failure.code, field:result.failure.detail?.field} : {agent:result.success.agent})))});
+ api.route("POST", "/relay-idempotency", {description:"Test author agent in idempotency", access:"application-managed", handler:(_request,ctx) =>
+  ctx.messages.create({topic:"idem", body:"test"}, String(ctx.query.key ?? "idem-key"), {agent:String(ctx.query.agent), instance:"client-3"}).pipe(
+   Effect.result,
+   Effect.map(result => Response.json(result._tag === "Failure" ? {code:result.failure.code} : {agent:result.success.agent, id:result.success.id})))});
+ api.route("POST", "/relay-long", {description:"Test oversized composed instance", access:"application-managed", handler:(_request,ctx) =>
+  ctx.messages.create({topic:"relay", body:"long"}, undefined, {agent:"bot", instance:"${"x".repeat(300)}"}).pipe(
+   Effect.result,
+   Effect.map(result => Response.json(result._tag === "Failure" ? {code:result.failure.code, field:result.failure.detail?.field} : {agent:result.success.agent})))});
 };`,
 	);
 	await writeFile(join(fixture.root, "boot.config.json"), JSON.stringify({ applicationManagedIngress: true }));
 	const app = await fixture.launch(join(seed, "server.ts"));
 	await app.setup();
-	await app.ready(await app.login());
+	const cookie = await app.login();
+	await app.ready(cookie);
 	const relay = async (agent: string) =>
 		(await fetch(`${app.url}/relay?agent=${encodeURIComponent(agent)}`, { method: "POST" })).json();
 	for (const agent of ["system", "boot", "rahul", "Relay", "a".repeat(65)])
 		expect(await relay(agent), agent).toEqual({ code: "input_invalid" });
 	expect(await relay("relay-bot")).toEqual({ agent: "relay-bot", instance: "extension:relay.ts:client-1" });
+
+	const relayAuth = async () =>
+		(
+			await fetch(`${app.url}/relay-auth`, {
+				method: "POST",
+				headers: { cookie, origin: "https://comms.test" },
+			})
+		).json();
+	expect(await relayAuth()).toEqual({ code: "input_invalid", field: "author" });
+
+	const relayIdem = async (agent: string, key: string) =>
+		(
+			await fetch(`${app.url}/relay-idempotency?agent=${encodeURIComponent(agent)}&key=${encodeURIComponent(key)}`, {
+				method: "POST",
+			})
+		).json();
+	const first = await relayIdem("bot-a", "key-a");
+	expect(first.agent).toBe("bot-a");
+	const replay = await relayIdem("bot-a", "key-a");
+	expect(replay).toEqual(first);
+	const conflict = await relayIdem("bot-b", "key-a");
+	expect(conflict).toEqual({ code: "idempotency_conflict" });
+	const different = await relayIdem("bot-b", "key-b");
+	expect(different).toHaveProperty("agent");
+	expect(different.agent).toBe("bot-b");
+	expect(different.id).not.toBe(first.id);
+
+	const relayLong = async () => (await fetch(`${app.url}/relay-long`, { method: "POST" })).json();
+	expect(await relayLong()).toEqual({ code: "input_invalid", field: "author" });
 }, 30000);

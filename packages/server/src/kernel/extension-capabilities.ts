@@ -75,4 +75,9 @@ export interface ExtensionCapabilities {
 		change?: (seq: number) => Effect.Effect<void, E>,
 	) => Effect.Effect<typeof EventRecord.Type, E | StorageError>;
 }
-export type CapabilityFactory = (extension: string, who?: Identity, writable?: boolean) => ExtensionCapabilities;
+export type CapabilityFactory = (
+	extension: string,
+	who?: Identity,
+	writable?: boolean,
+	authenticatedManagedRequest?: boolean,
+) => ExtensionCapabilities;
