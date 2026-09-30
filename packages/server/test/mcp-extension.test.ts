@@ -159,6 +159,7 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 		marker: string,
 		grantedClientId = clientId,
 		clientName = "MCP test client",
+		agent = "writer-bot",
 	) => {
 		const verifier = createHash("sha256").update(`verifier-${marker}`).digest("base64url");
 		const challenge = createHash("sha256").update(verifier).digest("base64url");
@@ -179,8 +180,27 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 		const consent = await fetch(`${app.url}${authorize}`, { headers: { cookie } });
 		expect(consent.status).toBe(200);
 		expect(consent.headers.get("content-security-policy")).toContain("form-action 'self' https://client.test;");
-		expect(await consent.text()).toContain(`Authorize ${clientName}`);
-		const approvalBody = { ...Object.fromEntries(query), decision: "approve" };
+		const page = await consent.text();
+		expect(page).toContain(`Authorize ${clientName}`);
+		if (scope === "read") expect(page).not.toContain('name="agent"');
+		else expect(page).toContain(`name="agent" value="${clientName.toLowerCase().replaceAll(" ", "-")}"`);
+		const approvalBody = { ...Object.fromEntries(query), decision: "approve", ...(scope === "read" ? {} : { agent }) };
+		if (marker === "writer")
+			for (const unnamed of [
+				{},
+				{ agent: "system" },
+				{ agent: "rahul" },
+				{ agent: "Writer Bot" },
+				{ agent: "a".repeat(65) },
+			]) {
+				const refused = await fetch(`${app.url}/mcp/oauth/authorize`, {
+					method: "POST",
+					redirect: "manual",
+					headers: { cookie, origin: "https://comms.test", "content-type": "application/x-www-form-urlencoded" },
+					body: new URLSearchParams({ ...Object.fromEntries(query), decision: "approve", ...unnamed }),
+				});
+				expect(refused.status).toBe(400);
+			}
 		if (marker === "reader") {
 			const missingOrigin = await fetch(`${app.url}/mcp/oauth/authorize`, {
 				method: "POST",
@@ -244,6 +264,7 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 	const unauthorized = await call("chirp_app_" + "a".repeat(43), 0, "ping");
 	expect(unauthorized.status).toBe(401);
 	expect(unauthorized.headers.get("www-authenticate")).toContain("oauth-protected-resource/mcp");
+	expect(unauthorized.headers.get("www-authenticate")).toContain('scope="read write"');
 	expect(
 		(
 			await fetch(`${app.url}/mcp`, {
@@ -325,12 +346,21 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 		name: "post_message",
 		arguments: { topic: "plans", body: "Approved via MCP", idempotencyKey: "mcp-post-1" },
 	};
+	const legacy = `chirp_app_${"L".repeat(43)}`;
+	await fixture.sql(
+		`INSERT INTO example_mcp_oauth(id,kind,client_id,family,payload,expires_at,created_at) VALUES('${createHash("sha256").update(legacy).digest("hex")}','access','${clientId}','legacy','{"resource":"https://comms.test/mcp","scopes":["read","write"],"subject":"rahul"}',${Date.now() + 3600000},${Date.now()})`,
+	);
+	expect((await (await call(legacy, 23, "tools/call", post)).json()).result).toMatchObject({
+		isError: true,
+		content: [{ text: expect.stringContaining("no posting name") }],
+	});
 	const first = await (await call(writer.access, 6, "tools/call", post)).json();
 	const replay = await (await call(writer.access, 7, "tools/call", post)).json();
 	expect(first.result.structuredContent).toMatchObject({
 		topic: "plans",
 		body: "Approved via MCP",
-		agent: "system",
+		agent: "writer-bot",
+		instance: `extension:mcp:${clientId}`,
 		meta: { mcp_client_id: clientId, mcp_approved_by: "rahul" },
 	});
 	expect(replay.result.structuredContent.id).toBe(first.result.structuredContent.id);
@@ -341,9 +371,29 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 	});
 	expect(otherClient.status).toBe(201);
 	const otherClientId = stringField(await otherClient.json(), "client_id");
-	const otherWriter = await grant("read write", "other-writer", otherClientId, "Other client");
+	const ownerNamed = await fetch(`${app.url}/mcp/oauth/register`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ client_name: "Rahul", redirect_uris: ["https://client.test/callback"] }),
+	});
+	const ownerNamedConsent = await fetch(
+		`${app.url}/mcp/oauth/authorize?${new URLSearchParams({
+			response_type: "code",
+			client_id: stringField(await ownerNamed.json(), "client_id"),
+			redirect_uri: "https://client.test/callback",
+			code_challenge: "a".repeat(43),
+			code_challenge_method: "S256",
+			resource: "https://comms.test/mcp",
+		})}`,
+		{ headers: { cookie } },
+	);
+	const ownerNamedPage = await ownerNamedConsent.text();
+	expect(ownerNamedPage).toContain("requesting: read, write.");
+	expect(ownerNamedPage).toContain('name="agent" value="mcp"');
+	const otherWriter = await grant("read write", "other-writer", otherClientId, "Other client", "other-bot");
 	const separate = await (await call(otherWriter.access, 8, "tools/call", post)).json();
 	expect(separate.result.structuredContent.id).not.toBe(first.result.structuredContent.id);
+	expect(separate.result.structuredContent.agent).toBe("other-bot");
 
 	const refresh = (token: string) =>
 		fetch(`${app.url}/mcp/oauth/token`, {
@@ -356,6 +406,15 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 				resource: "https://comms.test/mcp",
 			}),
 		});
+	const rotatedWriter = await refresh(writer.refresh);
+	expect(rotatedWriter.status).toBe(200);
+	const afterRotation = await (
+		await call(stringField(await rotatedWriter.json(), "access_token"), 22, "tools/call", {
+			name: "post_message",
+			arguments: { topic: "plans", body: "After rotation", idempotencyKey: "mcp-post-2" },
+		})
+	).json();
+	expect(afterRotation.result.structuredContent.agent).toBe("writer-bot");
 	const refreshed = await refresh(reader.refresh);
 	expect(refreshed.status).toBe(200);
 	const rotated = await refreshed.json();

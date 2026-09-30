@@ -43,7 +43,7 @@ export const makeMessages = (
 	mysql: MysqlSearchConfig | null = null,
 ) => {
 	const { mutate, read } = publication;
-	const create = (identity: Identity, input: typeof MessageInput.Type, key?: string) =>
+	const create = (identity: Identity, input: typeof MessageInput.Type, key?: string, inputOverride?: string) =>
 		Effect.gen(function* () {
 			// One code, six unrelated rules: keep them apart so the refusal can name the one that failed.
 			const refused = (
@@ -82,7 +82,7 @@ export const makeMessages = (
 								instance: identity.instance,
 								key,
 								kind: "message.created",
-								input: encoded,
+								input: inputOverride ?? encoded,
 								outcome: Schema.fromJsonString(Message),
 							},
 						}),

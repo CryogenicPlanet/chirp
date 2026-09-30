@@ -118,7 +118,8 @@ export const tools = [
 	{
 		name: "post_message",
 		title: "Post a chirp message",
-		description: "Post as this MCP extension. Requires write scope and a caller-chosen idempotency key.",
+		description:
+			"Post under the name approved for this connection. Requires write scope and a caller-chosen idempotency key.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -147,12 +148,15 @@ export const callTool = (
 		readonly clientId: string;
 		readonly subject: string;
 		readonly scopes: ReadonlyArray<"read" | "write">;
+		readonly agent: string | undefined;
 	},
 	input: typeof ToolCall.Type,
 ) =>
 	Effect.gen(function* () {
 		if (input.name === "post_message") {
 			if (!caller.scopes.includes("write")) return toolError("Chirp refused the tool call: scope_required");
+			if (!caller.agent)
+				return toolError("This connection has no posting name. Reconnect it and choose one on the consent page.");
 			const args = decode(PostInput, input.arguments ?? {});
 			if (
 				Option.isNone(args) ||
@@ -169,6 +173,7 @@ export const callTool = (
 					meta: { ...args.value.meta, mcp_client_id: caller.clientId, mcp_approved_by: caller.subject },
 				},
 				`${caller.clientId}:${args.value.idempotencyKey}`,
+				{ agent: caller.agent, instance: caller.clientId },
 			);
 			return toolResult(message);
 		}

@@ -27,11 +27,13 @@ const Grant = Schema.Struct({
 	resource: Schema.String,
 	scopes: Schema.Array(Schema.Union([Schema.Literal("read"), Schema.Literal("write")])),
 	subject: Schema.String,
+	agent: Schema.optionalKey(Schema.String),
 });
 const Access = Schema.Struct({
 	resource: Schema.String,
 	scopes: Schema.Array(Schema.Union([Schema.Literal("read"), Schema.Literal("write")])),
 	subject: Schema.String,
+	agent: Schema.optionalKey(Schema.String),
 });
 
 type Context = ManagedRequestContext;
@@ -39,6 +41,8 @@ export interface OAuthIdentity {
 	readonly clientId: string;
 	readonly subject: string;
 	readonly scopes: ReadonlyArray<"read" | "write">;
+	/** The name approved at consent for posting; absent on read-only grants. */
+	readonly agent: string | undefined;
 }
 const bodyLimit = 16384;
 const escape = (value: string) =>
@@ -46,6 +50,17 @@ const escape = (value: string) =>
 		/[&<>"']/g,
 		(character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character] ?? character,
 	);
+// The kernel refuses other names: boot reserves the owner and itself, and system is the extension's own voice.
+const agentName = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+const reservedAgents: ReadonlyArray<string> = ["system", "boot", "rahul"];
+const suggestedAgent = (clientName: string) => {
+	const slug = clientName
+		.toLowerCase()
+		.replace(/[^a-z0-9._-]+/g, "-")
+		.replace(/^[^a-z0-9]+|-+$/g, "")
+		.slice(0, 64);
+	return slug && !reservedAgents.includes(slug) ? slug : "mcp";
+};
 const oauthError = (error: string, description: string, status = 400) =>
 	Response.json({ error, error_description: description }, { status, headers: { "cache-control": "no-store" } });
 const redirect = (uri: string, fields: Readonly<Record<string, string>>) => {
@@ -58,7 +73,7 @@ const redirect = (uri: string, fields: Readonly<Record<string, string>>) => {
 };
 const one = (value: string | ReadonlyArray<string> | undefined) => (typeof value === "string" ? value : undefined);
 const scopes = (value: string | undefined) => {
-	const requested = value?.split(" ").filter(Boolean) ?? ["read"];
+	const requested = value?.split(" ").filter(Boolean) ?? ["read", "write"];
 	const accepted: Array<"read" | "write"> = [];
 	for (const scope of requested) {
 		if (scope !== "read" && scope !== "write") return null;
@@ -292,7 +307,7 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 						...(checked.state === undefined ? {} : { state: checked.state }),
 					});
 					return new Response(
-						`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Authorize MCP</title></head><body><main><h1>Authorize ${escape(checked.clientName)}</h1><p>This client is requesting: ${escape(checked.scopes.join(", "))}.</p><form method="post" action="/mcp/oauth/authorize">${[...hidden].map(([name, value]) => `<input type="hidden" name="${escape(name)}" value="${escape(value)}">`).join("")}<button name="decision" value="approve">Authorize</button><button name="decision" value="deny">Deny</button></form></main></body></html>`,
+						`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Authorize MCP</title></head><body><main><h1>Authorize ${escape(checked.clientName)}</h1><p>This client is requesting: ${escape(checked.scopes.join(", "))}.</p><form method="post" action="/mcp/oauth/authorize">${[...hidden].map(([name, value]) => `<input type="hidden" name="${escape(name)}" value="${escape(value)}">`).join("")}${checked.scopes.includes("write") ? `<p><label>Post as <input name="agent" value="${escape(suggestedAgent(checked.clientName))}" required maxlength="64" pattern="[a-z0-9][a-z0-9._\\-]*"></label></p>` : ""}<button name="decision" value="approve">Authorize</button><button name="decision" value="deny" formnovalidate>Deny</button></form></main></body></html>`,
 						{
 							headers: {
 								"content-type": "text/html; charset=utf-8",
@@ -323,6 +338,12 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 							error: "access_denied",
 							...(checked.state ? { state: checked.state } : {}),
 						});
+					const agent = checked.scopes.includes("write") ? form.agent?.trim() : undefined;
+					if (checked.scopes.includes("write") && (!agent || reservedAgents.includes(agent) || !agentName.test(agent)))
+						return oauthError(
+							"invalid_request",
+							"Choose a posting name of up to 64 lowercase letters, digits, dots, dashes or underscores, other than system, boot or rahul.",
+						);
 					const code = yield* random(crypto, "mcp_code_");
 					const codeDigest = yield* digest(crypto, code);
 					const now = yield* Clock.currentTimeMillis;
@@ -338,6 +359,7 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 								resource,
 								scopes: checked.scopes,
 								subject: ctx.identity.agent,
+								...(agent ? { agent } : {}),
 							}),
 							expires: now + 5 * 60 * 1000,
 						}),
@@ -404,7 +426,12 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 									payload.success.resource !== resource
 								)
 									return null;
-								granted = { resource, scopes: payload.success.scopes, subject: payload.success.subject };
+								granted = {
+									resource,
+									scopes: payload.success.scopes,
+									subject: payload.success.subject,
+									...(payload.success.agent === undefined ? {} : { agent: payload.success.agent }),
+								};
 							} else {
 								const payload = yield* Schema.decodeEffect(Schema.fromJsonString(Access))(row.payload).pipe(
 									Effect.result,
@@ -465,6 +492,7 @@ const authenticate = (crypto: Crypto.Crypto, resource: string, ctx: Context, aut
 					clientId: row.client_id,
 					subject: payload.success.subject,
 					scopes: payload.success.scopes,
+					agent: payload.success.agent,
 				} satisfies OAuthIdentity)
 			: null;
 	});

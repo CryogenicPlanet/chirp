@@ -544,7 +544,12 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 						(route.access === "application-managed" ||
 							(request.headers[scopesHeader] ?? "").split(",").includes("write"));
 					const authority = route.access === "application-managed" ? undefined : (who ?? undefined);
-					const verbs = capabilities(route.extension, authority, writable);
+					const verbs = capabilities(
+						route.extension,
+						authority,
+						writable,
+						route.access === "application-managed" && who !== null,
+					);
 					const context = {
 						...data(route.extension, authority, writable),
 						...verbs,

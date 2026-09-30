@@ -21,6 +21,14 @@ export interface MessageQuery {
 	readonly q?: string;
 	readonly mentions?: ReadonlyArray<string>;
 }
+/**
+ * Names a post made without a signed-in caller, such as one relayed from an MCP client.
+ * The message records `extension:<extension>:<instance>` as its instance, so the source stays traceable.
+ */
+export interface MessageAuthor {
+	readonly agent: string;
+	readonly instance: string;
+}
 type StorageError = KernelError | SqlError | Schema.SchemaError | PlatformError.PlatformError;
 interface PageError extends Cause.YieldableError {
 	readonly _tag: "PageRejected";
@@ -46,6 +54,7 @@ export interface ExtensionCapabilities {
 		readonly create: (
 			input: typeof MessageInput.Type,
 			key?: string,
+			author?: MessageAuthor,
 		) => Effect.Effect<typeof Message.Type, StorageError>;
 	};
 	readonly topics: {
@@ -66,4 +75,9 @@ export interface ExtensionCapabilities {
 		change?: (seq: number) => Effect.Effect<void, E>,
 	) => Effect.Effect<typeof EventRecord.Type, E | StorageError>;
 }
-export type CapabilityFactory = (extension: string, who?: Identity, writable?: boolean) => ExtensionCapabilities;
+export type CapabilityFactory = (
+	extension: string,
+	who?: Identity,
+	writable?: boolean,
+	authenticatedManagedRequest?: boolean,
+) => ExtensionCapabilities;

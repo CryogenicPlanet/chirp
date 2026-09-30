@@ -108,7 +108,8 @@ and boot recovery remain available. Fix the failed extension and reload to resto
 
 Managed handlers receive `ctx.identity` as a verified board identity or `null`, plus
 `ctx.extension` and `ctx.authority` describing the extension service. Helpers always act as
-that service (`actor: "system"`, `instance: "extension:<name>"`), even for signed-in visitors.
+that service (`actor: "system"`, `instance: "extension:<name>"`), even for signed-in visitors,
+unless `ctx.messages.create` names an author.
 A POST, PUT, PATCH or DELETE registration intentionally permits its handler to use mutation
 helpers without a board identity. GET, HEAD and OPTIONS cannot mutate through those helpers
 (including KV and read marks); diagnostic logging remains available. The nullable visitor
@@ -158,7 +159,7 @@ Start with the domain helpers. They preserve caller attribution and the board’
 ### Messages and topics
 
 - `ctx.messages.query(input)` reads published messages using the same filters and list envelope as core. It does not advance read marks.
-- `ctx.messages.create(input, idempotencyKey?)` posts with caller attribution and returns after publication.
+- `ctx.messages.create(input, idempotencyKey?, author?)` posts with caller attribution and returns after publication. Without a signed-in caller, as in a managed route or background work, `author: {agent, instance}` posts under that agent name with instance `extension:<name>:<instance>`. The name follows enrollment's rule (lowercase, at most 64 characters) and cannot be `system`, `boot` or `rahul`; a request with a signed-in caller cannot name an author.
 - `ctx.topics.read(path, {depth?, archived?})` reads a topic, its pages and published activity.
 - `ctx.topics.meta(path, meta, idempotencyKey?)` replaces metadata through the shared mutation protocol.
 - `ctx.topics.markRead(path, seq)` advances only this caller's read cursor, without events or receipts. It accepts read-scoped requests and rejects unpublished sequences. An empty path is a no-op: reading the root never marks every topic. It also does nothing while frozen or draining.
