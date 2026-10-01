@@ -4,6 +4,8 @@ import { describe, expect, test } from "vitest";
 import { BoardDeletion } from "../src/board-deletion.ts";
 import { BoardDeletionWorker, boardDeletionWorkerLayer } from "../src/board-deletion-worker.ts";
 import { Boards } from "../src/boards.ts";
+import { CloudflareDeletionApi } from "../src/cloudflare-deletion-api.ts";
+import { CloudflareDns } from "../src/cloudflare-dns.ts";
 import { Dashboard } from "../src/dashboard.ts";
 import { FlyApiError, FlyBoardApi } from "../src/fly-board-api.ts";
 import { FlyDeletionApi } from "../src/fly-deletion-api.ts";
@@ -125,11 +127,12 @@ describe("board deletion", () => {
 
 const providerDeletion = (
 	provider: ReturnType<typeof makeFakeProvider>,
-	mode: "ok" | "partial" | "drift" | "app_drift" | "volume_drift",
+	mode: "ok" | "partial" | "app_pending" | "drift" | "app_drift" | "volume_drift",
 ) => {
 	let removedMachine = false;
 	let removedVolume = false;
 	let first = true;
+	let appAttempts = 0;
 	const calls: string[] = [];
 	const fly = {
 		...provider.fake,
@@ -160,6 +163,12 @@ const providerDeletion = (
 						),
 	};
 	const remove = {
+		app: (_app: string) =>
+			Effect.sync(() => {
+				calls.push("app");
+				appAttempts += 1;
+				if (mode !== "app_pending" || appAttempts > 1) provider.set.app(undefined);
+			}),
 		machine: (_app: string, _id: string) =>
 			Effect.sync(() => {
 				calls.push("machine");
@@ -175,15 +184,30 @@ const providerDeletion = (
 				}
 			}),
 	};
+	const removeDns = {
+		record: (id: string) =>
+			Effect.sync(() => {
+				const found = provider.networking.state.records.find((record) => record.id === id);
+				if (found) calls.push(`dns:${found.type}`);
+				provider.networking.state.records = provider.networking.state.records.filter((record) => record.id !== id);
+			}),
+	};
 	return {
 		calls,
 		layer: boardDeletionWorkerLayer(settings).pipe(
-			Layer.provide(Layer.mergeAll(Layer.succeed(FlyBoardApi, fly), Layer.succeed(FlyDeletionApi, remove))),
+			Layer.provide(
+				Layer.mergeAll(
+					Layer.succeed(FlyBoardApi, fly),
+					Layer.succeed(FlyDeletionApi, remove),
+					Layer.succeed(CloudflareDns, provider.networking.dns),
+					Layer.succeed(CloudflareDeletionApi, removeDns),
+				),
+			),
 		),
 	};
 };
 
-for (const mode of ["ok", "partial", "drift", "app_drift", "volume_drift"] as const)
+for (const mode of ["ok", "partial", "app_pending", "drift", "app_drift", "volume_drift"] as const)
 	test(`provider deletion ${mode}: verifies teardown and retains boards until confirmed`, async () => {
 		const provider = makeFakeProvider();
 		const deletionProvider = providerDeletion(provider, mode);
@@ -210,21 +234,65 @@ for (const mode of ["ok", "partial", "drift", "app_drift", "volume_drift"] as co
 					});
 					return;
 				}
-				if (mode === "partial") {
-					expect(outcome).toBe("requeued");
+				expect(outcome).toBe("requeued");
+				expect(deletionProvider.calls).toEqual(["dns:A", "dns:TXT"]);
+				expect(Option.getOrThrow(yield* operations.latest(board.id, "delete"))).toMatchObject({
+					checkpoint: "dns_withdrawn",
+					state: "queued",
+					failure_count: 0,
+				});
+				yield* sql`UPDATE board_operations SET available_at = clock_timestamp() WHERE kind = 'delete'`;
+				const afterDns = Option.getOrThrow(yield* operations.claim("delete-worker-2", 90_000, "delete"));
+				const afterDnsOutcome = yield* worker.run(afterDns, "delete-worker-2");
+				if (mode === "partial" || mode === "app_pending") {
+					expect(afterDnsOutcome).toBe("requeued");
 					expect(yield* sql`SELECT board_id FROM board_postgres_secrets WHERE board_id = ${board.id}`).toHaveLength(1);
 					expect(Option.isSome(yield* dashboard.get(request.owner_id, board.id))).toBe(true);
 					yield* sql`UPDATE board_operations SET available_at = clock_timestamp() WHERE kind = 'delete'`;
-					const resumed = Option.getOrThrow(yield* operations.claim("delete-worker-2", 90_000, "delete"));
-					expect(yield* worker.run(resumed, "delete-worker-2")).toBe("deleted");
-				} else expect(outcome).toBe("deleted");
-				expect(deletionProvider.calls).toEqual(["machine", "volume"]);
+					const resumed = Option.getOrThrow(yield* operations.claim("delete-worker-3", 90_000, "delete"));
+					expect(yield* worker.run(resumed, "delete-worker-3")).toBe("deleted");
+				} else expect(afterDnsOutcome).toBe("deleted");
+				expect(deletionProvider.calls).toEqual([
+					"dns:A",
+					"dns:TXT",
+					"machine",
+					"volume",
+					"app",
+					...(mode === "app_pending" ? ["app"] : []),
+				]);
+				expect(provider.networking.state.records).toEqual([]);
+				expect(provider.resources().apps).toBe(0);
 				expect(Option.isNone(yield* dashboard.get(request.owner_id, board.id))).toBe(true);
 				expect(yield* sql`SELECT board_id FROM board_postgres_secrets WHERE board_id = ${board.id}`).toEqual([]);
 				expect(yield* deletion.request(request.owner_id, board.id, confirmation)).toEqual({ deleted: true });
 			}).pipe(Effect.provide(deletionProvider.layer)),
 		);
 	});
+
+test.each(["content", "ttl"] as const)("blocks before teardown when a DNS record has %s drift", async (drift) => {
+	const provider = makeFakeProvider();
+	const deletionProvider = providerDeletion(provider, "ok");
+	await runFresh(
+		Effect.gen(function* () {
+			const { board, deletion, operations, dashboard } = yield* setup;
+			const provision = Option.getOrThrow(yield* operations.claim("provisioner", 90_000));
+			yield* Provisioner.use((service) => service.run(provision, "provisioner")).pipe(
+				Effect.provide(provisionerFor(provider)),
+			);
+			provider.networking.state.records[0] = {
+				...provider.networking.state.records[0]!,
+				...(drift === "content" ? { content: "203.0.113.99" } : { ttl: 120 }),
+			};
+			yield* deletion.request(request.owner_id, board.id, confirmation);
+			const operation = Option.getOrThrow(yield* operations.claim("delete-worker", 90_000, "delete"));
+			expect(yield* (yield* BoardDeletionWorker).run(operation, "delete-worker")).toBe("blocked");
+			expect(deletionProvider.calls).toEqual([]);
+			expect(provider.resources()).toMatchObject({ apps: 1, machines: 1, volumes: 1 });
+			expect(provider.networking.state.records).toHaveLength(2);
+			expect(Option.getOrThrow(yield* dashboard.get(request.owner_id, board.id)).phase).toBe("deletion_blocked");
+		}).pipe(Effect.provide(deletionProvider.layer)),
+	);
+});
 
 test("refuses destructive provider calls when observation outlives the lease", async () => {
 	const provider = makeFakeProvider();
@@ -255,6 +323,10 @@ test("refuses destructive provider calls when observation outlives the lease", a
 								}),
 						}),
 						Layer.succeed(FlyDeletionApi, {
+							app: () =>
+								Effect.sync(() => {
+									calls.push("app");
+								}),
 							machine: () =>
 								Effect.sync(() => {
 									calls.push("machine");
@@ -262,6 +334,13 @@ test("refuses destructive provider calls when observation outlives the lease", a
 							volume: () =>
 								Effect.sync(() => {
 									calls.push("volume");
+								}),
+						}),
+						Layer.succeed(CloudflareDns, provider.networking.dns),
+						Layer.succeed(CloudflareDeletionApi, {
+							record: () =>
+								Effect.sync(() => {
+									calls.push("dns");
 								}),
 						}),
 					),
@@ -279,6 +358,7 @@ test("refuses destructive provider calls when observation outlives the lease", a
 
 test("does not spend the provider failure budget on healthy polls or reclaimed claims", async () => {
 	const provider = makeFakeProvider();
+	const deletionProvider = providerDeletion(provider, "ok");
 	await runFresh(
 		Effect.gen(function* () {
 			const { board, deletion, operations, sql } = yield* setup;
@@ -289,16 +369,10 @@ test("does not spend the provider failure budget on healthy polls or reclaimed c
 			yield* deletion.request(request.owner_id, board.id, confirmation);
 			yield* sql`UPDATE board_operations SET attempt = 50 WHERE kind = 'delete' AND board_id = ${board.id}`;
 			const operation = Option.getOrThrow(yield* operations.claim("delete-worker", 90_000, "delete"));
-			const layer = boardDeletionWorkerLayer(settings).pipe(
-				Layer.provide(
-					Layer.mergeAll(
-						Layer.succeed(FlyBoardApi, provider.fake),
-						Layer.succeed(FlyDeletionApi, { machine: () => Effect.void, volume: () => Effect.void }),
-					),
-				),
-			);
 			expect(
-				yield* BoardDeletionWorker.use((worker) => worker.run(operation, "delete-worker")).pipe(Effect.provide(layer)),
+				yield* BoardDeletionWorker.use((worker) => worker.run(operation, "delete-worker")).pipe(
+					Effect.provide(deletionProvider.layer),
+				),
 			).toBe("requeued");
 			expect(Option.getOrThrow(yield* operations.latest(board.id, "delete"))).toMatchObject({
 				state: "queued",
@@ -328,7 +402,13 @@ test("persists the provider failure that exhausts the deletion budget", async ()
 							...provider.fake,
 							getApp: () => Effect.fail(new FlyApiError({ operation: "get_app", reason: "transport", status: null })),
 						}),
-						Layer.succeed(FlyDeletionApi, { machine: () => Effect.void, volume: () => Effect.void }),
+						Layer.succeed(FlyDeletionApi, {
+							app: () => Effect.void,
+							machine: () => Effect.void,
+							volume: () => Effect.void,
+						}),
+						Layer.succeed(CloudflareDns, provider.networking.dns),
+						Layer.succeed(CloudflareDeletionApi, { record: () => Effect.void }),
 					),
 				),
 			);

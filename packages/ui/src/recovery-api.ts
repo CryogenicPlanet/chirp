@@ -40,7 +40,7 @@ export const revertSource = (key: string) =>
 				HttpClientRequest.bodyJsonUnsafe({}),
 				HttpClientRequest.setHeader("Idempotency-Key", key),
 			),
-			120000,
+			null,
 		).pipe(
 			Effect.flatMap(Schema.decodeUnknownEffect(Outcome)),
 			Effect.catchTag("SchemaError", () =>
