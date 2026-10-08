@@ -75,6 +75,7 @@ const Row = Schema.Struct({
 	instance: Schema.String,
 	url: Schema.String,
 	secret: Schema.String,
+	previous_secret: Schema.NullOr(Schema.String),
 	refresh_before: Schema.Finite,
 	verified_at: Schema.Finite,
 	position: Schema.Finite,
@@ -111,6 +112,10 @@ const sign = (secret: string, id: string, timestamp: number, body: string) =>
 	`v1,${createHmac("sha256", Buffer.from(secret.slice(6), "base64"))
 		.update(`${id}.${timestamp}.${body}`)
 		.digest("base64")}`;
+const dualSign = (current: string, previous: string | null, id: string, timestamp: number, body: string) =>
+	previous === null
+		? sign(current, id, timestamp, body)
+		: `${sign(current, id, timestamp, body)} ${sign(previous, id, timestamp, body)}`;
 const subscriptionId = (clientId: string, url: string, name: string) =>
 	`sub_${createHash("sha256")
 		.update(JSON.stringify([clientId, url, name, {}]))
@@ -139,11 +144,11 @@ export const installEvents = (api: Api, origin: string) =>
 			"event_subscriptions",
 			on(sql, {
 				sqlite: () =>
-					"CREATE TABLE example_mcp_events(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,refresh_before INTEGER NOT NULL,verified_at INTEGER NOT NULL,position INTEGER NOT NULL,attempts INTEGER NOT NULL,next_attempt INTEGER NOT NULL,last_error TEXT)",
+					"CREATE TABLE example_mcp_events(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,previous_secret TEXT,refresh_before INTEGER NOT NULL,verified_at INTEGER NOT NULL,position INTEGER NOT NULL,attempts INTEGER NOT NULL,next_attempt INTEGER NOT NULL,last_error TEXT)",
 				pg: () =>
-					"CREATE TABLE example_mcp_events(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,refresh_before BIGINT NOT NULL,verified_at BIGINT NOT NULL,position BIGINT NOT NULL,attempts INTEGER NOT NULL,next_attempt BIGINT NOT NULL,last_error TEXT)",
+					"CREATE TABLE example_mcp_events(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,previous_secret TEXT,refresh_before BIGINT NOT NULL,verified_at BIGINT NOT NULL,position BIGINT NOT NULL,attempts INTEGER NOT NULL,next_attempt BIGINT NOT NULL,last_error TEXT)",
 				mysql: () =>
-					"CREATE TABLE example_mcp_events(id VARCHAR(64) PRIMARY KEY,client_id VARCHAR(128) NOT NULL,agent VARCHAR(64) NOT NULL,instance VARCHAR(256) NOT NULL,url LONGTEXT NOT NULL,secret LONGTEXT NOT NULL,refresh_before BIGINT NOT NULL,verified_at BIGINT NOT NULL,position BIGINT NOT NULL,attempts INTEGER NOT NULL,next_attempt BIGINT NOT NULL,last_error VARCHAR(32)) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin",
+					"CREATE TABLE example_mcp_events(id VARCHAR(64) PRIMARY KEY,client_id VARCHAR(128) NOT NULL,agent VARCHAR(64) NOT NULL,instance VARCHAR(256) NOT NULL,url LONGTEXT NOT NULL,secret LONGTEXT NOT NULL,previous_secret LONGTEXT,refresh_before BIGINT NOT NULL,verified_at BIGINT NOT NULL,position BIGINT NOT NULL,attempts INTEGER NOT NULL,next_attempt BIGINT NOT NULL,last_error VARCHAR(32)) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin",
 			}),
 			{ protect: true },
 		);
@@ -168,7 +173,14 @@ export const installEvents = (api: Api, origin: string) =>
 		 * Connect only to an address that was checked at send time, keeping the hostname for SNI and certificate checks,
 		 * so DNS rebinding cannot redirect a verified callback to a private address. Redirects are never followed.
 		 */
-		const send = (target: URL, subscription: string, secret: string, id: string, body: string) =>
+		const send = (
+			target: URL,
+			subscription: string,
+			secret: string,
+			previousSecret: string | null,
+			id: string,
+			body: string,
+		) =>
 			Effect.gen(function* () {
 				const hostname = target.hostname.replace(/^\[|\]$/g, "");
 				const lookedUp = yield* Effect.tryPromise(() => lookup(hostname, { all: true, verbatim: true })).pipe(
@@ -189,7 +201,7 @@ export const installEvents = (api: Api, origin: string) =>
 						host: target.host,
 						"webhook-id": id,
 						"webhook-timestamp": String(timestamp),
-						"webhook-signature": sign(secret, id, timestamp, body),
+						"webhook-signature": dualSign(secret, previousSecret, id, timestamp, body),
 						"x-mcp-subscription-id": subscription,
 					}),
 				);
@@ -248,6 +260,7 @@ export const installEvents = (api: Api, origin: string) =>
 					target,
 					subscription,
 					secret,
+					null,
 					`msg_verification_${yield* random(12)}`,
 					JSON.stringify({ type: "verification", challenge }),
 				);
@@ -307,7 +320,7 @@ export const installEvents = (api: Api, origin: string) =>
 							Effect.flatMap(decodeRows),
 						);
 						if (current.length > 0) {
-							yield* sql`UPDATE example_mcp_events SET agent=${agent},secret=${input.delivery.secret},refresh_before=${refreshBefore},verified_at=${verifiedAt},next_attempt=0 WHERE id=${id}`;
+							yield* sql`UPDATE example_mcp_events SET agent=${agent},previous_secret=${current[0]?.secret ?? null},secret=${input.delivery.secret},refresh_before=${refreshBefore},verified_at=${verifiedAt},next_attempt=0 WHERE id=${id}`;
 							return null;
 						}
 						const clientCount =
@@ -319,7 +332,7 @@ export const installEvents = (api: Api, origin: string) =>
 							Effect.flatMap(decodeCount),
 						);
 						if (boardCount >= perBoard) return perBoard;
-						yield* sql`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,refresh_before,verified_at,position,attempts,next_attempt,last_error) VALUES(${id},${caller.clientId},${agent},${`extension:${ctx.extension}:${caller.clientId}`},${target.href},${input.delivery.secret},${refreshBefore},${verifiedAt},${start},0,0,NULL)`;
+						yield* sql`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,refresh_before,verified_at,position,attempts,next_attempt,last_error) VALUES(${id},${caller.clientId},${agent},${`extension:${ctx.extension}:${caller.clientId}`},${target.href},${input.delivery.secret},NULL,${refreshBefore},${verifiedAt},${start},0,0,NULL)`;
 						return null;
 					}),
 				);
@@ -369,7 +382,7 @@ export const installEvents = (api: Api, origin: string) =>
 				});
 				const target = callbackUrl(row.url);
 				if (!target) return "rejected" as const;
-				const sent = yield* send(target, row.id, row.secret, eventId, body);
+				const sent = yield* send(target, row.id, row.secret, row.previous_secret, eventId, body);
 				if (sent.status === "suppressed") return "suppressed" as const;
 				if (sent.status === "sent" && sent.code >= 200 && sent.code < 300) return "delivered" as const;
 				if (sent.status === "sent" && (sent.code === 410 || sent.code === 413)) return "rejected" as const;
@@ -389,6 +402,17 @@ export const installEvents = (api: Api, origin: string) =>
 				ctx.db`UPDATE example_mcp_events SET position=${to},attempts=${attempts},next_attempt=${next},last_error=${error} WHERE id=${id} AND position=${from}`,
 			);
 
+		/** Returns true if the subscription still exists, hasn't expired, and the client still holds a grant. */
+		const subscriptionValid = (ctx: Store, id: string, clientId: string, now: number) =>
+			Effect.gen(function* () {
+				const active = yield* count(
+					ctx,
+					(sql) => sql`SELECT COUNT(*) AS count FROM example_mcp_events WHERE id=${id} AND refresh_before>${now}`,
+				);
+				if (active === 0) return false;
+				return yield* granted(ctx, clientId, now);
+			});
+
 		/** Delivers one subscription's pending mentions in order; says when to look again and whether more remain. */
 		const drain = (ctx: BackgroundContext, row: typeof Row.Type, now: number) =>
 			Effect.gen(function* () {
@@ -406,6 +430,8 @@ export const installEvents = (api: Api, origin: string) =>
 				let position = row.position;
 				let attempts = row.attempts;
 				for (const message of page.items) {
+					// Stop if the subscription was deleted, expired, or lost its grant concurrently.
+					if (!(yield* subscriptionValid(ctx, row.id, row.client_id, now))) return { wake: Infinity, backlog: false };
 					const outcome = message.deleted_at === null ? yield* deliver(row, message) : "rejected";
 					// Suppressed means this generation is no longer live; its scope is about to close.
 					if (outcome === "suppressed") return { wake: now + 1000, backlog: false };

@@ -748,6 +748,103 @@ it("serves MCP 2.0 discovery and delivers signed mention events to a verified we
 	expect(deliveries()).toHaveLength(2);
 }, 60000);
 
+it("stops delivering pending mentions when unsubscribe is called during drain", async (test) => {
+	const { fixture, app, cookie } = await installed(test, undefined, true);
+	const { access, clientId } = await connect(app.url, cookie, "Drain client", "drain-bot");
+	const secret = `whsec_${Buffer.alloc(32, 8).toString("base64")}`;
+
+	// Create a slow receiver that introduces delay to keep drain active longer
+	const received: Array<{
+		readonly headers: Readonly<Record<string, string | string[] | undefined>>;
+		readonly body: string;
+	}> = [];
+	const slowServer = createServer((request, response) => {
+		const chunks: Buffer[] = [];
+		request.on("data", (chunk: Buffer) => chunks.push(chunk));
+		request.on("end", async () => {
+			// Introduce a delay to simulate slow processing
+			await delay(500);
+			const body = Buffer.concat(chunks).toString("utf8");
+			received.push({ headers: request.headers, body });
+			const parsed: unknown = JSON.parse(body);
+			const challenge = Reflect.get(Object(parsed), "challenge");
+			response.writeHead(200, { "content-type": "application/json" });
+			response.end(JSON.stringify(typeof challenge === "string" ? { challenge } : {}));
+		});
+	});
+	slowServer.listen(0, "127.0.0.1");
+	await once(slowServer, "listening");
+	test.onTestFinished(async () => {
+		slowServer.closeAllConnections();
+		await new Promise<void>((resolve) => slowServer.close(() => resolve()));
+	});
+	const address = slowServer.address();
+	if (!address || typeof address === "string") throw new Error("receiver has no address");
+	const hookUrl = `http://127.0.0.1:${address.port}/hook`;
+
+	const rpc = async (response: Response) => ({ status: response.status, body: await response.json() });
+
+	const subscription = {
+		name: "mention.created",
+		arguments: {},
+		delivery: { mode: "webhook", url: hookUrl, secret },
+		cursor: null,
+	};
+	const subscribed = await rpc(await modern(app.url, access, 1, "events/subscribe", subscription));
+	expect(subscribed.body.result.id).toMatch(/^sub_[0-9a-f]{32}$/);
+
+	const deliveries = () => received.filter((item) => !String(item.headers["webhook-id"]).startsWith("msg_"));
+
+	// Post multiple mentions to create a backlog
+	for (let n = 1; n <= 10; n++) {
+		await app.post("/api/messages", { topic: "plans", body: `Mention ${n} for @drain-bot` }, cookie);
+	}
+
+	// Wait for the first delivery to confirm drain is active
+	await eventually(() => deliveries()[0]);
+
+	// Unsubscribe while the drain is still processing the backlog
+	const unsubscribed = await rpc(
+		await modern(app.url, access, 2, "events/unsubscribe", {
+			name: "mention.created",
+			delivery: { url: hookUrl },
+		}),
+	);
+	expect(unsubscribed.body.result).toEqual({ resultType: "complete" });
+
+	// Wait to ensure no more deliveries happen after unsubscribe
+	await delay(3000);
+
+	// Verify the subscription row is deleted
+	const rows = (await fixture.sql(
+		`SELECT COUNT(*) AS count FROM example_mcp_events WHERE client_id='${clientId}'`,
+	)) as Array<{ count: number }>;
+	expect(rows[0]?.count).toBe(0);
+
+	// There should be at most a few deliveries (those that were already in flight), not all 10
+	const finalCount = deliveries().length;
+	expect(finalCount).toBeLessThan(10);
+	expect(finalCount).toBeGreaterThan(0); // At least one was delivered before unsubscribe
+
+	// Test expiry scenario: subscribe with short TTL and verify drain stops after expiry
+	const shortTtl = 2000; // 2 seconds
+	const expiredSubscribed = await rpc(
+		await modern(app.url, access, 3, "events/subscribe", { ...subscription, ttlMs: shortTtl }),
+	);
+	expect(expiredSubscribed.body.result.id).toMatch(/^sub_[0-9a-f]{32}$/);
+
+	// Post messages and wait for expiry
+	for (let n = 1; n <= 5; n++) {
+		await app.post("/api/messages", { topic: "plans", body: `Expiry test ${n} for @drain-bot` }, cookie);
+	}
+	await delay(shortTtl + 1000); // Wait for expiry plus margin
+
+	// Verify no deliveries after expiry
+	const deliveriesBeforeExpiry = received.length;
+	await delay(2000);
+	expect(received.length).toBe(deliveriesBeforeExpiry); // No new deliveries after expiry
+}, 40000);
+
 it("refuses callbacks that are not public HTTPS endpoints without connecting to them", async (test) => {
 	const { app, cookie } = await installed(test);
 	const { access } = await connect(app.url, cookie, "Event client", "gpt-bot");
