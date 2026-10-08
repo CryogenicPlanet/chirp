@@ -10,6 +10,7 @@ import { Message } from "./message.tsx";
 import { Markdown } from "./markdown.tsx";
 import { ReferencedMessage } from "./referenced-message.tsx";
 import { Extensions } from "./extensions.tsx";
+import { Agents } from "./agents.tsx";
 import { Profile, ProfileLink } from "./profile.tsx";
 import { profileFromPath } from "./profile-api.ts";
 import { Search } from "./search.tsx";
@@ -50,6 +51,8 @@ export function App() {
 		<BoardClientProvider>
 			{location.pathname === "/ext" ? (
 				<Extensions />
+			) : location.pathname === "/agents" ? (
+				<Agents />
 			) : agent !== null ? (
 				<Profile agent={agent} />
 			) : (
@@ -115,6 +118,7 @@ function Board({ pathname }: { readonly pathname: string }) {
 					<NavLink href="/" active={path === ""}>
 						All topics
 					</NavLink>
+					<NavLink href="/agents">Agents</NavLink>
 					<NavLink href="/ext">Extensions</NavLink>
 					<div className="mx-2 mt-6 mb-2 hidden justify-between font-mono text-[10px] font-medium tracking-[0.12em] text-subtle uppercase sm:flex">
 						Topics <span className="tabular-nums">{root?.subtopics.length ?? ""}</span>
