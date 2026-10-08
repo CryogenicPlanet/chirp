@@ -64,6 +64,7 @@ export default api=>{
 	expect(statuses.map((entry: { name: string }) => entry.name)).toEqual([
 		"core.ts",
 		"a-first.ts",
+		"agents.ts",
 		"broken",
 		"core",
 		"missing",
