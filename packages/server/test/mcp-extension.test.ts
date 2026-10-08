@@ -93,7 +93,7 @@ it("serves MCP at a separate origin while consent stays on the board origin", as
 		method: "POST",
 		redirect: "manual",
 		headers: { cookie, origin: "https://comms.test", "content-type": "application/x-www-form-urlencoded" },
-		body: new URLSearchParams({ ...Object.fromEntries(query), decision: "approve" }),
+		body: new URLSearchParams({ ...Object.fromEntries(query), decision: "approve", agent: "split-client" }),
 	});
 	const code = new URL(approval.headers.get("location") ?? "").searchParams.get("code");
 	if (!code) throw new Error("authorization code is missing");
@@ -182,9 +182,10 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 		expect(consent.headers.get("content-security-policy")).toContain("form-action 'self' https://client.test;");
 		const page = await consent.text();
 		expect(page).toContain(`Authorize ${clientName}`);
-		if (scope === "read") expect(page).not.toContain('name="agent"');
-		else expect(page).toContain(`name="agent" value="${clientName.toLowerCase().replaceAll(" ", "-")}"`);
-		const approvalBody = { ...Object.fromEntries(query), decision: "approve", ...(scope === "read" ? {} : { agent }) };
+		// A client asking for read alone is still granted write, so consent always asks who it posts as.
+		expect(page).toContain("This client is requesting: read, write.");
+		expect(page).toContain(`name="agent" value="${clientName.toLowerCase().replaceAll(" ", "-")}"`);
+		const approvalBody = { ...Object.fromEntries(query), decision: "approve", agent };
 		if (marker === "writer")
 			for (const unnamed of [
 				{},
@@ -241,6 +242,7 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 		const exchanged = await exchange();
 		expect(exchanged.status).toBe(200);
 		const tokens = await exchanged.json();
+		expect(tokens).toMatchObject({ scope: "read write" });
 		expect((await exchange()).status).toBe(400);
 		return {
 			access: stringField(tokens, "access_token"),
@@ -332,8 +334,13 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 		text: "Quarterly launch plan",
 		metadata: { topic: "plans", tags: ["planning"] },
 	});
+	// Grants issued before write existed stay read-only until the client reconnects.
+	const readOnly = `chirp_app_${"R".repeat(43)}`;
+	await fixture.sql(
+		`INSERT INTO example_mcp_oauth(id,kind,client_id,family,payload,expires_at,created_at) VALUES('${createHash("sha256").update(readOnly).digest("hex")}','access','${clientId}','read-only','{"resource":"https://comms.test/mcp","scopes":["read"],"subject":"rahul"}',${Date.now() + 3600000},${Date.now()})`,
+	);
 	const denied = await (
-		await call(reader.access, 5, "tools/call", {
+		await call(readOnly, 5, "tools/call", {
 			name: "post_message",
 			arguments: { topic: "plans", body: "Reader must not post", idempotencyKey: "reader-post" },
 		})
