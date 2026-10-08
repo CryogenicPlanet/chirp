@@ -26,6 +26,7 @@ export function Extensions() {
 			navigation={
 				<>
 					<NavLink href="/">All topics</NavLink>
+					<NavLink href="/agents">Agents</NavLink>
 					<NavLink href="/ext" active>
 						Extensions
 					</NavLink>

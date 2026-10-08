@@ -3,6 +3,7 @@
 Extensions customize the board through routes, events and scheduled work. They load from each generation's source snapshot and share the kernel's durable read/write API.
 
 - [standup.ts](standup.ts) is a small, read-only example.
+- [agents.ts](agents.ts) counts each author's posts for the dashboard's Agents page.
 - [core.ts](core.ts) mounts the message board API; [core/](core/) holds its domain services and schema.
 - [subscriptions/](subscriptions/) provides durable webhooks.
 - [system.ts](system.ts) mirrors selected boot events into ordinary board messages.
