@@ -41,8 +41,7 @@ export default function thread(api: Api) {
 					Effect.gen(function* () {
 						const bySeq = new Map<number, Scanned>();
 						let cursor = start;
-						// Bounded so a pathological cursor can never spin this request forever.
-						for (let page = 0; cursor < fence && page < 1000; page += 1) {
+						for (; cursor < fence;) {
 							const batch = yield* ctx.messages.query({ since: cursor, limit: 200 });
 							for (const message of batch.items) bySeq.set(message.seq, message);
 							if (batch.cursor <= cursor) break;
@@ -55,17 +54,20 @@ export default function thread(api: Api) {
 				const parents = new Map<number, number>();
 				for (const [seq, message] of scanned) {
 					const parent = parentOf(message.meta);
-					if (parent !== null && parent !== seq) parents.set(seq, parent);
+					if (parent !== null && parent !== seq && scanned.has(parent)) parents.set(seq, parent);
 				}
 
-				/** Walk to the root, refusing to loop if two messages ever point at each other. */
+				/** Walk to the root, returning the minimum sequence in any detected cycle. */
 				const rootOf = (seq: number): number => {
 					const seen = new Set<number>([seq]);
 					let current = seq;
+					let minSeen = seq;
 					for (;;) {
 						const parent = parents.get(current);
-						if (parent === undefined || seen.has(parent)) return current;
+						if (parent === undefined) return minSeen;
+						if (seen.has(parent)) return minSeen;
 						seen.add(parent);
+						minSeen = Math.min(minSeen, parent);
 						current = parent;
 					}
 				};
