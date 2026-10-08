@@ -374,10 +374,9 @@ export const installEvents = (api: Api, origin: string) =>
 				if (decoded._tag === "None") return invalid("name and delivery.url are required");
 				if (decoded.value.name !== mentionEvent) return failure(-32011, "NotFound", { kind: "event" });
 				const target = callbackUrl(decoded.value.delivery.url);
-				if (target) {
-					const id = subscriptionId(caller.clientId, target.href, decoded.value.name);
-					yield* ctx.mutate(ctx.db`DELETE FROM example_mcp_events WHERE id=${id} AND client_id=${caller.clientId}`);
-				}
+				if (!target) return invalid("delivery.url must be an https URL without credentials");
+				const id = subscriptionId(caller.clientId, target.href, decoded.value.name);
+				yield* ctx.mutate(ctx.db`DELETE FROM example_mcp_events WHERE id=${id} AND client_id=${caller.clientId}`);
 				return { result: {} };
 			});
 
@@ -465,8 +464,9 @@ export const installEvents = (api: Api, origin: string) =>
 				for (const message of page.items) {
 					const at = yield* Clock.currentTimeMillis;
 					const current = yield* live(ctx, row.id, position, at);
-					// Stop if unsubscribe, expiry, grant loss, or another drain moved the cursor.
-					if (!current || !(yield* granted(ctx, current.client_id, at))) return { wake: Infinity, backlog: false };
+					// Stop if unsubscribe, expiry, grant loss, agent change, or another drain moved the cursor.
+					if (!current || !(yield* granted(ctx, current.client_id, at)) || current.agent !== row.agent)
+						return { wake: Infinity, backlog: false };
 					const outcome = message.deleted_at === null ? yield* deliver(current, message) : "rejected";
 					// Suppressed means this generation is no longer live; its scope is about to close.
 					if (outcome === "suppressed") return { wake: now + 1000, backlog: false };

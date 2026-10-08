@@ -1128,6 +1128,111 @@ it("treats only globally routable addresses as public", () => {
 		expect(publicCallbackAddress(address), address).toBe(false);
 });
 
+it("stops drain when subscription agent filter changes", async (test) => {
+	const { app, cookie } = await installed(test, undefined, true);
+	const { access, clientId } = await connect(app.url, cookie, "Filter client", "old-bot");
+	const secret = `whsec_${Buffer.alloc(32, 14).toString("base64")}`;
+	const received: Array<string> = [];
+	const slowServer = createServer((request, response) => {
+		const chunks: Buffer[] = [];
+		request.on("data", (chunk: Buffer) => chunks.push(chunk));
+		request.on("end", async () => {
+			await delay(400);
+			const body = Buffer.concat(chunks).toString("utf8");
+			received.push(body);
+			const parsed: unknown = JSON.parse(body);
+			const challenge = Reflect.get(Object(parsed), "challenge");
+			response.writeHead(200, { "content-type": "application/json" });
+			response.end(JSON.stringify(typeof challenge === "string" ? { challenge } : {}));
+		});
+	});
+	slowServer.listen(0, "127.0.0.1");
+	await once(slowServer, "listening");
+	test.onTestFinished(async () => {
+		slowServer.closeAllConnections();
+		await new Promise<void>((resolve) => slowServer.close(() => resolve()));
+	});
+	const address = slowServer.address();
+	if (!address || typeof address === "string") throw new Error("receiver has no address");
+	const hookUrl = `http://127.0.0.1:${address.port}/hook`;
+	const rpc = async (response: Response) => ({ status: response.status, body: await response.json() });
+	const params = (agent: string) => ({
+		name: "mention.created",
+		arguments: {},
+		delivery: { mode: "webhook", url: hookUrl, secret },
+		cursor: null,
+	});
+	expect((await rpc(await modern(app.url, access, 1, "events/subscribe", params("old-bot")))).body.result.id).toMatch(
+		/^sub_[0-9a-f]{32}$/,
+	);
+	for (let n = 1; n <= 8; n++) {
+		await app.post("/api/messages", { topic: "plans", body: `Old agent ${n} for @old-bot` }, cookie);
+	}
+	const deliveries = () => received.filter((body) => !body.includes("verification"));
+	await eventually(() => deliveries().length > 0);
+	const { access: newAccess } = await connect(app.url, cookie, "Filter client reauth", "new-bot");
+	expect(
+		(await rpc(await modern(app.url, newAccess, 2, "events/subscribe", params("new-bot")))).body.result,
+	).toMatchObject({ resultType: "complete" });
+	await delay(2000);
+	const afterChange = deliveries().filter((body) => body.includes("@old-bot"));
+	expect(afterChange.length).toBeLessThan(8);
+}, 40000);
+
+it("rejects malformed unsubscribe callback URLs", async (test) => {
+	const { app, cookie } = await installed(test, undefined, true);
+	const { access } = await connect(app.url, cookie, "Unsub client", "unsub-bot");
+	const secret = `whsec_${Buffer.alloc(32, 15).toString("base64")}`;
+	const receiver = createServer((request, response) => {
+		const chunks: Buffer[] = [];
+		request.on("data", (chunk: Buffer) => chunks.push(chunk));
+		request.on("end", () => {
+			const body = Buffer.concat(chunks).toString("utf8");
+			const parsed: unknown = JSON.parse(body);
+			const challenge = Reflect.get(Object(parsed), "challenge");
+			response.writeHead(200, { "content-type": "application/json" });
+			response.end(JSON.stringify(typeof challenge === "string" ? { challenge } : {}));
+		});
+	});
+	receiver.listen(0, "127.0.0.1");
+	await once(receiver, "listening");
+	test.onTestFinished(() => new Promise<void>((resolve) => receiver.close(() => resolve())));
+	const address = receiver.address();
+	if (!address || typeof address === "string") throw new Error("receiver has no address");
+	const validUrl = `http://127.0.0.1:${address.port}/hook`;
+	const rpc = async (response: Response) => ({ status: response.status, body: await response.json() });
+	const subscribed = await rpc(
+		await modern(app.url, access, 1, "events/subscribe", {
+			name: "mention.created",
+			arguments: {},
+			delivery: { mode: "webhook", url: validUrl, secret },
+		}),
+	);
+	expect(subscribed.status).toBe(200);
+	if (!("result" in subscribed.body)) {
+		throw new Error(`Subscription failed: ${JSON.stringify(subscribed.body)}`);
+	}
+	expect(subscribed.body.result.id).toMatch(/^sub_[0-9a-f]{32}$/);
+	const malformedUnsub = await rpc(
+		await modern(app.url, access, 2, "events/unsubscribe", {
+			name: "mention.created",
+			arguments: {},
+			delivery: { url: "not-a-url" },
+		}),
+	);
+	expect(malformedUnsub.status).toBe(200);
+	expect(malformedUnsub.body.error).toMatchObject({ code: -32602 });
+	const validUnsub = await rpc(
+		await modern(app.url, access, 3, "events/unsubscribe", {
+			name: "mention.created",
+			arguments: {},
+			delivery: { url: validUrl },
+		}),
+	);
+	expect(validUnsub.status).toBe(200);
+	expect(validUnsub.body.result).toMatchObject({ resultType: "complete" });
+}, 40000);
+
 it("rejects malformed modern envelope before legacy fallback", async (test) => {
 	const { app } = await installed(test);
 	const register = await fetch(`${app.url}/mcp/oauth/register`, {
