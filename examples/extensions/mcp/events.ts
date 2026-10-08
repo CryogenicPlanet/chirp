@@ -456,7 +456,11 @@ export const installEvents = (api: Api, origin: string) =>
 				if (!(yield* granted(ctx, row.client_id, now))) {
 					yield* ctx.mutate(
 						Effect.gen(function* () {
-							if (!(yield* granted(ctx, row.client_id, now))) {
+							const grantCount =
+								yield* ctx.db`SELECT COUNT(*) AS count FROM example_mcp_oauth WHERE client_id=${row.client_id} AND (kind='access' OR kind='refresh') AND expires_at>${now}`.pipe(
+									Effect.flatMap(decodeCount),
+								);
+							if (grantCount === 0) {
 								yield* ctx.db`DELETE FROM example_mcp_events WHERE id=${row.id}`;
 							}
 						}),
