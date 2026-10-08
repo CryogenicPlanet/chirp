@@ -27,9 +27,18 @@ export const makePageContinuation = (directory: string) =>
 		const resolve = (name: string, create = false) =>
 			Effect.gen(function* () {
 				const root = path.join(yield* fs.realPath(path.dirname(directory)), path.basename(directory));
+				// The root's parent is not listable by the app in the image (/data is 0711), so check the configured
+				// root directly; only names below it need exact directory-entry evidence.
+				if (!(yield* fs.exists(root))) {
+					if (!create) return null;
+					yield* fs.makeDirectory(root);
+					yield* sync(path.dirname(root));
+				}
+				if ((yield* fs.realPath(root)) !== root || (yield* fs.stat(root)).type !== "Directory")
+					return yield* conflict();
 				let target = root;
-				for (const part of ["", ...name.split("/")]) {
-					if (part) target = path.join(target, part);
+				for (const part of name.split("/").filter(Boolean)) {
+					target = path.join(target, part);
 					const present = (yield* fs.readDirectory(path.dirname(target))).includes(path.basename(target));
 					if (!present) {
 						if (!create) return null;
