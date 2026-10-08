@@ -29,7 +29,13 @@ export const makePageContinuation = (directory: string) =>
 				const root = path.join(yield* fs.realPath(path.dirname(directory)), path.basename(directory));
 				// The root's parent is not listable by the app in the image (/data is 0711), so check the configured
 				// root directly; only names below it need exact directory-entry evidence.
-				if (!(yield* fs.exists(root))) {
+				const linkResult = yield* fs.readLink(root).pipe(Effect.result);
+				const rootExists = yield* fs.exists(root);
+				if (linkResult._tag === "Success" && !rootExists) {
+					// Root is a dangling symlink; fail closed to prevent split pages/messages.
+					return yield* conflict();
+				}
+				if (!rootExists) {
 					if (!create) return null;
 					yield* fs.makeDirectory(root);
 					yield* sync(path.dirname(root));

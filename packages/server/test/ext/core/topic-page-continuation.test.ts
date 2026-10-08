@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BunServices } from "@effect/platform-bun";
@@ -9,9 +9,9 @@ import { makePageContinuation } from "../../../src/ext/core/topic-page-continuat
 // Root ignores directory permissions, so the image's unlistable parent cannot be reproduced as root.
 it.skipIf(process.getuid?.() === 0)(
 	"moves topic pages when the pages root's parent is traversable but not listable, as /data is in the image",
-	async ({ onTestFinished }) => {
+	async (test) => {
 		const data = await mkdtemp(join(tmpdir(), "comms-page-move-"));
-		onTestFinished(async () => {
+		test.onTestFinished(async () => {
 			await chmod(data, 0o755);
 			await rm(data, { recursive: true, force: true });
 		});
@@ -29,3 +29,18 @@ it.skipIf(process.getuid?.() === 0)(
 		expect(await readFile(join(data, "pages", "social", "plans", ".comms-move-marker-b"), "utf8")).toBe("marker-b");
 	},
 );
+
+it("fails closed when the pages root is a dangling symlink", async (test) => {
+	const data = await mkdtemp(join(tmpdir(), "comms-page-dangling-"));
+	test.onTestFinished(async () => {
+		await rm(data, { recursive: true, force: true });
+	});
+	await symlink(join(data, "nonexistent"), join(data, "pages"));
+	const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
+		Effect.runPromise(effect.pipe(Effect.provide(BunServices.layer)));
+	const pages = await run(makePageContinuation(join(data, "pages")));
+	await expect(run(pages.prepare("plans", "social/plans", "marker-c"))).rejects.toMatchObject({
+		_tag: "KernelError",
+		code: "topic_move_evidence_invalid",
+	});
+});
