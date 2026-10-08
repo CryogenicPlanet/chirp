@@ -472,7 +472,8 @@ export const installEvents = (api: Api, origin: string) =>
 					if (outcome === "suppressed") return { wake: now + 1000, backlog: false };
 					attempts = outcome === "delivered" || outcome === "rejected" ? 0 : attempts + 1;
 					if (attempts > 0 && attempts < maxAttempts) {
-						const next = now + Math.min(300_000, 10_000 * 2 ** (attempts - 1));
+						const failedAt = yield* Clock.currentTimeMillis;
+						const next = failedAt + Math.min(300_000, 10_000 * 2 ** (attempts - 1));
 						yield* checkpoint(ctx, row.id, position, position, attempts, next, outcome);
 						return { wake: next, backlog: false };
 					}
