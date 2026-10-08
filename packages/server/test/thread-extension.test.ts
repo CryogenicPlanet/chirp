@@ -108,8 +108,10 @@ it("uses a stable root for cycle members", async (test) => {
 			headers: { "content-type": "application/json", origin: "https://comms.test", cookie, "idempotency-key": key },
 			body: JSON.stringify({ meta }),
 		});
-	await patch(msgA, { reply_to: msgB }, "update-A");
-	await patch(msgB, { reply_to: msgA }, "update-B");
+	const patchA = await patch(msgA, { reply_to: msgB }, "update-A");
+	const patchB = await patch(msgB, { reply_to: msgA }, "update-B");
+	expect(patchA.status).toBe(200);
+	expect(patchB.status).toBe(200);
 	const get = (path: string) => fetch(`${app.url}${path}`, { headers: { cookie } });
 	const threadA = Schema.decodeUnknownSync(Thread)(await (await get(`/api/thread/${msgA}`)).json());
 	const threadB = Schema.decodeUnknownSync(Thread)(await (await get(`/api/thread/${msgB}`)).json());

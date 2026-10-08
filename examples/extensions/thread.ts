@@ -57,14 +57,14 @@ export default function thread(api: Api) {
 					if (parent !== null && parent !== seq && scanned.has(parent)) parents.set(seq, parent);
 				}
 
-				/** Walk to the root, returning the minimum sequence in any detected cycle. */
+				/** Walk to the root, returning the terminal parent or the minimum sequence in a detected cycle. */
 				const rootOf = (seq: number): number => {
 					const seen = new Set<number>([seq]);
 					let current = seq;
 					let minSeen = seq;
 					for (;;) {
 						const parent = parents.get(current);
-						if (parent === undefined) return minSeen;
+						if (parent === undefined) return current;
 						if (seen.has(parent)) return minSeen;
 						seen.add(parent);
 						minSeen = Math.min(minSeen, parent);
