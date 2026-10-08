@@ -965,3 +965,137 @@ it("treats only globally routable addresses as public", () => {
 	])
 		expect(publicCallbackAddress(address), address).toBe(false);
 });
+
+it("rejects malformed modern envelope before legacy fallback", async (test) => {
+	const { app } = await installed(test);
+	const register = await fetch(`${app.url}/mcp/oauth/register`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ client_name: "Malformed client", redirect_uris: ["https://client.test/callback"] }),
+	});
+	const clientId = stringField(await register.json(), "client_id");
+	const cookie = await app.login();
+	const verifier = createHash("sha256").update("malformed-verifier").digest("base64url");
+	const query = new URLSearchParams({
+		response_type: "code",
+		client_id: clientId,
+		redirect_uri: "https://client.test/callback",
+		code_challenge: createHash("sha256").update(verifier).digest("base64url"),
+		code_challenge_method: "S256",
+		resource: "https://comms.test/mcp",
+		scope: "read",
+		state: "malformed-test",
+	});
+	const authorize = await fetch(`${app.url}/mcp/oauth/authorize?${query}`, { headers: { cookie } });
+	expect(authorize.status).toBe(200);
+	const approval = await fetch(`${app.url}/mcp/oauth/authorize`, {
+		method: "POST",
+		redirect: "manual",
+		headers: { cookie, origin: "https://comms.test", "content-type": "application/x-www-form-urlencoded" },
+		body: new URLSearchParams({
+			...Object.fromEntries(query),
+			decision: "approve",
+			agent: "malformed-test",
+		}),
+	});
+	expect(approval.status).toBe(302);
+	const callback = new URL(approval.headers.get("location") ?? "");
+	const code = callback.searchParams.get("code");
+	if (!code) throw new Error("authorization code is missing");
+	const exchange = await fetch(`${app.url}/mcp/oauth/token`, {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded" },
+		body: new URLSearchParams({
+			grant_type: "authorization_code",
+			client_id: clientId,
+			redirect_uri: "https://client.test/callback",
+			resource: "https://comms.test/mcp",
+			code,
+			code_verifier: verifier,
+		}),
+	});
+	expect(exchange.status).toBe(200);
+	const tokens = await exchange.json();
+	const access = stringField(tokens, "access_token");
+
+	const call = (body: unknown) =>
+		fetch(`${app.url}/mcp`, {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${access}`,
+				accept: "application/json, text/event-stream",
+				"content-type": "application/json",
+			},
+			body: JSON.stringify(body),
+		});
+
+	const malformedModernWithCapabilities = await call({
+		jsonrpc: "2.0",
+		id: 1,
+		method: "tools/call",
+		params: {
+			name: "search",
+			arguments: { query: "test" },
+			_meta: {
+				"io.modelcontextprotocol/clientCapabilities": { capabilities: {} },
+			},
+		},
+	});
+	expect(malformedModernWithCapabilities.status).toBe(400);
+	const result = await malformedModernWithCapabilities.json();
+	expect(result).toMatchObject({
+		jsonrpc: "2.0",
+		id: 1,
+		error: {
+			code: -32602,
+			message: "Invalid params: _meta needs io.modelcontextprotocol/protocolVersion and clientCapabilities",
+		},
+	});
+	expect(result.error).not.toHaveProperty("data");
+
+	const malformedModernWithNonObjectCapabilities = await call({
+		jsonrpc: "2.0",
+		id: 2,
+		method: "tools/call",
+		params: {
+			name: "search",
+			arguments: { query: "test" },
+			_meta: {
+				"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+				"io.modelcontextprotocol/clientCapabilities": "not-an-object",
+			},
+		},
+	});
+	expect(malformedModernWithNonObjectCapabilities.status).toBe(400);
+	const result2 = await malformedModernWithNonObjectCapabilities.json();
+	expect(result2).toMatchObject({
+		jsonrpc: "2.0",
+		id: 2,
+		error: {
+			code: -32602,
+			message: "Invalid params: _meta needs io.modelcontextprotocol/protocolVersion and clientCapabilities",
+		},
+	});
+
+	const wellFormedModern = await call({
+		jsonrpc: "2.0",
+		id: 3,
+		method: "tools/list",
+		params: {
+			_meta: {
+				"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+				"io.modelcontextprotocol/clientCapabilities": { capabilities: {} },
+			},
+		},
+	});
+	expect(wellFormedModern.status).toBe(200);
+	const result3 = await wellFormedModern.json();
+	expect(result3).toMatchObject({
+		jsonrpc: "2.0",
+		id: 3,
+		result: {
+			resultType: "complete",
+			tools: expect.any(Array),
+		},
+	});
+}, 30000);

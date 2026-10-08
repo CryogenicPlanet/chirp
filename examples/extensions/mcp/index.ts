@@ -129,9 +129,12 @@ export default (api: Api) =>
 						});
 					const meta = field(message.params, "_meta");
 					const requested = field(meta, "io.modelcontextprotocol/protocolVersion");
+					const capabilities = field(meta, "io.modelcontextprotocol/clientCapabilities");
 					const headerVersion = request.headers["mcp-protocol-version"];
-					if (message.method !== "initialize" && (requested !== undefined || headerVersion === modernVersion)) {
-						const capabilities = field(meta, "io.modelcontextprotocol/clientCapabilities");
+					if (
+						message.method !== "initialize" &&
+						(requested !== undefined || capabilities !== undefined || headerVersion === modernVersion)
+					) {
 						if (typeof requested !== "string" || typeof capabilities !== "object" || capabilities === null)
 							return rpcError(
 								id,
