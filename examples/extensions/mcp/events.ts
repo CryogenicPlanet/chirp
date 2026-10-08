@@ -373,10 +373,12 @@ export const installEvents = (api: Api, origin: string) =>
 			Effect.gen(function* () {
 				const decoded = Schema.decodeUnknownOption(UnsubscribeParams)(params);
 				if (decoded._tag === "None") return invalid("name and delivery.url are required");
-				if (decoded.value.name !== mentionEvent) return failure(-32011, "NotFound", { kind: "event" });
-				const target = callbackUrl(decoded.value.delivery.url);
+				const input = decoded.value;
+				if (input.name !== mentionEvent) return failure(-32011, "NotFound", { kind: "event" });
+				if (!noArguments(input.arguments)) return invalid(`${mentionEvent} takes no arguments`);
+				const target = callbackUrl(input.delivery.url);
 				if (!target) return invalid("delivery.url must be an https URL without credentials");
-				const id = subscriptionId(caller.clientId, target.href, decoded.value.name);
+				const id = subscriptionId(caller.clientId, target.href, input.name);
 				yield* ctx.mutate(ctx.db`DELETE FROM example_mcp_events WHERE id=${id} AND client_id=${caller.clientId}`);
 				return { result: {} };
 			});

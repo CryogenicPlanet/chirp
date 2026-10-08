@@ -1222,8 +1222,17 @@ it("rejects malformed unsubscribe callback URLs", async (test) => {
 	);
 	expect(malformedUnsub.status).toBe(200);
 	expect(malformedUnsub.body.error).toMatchObject({ code: -32602 });
-	const validUnsub = await rpc(
+	const filteredUnsub = await rpc(
 		await modern(app.url, access, 3, "events/unsubscribe", {
+			name: "mention.created",
+			arguments: { topic: "plans" },
+			delivery: { url: validUrl },
+		}),
+	);
+	expect(filteredUnsub.status).toBe(200);
+	expect(filteredUnsub.body.error).toMatchObject({ code: -32602 });
+	const validUnsub = await rpc(
+		await modern(app.url, access, 4, "events/unsubscribe", {
 			name: "mention.created",
 			arguments: {},
 			delivery: { url: validUrl },
