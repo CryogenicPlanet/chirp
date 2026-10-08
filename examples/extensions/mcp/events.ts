@@ -426,6 +426,7 @@ export const installEvents = (api: Api, origin: string) =>
 		const checkpoint = (
 			ctx: Store,
 			id: string,
+			agent: string,
 			from: number,
 			to: number,
 			attempts: number,
@@ -433,7 +434,7 @@ export const installEvents = (api: Api, origin: string) =>
 			error: string | null,
 		) =>
 			ctx.mutate(
-				ctx.db`UPDATE example_mcp_events SET position=${to},attempts=${attempts},next_attempt=${next},last_error=${error} WHERE id=${id} AND position=${from}`,
+				ctx.db`UPDATE example_mcp_events SET position=${to},attempts=${attempts},next_attempt=${next},last_error=${error} WHERE id=${id} AND agent=${agent} AND position=${from}`,
 			);
 
 		/** Live row at this cursor, or none if it was deleted, expired, or moved. */
@@ -451,7 +452,13 @@ export const installEvents = (api: Api, origin: string) =>
 			Effect.gen(function* () {
 				if (row.next_attempt > now) return { wake: row.next_attempt, backlog: false };
 				if (!(yield* granted(ctx, row.client_id, now))) {
-					yield* ctx.mutate(ctx.db`DELETE FROM example_mcp_events WHERE id=${row.id}`);
+					yield* ctx.mutate(
+						Effect.gen(function* () {
+							if (!(yield* granted(ctx, row.client_id, now))) {
+								yield* ctx.db`DELETE FROM example_mcp_events WHERE id=${row.id}`;
+							}
+						}),
+					);
 					return { wake: Infinity, backlog: false };
 				}
 				const page = yield* ctx.messages.query({
@@ -475,20 +482,20 @@ export const installEvents = (api: Api, origin: string) =>
 					if (attempts > 0 && attempts < maxAttempts) {
 						const failedAt = yield* Clock.currentTimeMillis;
 						const next = failedAt + Math.min(300_000, 10_000 * 2 ** (attempts - 1));
-						yield* checkpoint(ctx, row.id, position, position, attempts, next, outcome);
+						yield* checkpoint(ctx, row.id, row.agent, position, position, attempts, next, outcome);
 						return { wake: next, backlog: false };
 					}
 					// Delivered, refused with 410 or 413, or out of attempts: move past this message.
 					const error = attempts === 0 ? null : outcome;
 					attempts = 0;
-					yield* checkpoint(ctx, row.id, position, message.seq, 0, 0, error);
+					yield* checkpoint(ctx, row.id, row.agent, position, message.seq, 0, 0, error);
 					position = message.seq;
 				}
 				if (page.cursor > position) {
 					const at = yield* Clock.currentTimeMillis;
 					const current = yield* live(ctx, row.id, position, at);
 					if (current && current.agent === row.agent) {
-						yield* checkpoint(ctx, row.id, position, page.cursor, 0, 0, null);
+						yield* checkpoint(ctx, row.id, row.agent, position, page.cursor, 0, 0, null);
 					}
 				}
 				return { wake: now + 60_000, backlog: page.items.length === 16 };
