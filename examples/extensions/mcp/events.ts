@@ -112,10 +112,17 @@ const sign = (secret: string, id: string, timestamp: number, body: string) =>
 	`v1,${createHmac("sha256", Buffer.from(secret.slice(6), "base64"))
 		.update(`${id}.${timestamp}.${body}`)
 		.digest("base64")}`;
-const dualSign = (current: string, previous: string | null, id: string, timestamp: number, body: string) =>
-	previous === null
-		? sign(current, id, timestamp, body)
-		: `${sign(current, id, timestamp, body)} ${sign(previous, id, timestamp, body)}`;
+const sameSecret = (left: string, right: string) => {
+	const a = Buffer.from(left);
+	const b = Buffer.from(right);
+	return a.length === b.length && timingSafeEqual(a, b);
+};
+/** Sign with the current key, and with the previous key during a secret-rotation overlap. */
+const dualSign = (current: string, previous: string | null, id: string, timestamp: number, body: string) => {
+	const latest = sign(current, id, timestamp, body);
+	if (previous === null || sameSecret(previous, current)) return latest;
+	return `${latest} ${sign(previous, id, timestamp, body)}`;
+};
 const subscriptionId = (clientId: string, url: string, name: string) =>
 	`sub_${createHash("sha256")
 		.update(JSON.stringify([clientId, url, name, {}]))
@@ -320,7 +327,13 @@ export const installEvents = (api: Api, origin: string) =>
 							Effect.flatMap(decodeRows),
 						);
 						if (current.length > 0) {
-							yield* sql`UPDATE example_mcp_events SET agent=${agent},previous_secret=${current[0]?.secret ?? null},secret=${input.delivery.secret},refresh_before=${refreshBefore},verified_at=${verifiedAt},next_attempt=0 WHERE id=${id}`;
+							const existing = current[0];
+							if (!existing) return null;
+							// Keep the prior key only when this refresh actually rotates the secret.
+							const previous = sameSecret(existing.secret, input.delivery.secret)
+								? existing.previous_secret
+								: existing.secret;
+							yield* sql`UPDATE example_mcp_events SET agent=${agent},previous_secret=${previous},secret=${input.delivery.secret},refresh_before=${refreshBefore},verified_at=${verifiedAt},next_attempt=0 WHERE id=${id}`;
 							return null;
 						}
 						const clientCount =
@@ -402,16 +415,15 @@ export const installEvents = (api: Api, origin: string) =>
 				ctx.db`UPDATE example_mcp_events SET position=${to},attempts=${attempts},next_attempt=${next},last_error=${error} WHERE id=${id} AND position=${from}`,
 			);
 
-		/** Returns true if the subscription still exists, hasn't expired, and the client still holds a grant. */
-		const subscriptionValid = (ctx: Store, id: string, clientId: string, now: number) =>
-			Effect.gen(function* () {
-				const active = yield* count(
-					ctx,
-					(sql) => sql`SELECT COUNT(*) AS count FROM example_mcp_events WHERE id=${id} AND refresh_before>${now}`,
-				);
-				if (active === 0) return false;
-				return yield* granted(ctx, clientId, now);
-			});
+		/** Live row at this cursor, or none if it was deleted, expired, or moved. */
+		const live = (ctx: Store, id: string, from: number, now: number) =>
+			ctx
+				.read(() =>
+					ctx.db`SELECT * FROM example_mcp_events WHERE id=${id} AND position=${from} AND refresh_before>${now}`.pipe(
+						Effect.flatMap(decodeRows),
+					),
+				)
+				.pipe(Effect.map((found) => found[0]));
 
 		/** Delivers one subscription's pending mentions in order; says when to look again and whether more remain. */
 		const drain = (ctx: BackgroundContext, row: typeof Row.Type, now: number) =>
@@ -430,9 +442,11 @@ export const installEvents = (api: Api, origin: string) =>
 				let position = row.position;
 				let attempts = row.attempts;
 				for (const message of page.items) {
-					// Stop if the subscription was deleted, expired, or lost its grant concurrently.
-					if (!(yield* subscriptionValid(ctx, row.id, row.client_id, now))) return { wake: Infinity, backlog: false };
-					const outcome = message.deleted_at === null ? yield* deliver(row, message) : "rejected";
+					const at = yield* Clock.currentTimeMillis;
+					const current = yield* live(ctx, row.id, position, at);
+					// Stop if unsubscribe, expiry, grant loss, or another drain moved the cursor.
+					if (!current || !(yield* granted(ctx, current.client_id, at))) return { wake: Infinity, backlog: false };
+					const outcome = message.deleted_at === null ? yield* deliver(current, message) : "rejected";
 					// Suppressed means this generation is no longer live; its scope is about to close.
 					if (outcome === "suppressed") return { wake: now + 1000, backlog: false };
 					attempts = outcome === "delivered" || outcome === "rejected" ? 0 : attempts + 1;

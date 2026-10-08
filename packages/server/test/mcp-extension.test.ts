@@ -826,23 +826,76 @@ it("stops delivering pending mentions when unsubscribe is called during drain", 
 	expect(finalCount).toBeLessThan(10);
 	expect(finalCount).toBeGreaterThan(0); // At least one was delivered before unsubscribe
 
-	// Test expiry scenario: subscribe with short TTL and verify drain stops after expiry
-	const shortTtl = 2000; // 2 seconds
-	const expiredSubscribed = await rpc(
-		await modern(app.url, access, 3, "events/subscribe", { ...subscription, ttlMs: shortTtl }),
-	);
-	expect(expiredSubscribed.body.result.id).toMatch(/^sub_[0-9a-f]{32}$/);
-
-	// Post messages and wait for expiry
-	for (let n = 1; n <= 5; n++) {
-		await app.post("/api/messages", { topic: "plans", body: `Expiry test ${n} for @drain-bot` }, cookie);
+	const resubscribed = await rpc(await modern(app.url, access, 3, "events/subscribe", subscription));
+	expect(resubscribed.body.result.id).toMatch(/^sub_[0-9a-f]{32}$/);
+	for (let n = 1; n <= 8; n++) {
+		await app.post("/api/messages", { topic: "plans", body: `Grant ${n} for @drain-bot` }, cookie);
 	}
-	await delay(shortTtl + 1000); // Wait for expiry plus margin
-
-	// Verify no deliveries after expiry
-	const deliveriesBeforeExpiry = received.length;
+	await eventually(() => (deliveries().length > finalCount ? true : undefined));
+	await fixture.sql(
+		`UPDATE example_mcp_oauth SET expires_at=0 WHERE client_id='${clientId}' AND (kind='access' OR kind='refresh')`,
+	);
 	await delay(2000);
-	expect(received.length).toBe(deliveriesBeforeExpiry); // No new deliveries after expiry
+	const afterGrantLoss = deliveries().length;
+	await delay(2000);
+	expect(deliveries().length).toBe(afterGrantLoss);
+}, 40000);
+
+it("signs deliveries with both secrets while a refresh rotates the webhook key", async (test) => {
+	const { app, cookie } = await installed(test, undefined, true);
+	const { access } = await connect(app.url, cookie, "Rotate client", "rotate-bot");
+	const oldSecret = `whsec_${Buffer.alloc(32, 8).toString("base64")}`;
+	const newSecret = `whsec_${Buffer.alloc(32, 9).toString("base64")}`;
+	const received: Array<{
+		readonly headers: Readonly<Record<string, string | string[] | undefined>>;
+		readonly body: string;
+	}> = [];
+	const slowServer = createServer((request, response) => {
+		const chunks: Buffer[] = [];
+		request.on("data", (chunk: Buffer) => chunks.push(chunk));
+		request.on("end", async () => {
+			await delay(400);
+			const body = Buffer.concat(chunks).toString("utf8");
+			received.push({ headers: request.headers, body });
+			const parsed: unknown = JSON.parse(body);
+			const challenge = Reflect.get(Object(parsed), "challenge");
+			response.writeHead(200, { "content-type": "application/json" });
+			response.end(JSON.stringify(typeof challenge === "string" ? { challenge } : {}));
+		});
+	});
+	slowServer.listen(0, "127.0.0.1");
+	await once(slowServer, "listening");
+	test.onTestFinished(async () => {
+		slowServer.closeAllConnections();
+		await new Promise<void>((resolve) => slowServer.close(() => resolve()));
+	});
+	const address = slowServer.address();
+	if (!address || typeof address === "string") throw new Error("receiver has no address");
+	const hookUrl = `http://127.0.0.1:${address.port}/hook`;
+	const rpc = async (response: Response) => ({ status: response.status, body: await response.json() });
+	const params = (secret: string) => ({
+		name: "mention.created",
+		arguments: {},
+		delivery: { mode: "webhook", url: hookUrl, secret },
+		cursor: null,
+	});
+	expect((await rpc(await modern(app.url, access, 1, "events/subscribe", params(oldSecret)))).body.result.id).toMatch(
+		/^sub_[0-9a-f]{32}$/,
+	);
+	const deliveries = () => received.filter((item) => !String(item.headers["webhook-id"]).startsWith("msg_"));
+	const signedWith = (item: (typeof received)[number], ...secrets: string[]) =>
+		item.headers["webhook-signature"] ===
+		secrets.map((secret) => signatureOf(secret, item.headers, item.body)).join(" ");
+	for (let n = 1; n <= 8; n++) {
+		await app.post("/api/messages", { topic: "plans", body: `Rotate ${n} for @rotate-bot` }, cookie);
+	}
+	const first = await eventually(() => deliveries()[0]);
+	expect(signedWith(first, oldSecret)).toBe(true);
+	expect(
+		(await rpc(await modern(app.url, access, 2, "events/subscribe", params(newSecret)))).body.result,
+	).toMatchObject({ resultType: "complete" });
+	const dual = await eventually(() => deliveries().find((item) => signedWith(item, newSecret, oldSecret)));
+	expect(dual).toBeDefined();
 }, 40000);
 
 it("refuses callbacks that are not public HTTPS endpoints without connecting to them", async (test) => {
