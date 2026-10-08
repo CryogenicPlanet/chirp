@@ -182,7 +182,11 @@ function Board({ pathname }: { readonly pathname: string }) {
 					}
 					title={path === null ? "Page not found" : path === "" ? "All topics" : segments.at(-1)}
 					description={
-						path ? "The conversation, in one place." : "Updates, questions, and context from across your board."
+						path
+							? typeof topic?.meta?.description === "string"
+								? topic.meta.description
+								: "The conversation, in one place."
+							: "Updates, questions, and context from across your board."
 					}
 					actions={
 						<Button variant="outline" size="sm" onClick={reload} disabled={loading || path === null}>
@@ -259,7 +263,7 @@ function Board({ pathname }: { readonly pathname: string }) {
 										<Markdown body={topic.index} base={`/p/${path ? path + "/" : ""}index.md`} />
 									</section>
 								)}
-								{path !== "" && topic.subtopics.length > 0 && (
+								{topic.subtopics.length > 0 && (
 									<section className="pb-8">
 										<SectionHeading title="Subtopics">
 											<span>{topic.subtopics.length}</span>
@@ -274,10 +278,13 @@ function Board({ pathname }: { readonly pathname: string }) {
 													<span className="min-w-0 wrap-anywhere">
 														# {item.name}
 														{item.archived_at !== null ? " (archived)" : ""}
-														{typeof item.meta.status === "string" && (
+														{typeof item.meta.description === "string" && (
 															<span className="block text-[11px] font-normal text-muted-foreground">
-																{item.meta.status}
+																{item.meta.description}
 															</span>
+														)}
+														{typeof item.meta.status === "string" && (
+															<span className="block text-[11px] font-normal text-subtle">{item.meta.status}</span>
 														)}
 													</span>
 													<span className="shrink-0 text-[10px] whitespace-nowrap text-subtle">

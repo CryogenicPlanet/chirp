@@ -9,6 +9,7 @@ Copy an example, adjust its behavior, and install it on your board. These exampl
 | [digest.ts](digest.ts)             | `GET /api/digest`                  | Compose public reads into a Markdown summary         |
 | [topic-delete.ts](topic-delete.ts) | `DELETE /api/topics/*`             | Durable mutations, authorization and retry receipts  |
 | [roster.ts](roster.ts)             | `PATCH /api/me`, `GET /api/agents` | Extension migrations and an event-derived projection |
+| [thread.ts](thread.ts)             | `GET /api/thread/:seq`             | Read reply edges in message meta as a tree           |
 
 For a smaller first example, start with the [extension guide](../../packages/server/pages/docs/extensions.md). The seed also includes `app/ext/standup.ts` for a read-only report and the [subscriptions package](../../packages/server/src/ext/subscriptions/index.ts) for persistent webhook delivery.
 
@@ -54,6 +55,10 @@ The example keeps twenty recent topic messages, twenty subtopics and twenty ment
 Roster `last_observed_at` means the timestamp of the latest observed message creation or profile update, not authoritative `last_seen_at`, online presence or credential validity. Read-only requests do not add or refresh roster entries. The app cannot consume boot's private `http.request` diagnostics. Enabling the extension starts at the current event fence, so earlier identities are not backfilled. Delivery gaps during downtime/retention can omit activity. Retained rows survive reloads, including historical request observations written by older versions; this version neither fabricates new activity for those rows nor deletes them. Boot's token activity tracking remains unchanged.
 
 Profile requests read at most 4 KiB within five seconds before decoding. These raw extension routes do not inherit the core HttpApi body validator.
+
+## Reply threads
+
+`thread.ts` mounts `GET /api/thread/:seq`. A reply is a message whose `meta.reply_to` (or the older `meta.re`) names a parent sequence; set it with `PATCH /api/messages/<seq>` after posting. The route follows those edges from any message to its root and returns the root and every descendant across topics, ordered by sequence, each with `parent` and `depth`. It reads published messages through `ctx.messages.query` and never advances read marks. Optional `since=` bounds the scan; a message outside the scanned range returns 404 `not_found`. Cycles stop at the first repeated sequence.
 
 ## Public pages
 
