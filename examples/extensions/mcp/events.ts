@@ -62,7 +62,7 @@ const SubscribeParams = Schema.Struct({
 	name: Schema.String,
 	arguments: Schema.optionalKey(Schema.Unknown),
 	delivery: Schema.Struct({ mode: Schema.String, url: Schema.String, secret: Schema.String }),
-	ttlMs: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
+	ttlMs: Schema.optionalKey(Schema.NullOr(Schema.Int)),
 });
 const UnsubscribeParams = Schema.Struct({
 	name: Schema.String,
@@ -346,7 +346,8 @@ export const installEvents = (api: Api, origin: string) =>
 							const rotating = !sameSecret(existing.secret, input.delivery.secret);
 							const previous = rotating ? existing.secret : existing.previous_secret;
 							const previousUntil = rotating ? now + secretOverlap : existing.previous_secret_until;
-							yield* sql`UPDATE example_mcp_events SET agent=${agent},previous_secret=${previous},previous_secret_until=${previousUntil},secret=${input.delivery.secret},refresh_before=${refreshBefore},verified_at=${verifiedAt},next_attempt=0 WHERE id=${id}`;
+							const resetRetries = existing.agent !== agent ? 0 : existing.attempts;
+							yield* sql`UPDATE example_mcp_events SET agent=${agent},previous_secret=${previous},previous_secret_until=${previousUntil},secret=${input.delivery.secret},refresh_before=${refreshBefore},verified_at=${verifiedAt},attempts=${resetRetries},next_attempt=0 WHERE id=${id}`;
 							return null;
 						}
 						const clientCount =
@@ -483,7 +484,13 @@ export const installEvents = (api: Api, origin: string) =>
 					yield* checkpoint(ctx, row.id, position, message.seq, 0, 0, error);
 					position = message.seq;
 				}
-				if (page.cursor > position) yield* checkpoint(ctx, row.id, position, page.cursor, 0, 0, null);
+				if (page.cursor > position) {
+					const at = yield* Clock.currentTimeMillis;
+					const current = yield* live(ctx, row.id, position, at);
+					if (current && current.agent === row.agent) {
+						yield* checkpoint(ctx, row.id, position, page.cursor, 0, 0, null);
+					}
+				}
 				return { wake: now + 60_000, backlog: page.items.length === 16 };
 			});
 
