@@ -22,7 +22,7 @@ it("runs kernel KV mutation/read and rolls back every probe row without publishi
 		.poll(() =>
 			fixture.sql("SELECT COUNT(*) count FROM events WHERE json_extract(event,'$.type')='ext.loaded'", "boot.db"),
 		)
-		.toEqual([{ count: 4 }]);
+		.toEqual([{ count: 5 }]);
 	expect(
 		await fixture.sql(
 			"SELECT COUNT(*) count FROM outbox WHERE json_extract(event,'$.instance') IS NOT 'extension:system.ts' AND json_extract(event,'$.type') NOT IN ('ext.loaded','pages.public')",
@@ -129,7 +129,7 @@ it("rehearses a WAL-inclusive SQLite clone without changing live rows, epoch or 
 		.poll(() =>
 			fixture.sql("SELECT COUNT(*) count FROM events WHERE json_extract(event,'$.type')='ext.loaded'", "boot.db"),
 		)
-		.toEqual([{ count: 4 }]);
+		.toEqual([{ count: 5 }]);
 	expect((await app.post("/api/messages", { topic: "wal", body: "committed WAL data" }, cookie)).status).toBe(200);
 	expect((await stat(join(fixture.root, "comms.db-wal"))).size).toBeGreaterThan(32);
 	await cp(join(fixture.root, "comms.db"), join(fixture.root, "main-only.db"));
