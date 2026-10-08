@@ -72,15 +72,10 @@ const redirect = (uri: string, fields: Readonly<Record<string, string>>) => {
 	});
 };
 const one = (value: string | ReadonlyArray<string> | undefined) => (typeof value === "string" ? value : undefined);
-const scopes = (value: string | undefined) => {
-	const requested = value?.split(" ").filter(Boolean) ?? ["read", "write"];
-	const accepted: Array<"read" | "write"> = [];
-	for (const scope of requested) {
-		if (scope !== "read" && scope !== "write") return null;
-		if (!accepted.includes(scope)) accepted.push(scope);
-	}
-	return accepted.includes("read") ? accepted : null;
-};
+// Every connection is granted the whole tool surface, whatever scope the client requests (RFC 6749 §3.3 lets the
+// server ignore it; the token response reports the grant). Clients cache the scope they saw at registration: ChatGPT
+// kept requesting read alone after write was added, and so could never post.
+const granted: ReadonlyArray<"read" | "write"> = ["read", "write"];
 const validRedirect = (value: string) => {
 	try {
 		const url = new URL(value);
@@ -156,7 +151,6 @@ const authorizeInput = (query: Context["query"]) => ({
 	challengeMethod: one(query.code_challenge_method),
 	responseType: one(query.response_type),
 	resource: one(query.resource),
-	scopes: scopes(one(query.scope)),
 });
 /** Returns the checked request, or names the first failed check so the person at the consent page can fix the client. */
 const authorization = (ctx: Context, query: Context["query"], resource: string) =>
@@ -171,13 +165,12 @@ const authorization = (ctx: Context, query: Context["query"], resource: string) 
 		if (input.state !== undefined && input.state.length > 2048) return "state must be at most 2048 characters.";
 		if (input.challengeMethod !== "S256" || !input.challenge || !/^[A-Za-z0-9_-]{43,128}$/.test(input.challenge))
 			return "code_challenge must be an S256 PKCE challenge.";
-		if (!input.scopes) return "scope must be read, optionally with write.";
 		return {
 			clientId: input.clientId,
 			clientName: registered.client_name,
 			redirectUri: input.redirectUri,
 			challenge: input.challenge,
-			scopes: input.scopes,
+			scopes: granted,
 			state: input.state,
 		};
 	});
