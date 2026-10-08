@@ -21,6 +21,7 @@ const mentionEvent = "mention.created";
 const defaultTtl = 24 * 60 * 60 * 1000;
 const minimumTtl = 5 * 60 * 1000;
 const verifiedFor = 24 * 60 * 60 * 1000;
+const secretOverlap = 5 * 60 * 1000;
 const maxAttempts = 5;
 const perClient = 8;
 const perBoard = 64;
@@ -76,6 +77,7 @@ const Row = Schema.Struct({
 	url: Schema.String,
 	secret: Schema.String,
 	previous_secret: Schema.NullOr(Schema.String),
+	previous_secret_until: Schema.NullOr(Schema.Finite),
 	refresh_before: Schema.Finite,
 	verified_at: Schema.Finite,
 	position: Schema.Finite,
@@ -118,9 +120,18 @@ const sameSecret = (left: string, right: string) => {
 	return a.length === b.length && timingSafeEqual(a, b);
 };
 /** Sign with the current key, and with the previous key during a secret-rotation overlap. */
-const dualSign = (current: string, previous: string | null, id: string, timestamp: number, body: string) => {
+const dualSign = (
+	current: string,
+	previous: string | null,
+	previousUntil: number | null,
+	now: number,
+	id: string,
+	timestamp: number,
+	body: string,
+) => {
 	const latest = sign(current, id, timestamp, body);
-	if (previous === null || sameSecret(previous, current)) return latest;
+	if (previous === null || previousUntil === null || now >= previousUntil || sameSecret(previous, current))
+		return latest;
 	return `${latest} ${sign(previous, id, timestamp, body)}`;
 };
 const subscriptionId = (clientId: string, url: string, name: string) =>
@@ -151,11 +162,11 @@ export const installEvents = (api: Api, origin: string) =>
 			"event_subscriptions",
 			on(sql, {
 				sqlite: () =>
-					"CREATE TABLE example_mcp_events(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,previous_secret TEXT,refresh_before INTEGER NOT NULL,verified_at INTEGER NOT NULL,position INTEGER NOT NULL,attempts INTEGER NOT NULL,next_attempt INTEGER NOT NULL,last_error TEXT)",
+					"CREATE TABLE example_mcp_events(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,previous_secret TEXT,previous_secret_until INTEGER,refresh_before INTEGER NOT NULL,verified_at INTEGER NOT NULL,position INTEGER NOT NULL,attempts INTEGER NOT NULL,next_attempt INTEGER NOT NULL,last_error TEXT)",
 				pg: () =>
-					"CREATE TABLE example_mcp_events(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,previous_secret TEXT,refresh_before BIGINT NOT NULL,verified_at BIGINT NOT NULL,position BIGINT NOT NULL,attempts INTEGER NOT NULL,next_attempt BIGINT NOT NULL,last_error TEXT)",
+					"CREATE TABLE example_mcp_events(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,previous_secret TEXT,previous_secret_until BIGINT,refresh_before BIGINT NOT NULL,verified_at BIGINT NOT NULL,position BIGINT NOT NULL,attempts INTEGER NOT NULL,next_attempt BIGINT NOT NULL,last_error TEXT)",
 				mysql: () =>
-					"CREATE TABLE example_mcp_events(id VARCHAR(64) PRIMARY KEY,client_id VARCHAR(128) NOT NULL,agent VARCHAR(64) NOT NULL,instance VARCHAR(256) NOT NULL,url LONGTEXT NOT NULL,secret LONGTEXT NOT NULL,previous_secret LONGTEXT,refresh_before BIGINT NOT NULL,verified_at BIGINT NOT NULL,position BIGINT NOT NULL,attempts INTEGER NOT NULL,next_attempt BIGINT NOT NULL,last_error VARCHAR(32)) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin",
+					"CREATE TABLE example_mcp_events(id VARCHAR(64) PRIMARY KEY,client_id VARCHAR(128) NOT NULL,agent VARCHAR(64) NOT NULL,instance VARCHAR(256) NOT NULL,url LONGTEXT NOT NULL,secret LONGTEXT NOT NULL,previous_secret LONGTEXT,previous_secret_until BIGINT,refresh_before BIGINT NOT NULL,verified_at BIGINT NOT NULL,position BIGINT NOT NULL,attempts INTEGER NOT NULL,next_attempt BIGINT NOT NULL,last_error VARCHAR(32)) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin",
 			}),
 			{ protect: true },
 		);
@@ -185,6 +196,7 @@ export const installEvents = (api: Api, origin: string) =>
 			subscription: string,
 			secret: string,
 			previousSecret: string | null,
+			previousUntil: number | null,
 			id: string,
 			body: string,
 		) =>
@@ -201,14 +213,15 @@ export const installEvents = (api: Api, origin: string) =>
 					return { status: "failed", reason: "connection_refused" } satisfies Sent;
 				const pinned = new URL(target.href);
 				pinned.hostname = address.family === 6 ? `[${address.address}]` : address.address;
-				const timestamp = Math.floor((yield* Clock.currentTimeMillis) / 1000);
+				const now = yield* Clock.currentTimeMillis;
+				const timestamp = Math.floor(now / 1000);
 				const request = HttpClientRequest.post(pinned.href).pipe(
 					HttpClientRequest.bodyText(body, "application/json"),
 					HttpClientRequest.setHeaders({
 						host: target.host,
 						"webhook-id": id,
 						"webhook-timestamp": String(timestamp),
-						"webhook-signature": dualSign(secret, previousSecret, id, timestamp, body),
+						"webhook-signature": dualSign(secret, previousSecret, previousUntil, now, id, timestamp, body),
 						"x-mcp-subscription-id": subscription,
 					}),
 				);
@@ -267,6 +280,7 @@ export const installEvents = (api: Api, origin: string) =>
 					target,
 					subscription,
 					secret,
+					null,
 					null,
 					`msg_verification_${yield* random(12)}`,
 					JSON.stringify({ type: "verification", challenge }),
@@ -329,11 +343,10 @@ export const installEvents = (api: Api, origin: string) =>
 						if (current.length > 0) {
 							const existing = current[0];
 							if (!existing) return null;
-							// Keep the prior key only when this refresh actually rotates the secret.
-							const previous = sameSecret(existing.secret, input.delivery.secret)
-								? existing.previous_secret
-								: existing.secret;
-							yield* sql`UPDATE example_mcp_events SET agent=${agent},previous_secret=${previous},secret=${input.delivery.secret},refresh_before=${refreshBefore},verified_at=${verifiedAt},next_attempt=0 WHERE id=${id}`;
+							const rotating = !sameSecret(existing.secret, input.delivery.secret);
+							const previous = rotating ? existing.secret : null;
+							const previousUntil = rotating ? now + secretOverlap : null;
+							yield* sql`UPDATE example_mcp_events SET agent=${agent},previous_secret=${previous},previous_secret_until=${previousUntil},secret=${input.delivery.secret},refresh_before=${refreshBefore},verified_at=${verifiedAt},next_attempt=0 WHERE id=${id}`;
 							return null;
 						}
 						const clientCount =
@@ -345,7 +358,7 @@ export const installEvents = (api: Api, origin: string) =>
 							Effect.flatMap(decodeCount),
 						);
 						if (boardCount >= perBoard) return perBoard;
-						yield* sql`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,refresh_before,verified_at,position,attempts,next_attempt,last_error) VALUES(${id},${caller.clientId},${agent},${`extension:${ctx.extension}:${caller.clientId}`},${target.href},${input.delivery.secret},NULL,${refreshBefore},${verifiedAt},${start},0,0,NULL)`;
+						yield* sql`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,previous_secret_until,refresh_before,verified_at,position,attempts,next_attempt,last_error) VALUES(${id},${caller.clientId},${agent},${`extension:${ctx.extension}:${caller.clientId}`},${target.href},${input.delivery.secret},NULL,NULL,${refreshBefore},${verifiedAt},${start},0,0,NULL)`;
 						return null;
 					}),
 				);
@@ -395,7 +408,15 @@ export const installEvents = (api: Api, origin: string) =>
 				});
 				const target = callbackUrl(row.url);
 				if (!target) return "rejected" as const;
-				const sent = yield* send(target, row.id, row.secret, row.previous_secret, eventId, body);
+				const sent = yield* send(
+					target,
+					row.id,
+					row.secret,
+					row.previous_secret,
+					row.previous_secret_until,
+					eventId,
+					body,
+				);
 				if (sent.status === "suppressed") return "suppressed" as const;
 				if (sent.status === "sent" && sent.code >= 200 && sent.code < 300) return "delivered" as const;
 				if (sent.status === "sent" && (sent.code === 410 || sent.code === 413)) return "rejected" as const;

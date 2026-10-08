@@ -898,6 +898,72 @@ it("signs deliveries with both secrets while a refresh rotates the webhook key",
 	expect(dual).toBeDefined();
 }, 40000);
 
+it("retires the previous webhook secret after the overlap window", async (test) => {
+	const { app, cookie, fixture } = await installed(test, undefined, true);
+	const { access, clientId } = await connect(app.url, cookie, "Retire client", "retire-bot");
+	const oldSecret = `whsec_${Buffer.alloc(32, 10).toString("base64")}`;
+	const newSecret = `whsec_${Buffer.alloc(32, 11).toString("base64")}`;
+	const received: Array<{
+		readonly headers: Readonly<Record<string, string | string[] | undefined>>;
+		readonly body: string;
+	}> = [];
+	const slowServer = createServer((request, response) => {
+		const chunks: Buffer[] = [];
+		request.on("data", (chunk: Buffer) => chunks.push(chunk));
+		request.on("end", async () => {
+			await delay(400);
+			const body = Buffer.concat(chunks).toString("utf8");
+			received.push({ headers: request.headers, body });
+			const parsed: unknown = JSON.parse(body);
+			const challenge = Reflect.get(Object(parsed), "challenge");
+			response.writeHead(200, { "content-type": "application/json" });
+			response.end(JSON.stringify(typeof challenge === "string" ? { challenge } : {}));
+		});
+	});
+	slowServer.listen(0, "127.0.0.1");
+	await once(slowServer, "listening");
+	test.onTestFinished(async () => {
+		slowServer.closeAllConnections();
+		await new Promise<void>((resolve) => slowServer.close(() => resolve()));
+	});
+	const address = slowServer.address();
+	if (!address || typeof address === "string") throw new Error("receiver has no address");
+	const hookUrl = `http://127.0.0.1:${address.port}/hook`;
+	const rpc = async (response: Response) => ({ status: response.status, body: await response.json() });
+	const params = (secret: string) => ({
+		name: "mention.created",
+		arguments: {},
+		delivery: { mode: "webhook", url: hookUrl, secret },
+		cursor: null,
+	});
+	expect((await rpc(await modern(app.url, access, 1, "events/subscribe", params(oldSecret)))).body.result.id).toMatch(
+		/^sub_[0-9a-f]{32}$/,
+	);
+	await app.post("/api/messages", { topic: "plans", body: "Before rotation for @retire-bot" }, cookie);
+	const deliveries = () => received.filter((item) => !String(item.headers["webhook-id"]).startsWith("msg_"));
+	const signedWith = (item: (typeof received)[number], ...secrets: string[]) =>
+		item.headers["webhook-signature"] ===
+		secrets.map((secret) => signatureOf(secret, item.headers, item.body)).join(" ");
+	const before = await eventually(() => deliveries()[0]);
+	expect(signedWith(before, oldSecret)).toBe(true);
+	expect(
+		(await rpc(await modern(app.url, access, 2, "events/subscribe", params(newSecret)))).body.result,
+	).toMatchObject({ resultType: "complete" });
+	await app.post("/api/messages", { topic: "plans", body: "During overlap for @retire-bot" }, cookie);
+	const during = await eventually(() => deliveries().find((item) => signedWith(item, newSecret, oldSecret)));
+	expect(during).toBeDefined();
+	await fixture.sql(`UPDATE example_mcp_events SET previous_secret_until=0 WHERE client_id='${clientId}'`);
+	await app.post("/api/messages", { topic: "plans", body: "After expiry for @retire-bot" }, cookie);
+	const after = await eventually(() =>
+		deliveries().find((item) => item.body.includes("After expiry") && signedWith(item, newSecret)),
+	);
+	expect(after).toBeDefined();
+	const afterDual = deliveries().find(
+		(item) => item.body.includes("After expiry") && signedWith(item, newSecret, oldSecret),
+	);
+	expect(afterDual).toBeUndefined();
+}, 40000);
+
 it("refuses callbacks that are not public HTTPS endpoints without connecting to them", async (test) => {
 	const { app, cookie } = await installed(test);
 	const { access } = await connect(app.url, cookie, "Event client", "gpt-bot");
