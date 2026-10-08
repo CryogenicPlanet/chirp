@@ -344,8 +344,8 @@ export const installEvents = (api: Api, origin: string) =>
 							const existing = current[0];
 							if (!existing) return null;
 							const rotating = !sameSecret(existing.secret, input.delivery.secret);
-							const previous = rotating ? existing.secret : null;
-							const previousUntil = rotating ? now + secretOverlap : null;
+							const previous = rotating ? existing.secret : existing.previous_secret;
+							const previousUntil = rotating ? now + secretOverlap : existing.previous_secret_until;
 							yield* sql`UPDATE example_mcp_events SET agent=${agent},previous_secret=${previous},previous_secret_until=${previousUntil},secret=${input.delivery.secret},refresh_before=${refreshBefore},verified_at=${verifiedAt},next_attempt=0 WHERE id=${id}`;
 							return null;
 						}

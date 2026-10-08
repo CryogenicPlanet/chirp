@@ -964,6 +964,102 @@ it("retires the previous webhook secret after the overlap window", async (test) 
 	expect(afterDual).toBeUndefined();
 }, 40000);
 
+it("preserves previous secret overlap during same-secret refreshes", async (test) => {
+	const { app, cookie } = await installed(test, undefined, true);
+	const { access } = await connect(app.url, cookie, "Preserve client", "preserve-bot");
+	const secretA = `whsec_${Buffer.alloc(32, 12).toString("base64")}`;
+	const secretB = `whsec_${Buffer.alloc(32, 13).toString("base64")}`;
+	const received: Array<{
+		readonly headers: Readonly<Record<string, string | string[] | undefined>>;
+		readonly body: string;
+	}> = [];
+	const slowServer = createServer((request, response) => {
+		const chunks: Buffer[] = [];
+		request.on("data", (chunk: Buffer) => chunks.push(chunk));
+		request.on("end", async () => {
+			await delay(400);
+			const body = Buffer.concat(chunks).toString("utf8");
+			received.push({ headers: request.headers, body });
+			const parsed: unknown = JSON.parse(body);
+			const challenge = Reflect.get(Object(parsed), "challenge");
+			response.writeHead(200, { "content-type": "application/json" });
+			response.end(JSON.stringify(typeof challenge === "string" ? { challenge } : {}));
+		});
+	});
+	slowServer.listen(0, "127.0.0.1");
+	await once(slowServer, "listening");
+	test.onTestFinished(async () => {
+		slowServer.closeAllConnections();
+		await new Promise<void>((resolve) => slowServer.close(() => resolve()));
+	});
+	const address = slowServer.address();
+	if (!address || typeof address === "string") throw new Error("receiver has no address");
+	const hookUrl = `http://127.0.0.1:${address.port}/hook`;
+	const rpc = async (response: Response) => ({ status: response.status, body: await response.json() });
+	const params = (secret: string) => ({
+		name: "mention.created",
+		arguments: {},
+		delivery: { mode: "webhook", url: hookUrl, secret },
+		cursor: null,
+	});
+	expect((await rpc(await modern(app.url, access, 1, "events/subscribe", params(secretA)))).body.result.id).toMatch(
+		/^sub_[0-9a-f]{32}$/,
+	);
+	const deliveries = () => received.filter((item) => !String(item.headers["webhook-id"]).startsWith("msg_"));
+	const signedWith = (item: (typeof received)[number], ...secrets: string[]) =>
+		item.headers["webhook-signature"] ===
+		secrets.map((secret) => signatureOf(secret, item.headers, item.body)).join(" ");
+	expect((await rpc(await modern(app.url, access, 2, "events/subscribe", params(secretB)))).body.result).toMatchObject({
+		resultType: "complete",
+	});
+	await app.post("/api/messages", { topic: "plans", body: "After A→B for @preserve-bot" }, cookie);
+	const afterRotation = await eventually(() => deliveries().find((item) => signedWith(item, secretB, secretA)));
+	expect(afterRotation).toBeDefined();
+	expect((await rpc(await modern(app.url, access, 3, "events/subscribe", params(secretB)))).body.result).toMatchObject({
+		resultType: "complete",
+	});
+	await app.post("/api/messages", { topic: "plans", body: "After B→B for @preserve-bot" }, cookie);
+	const afterRefresh = await eventually(() =>
+		deliveries().find((item) => item.body.includes("After B→B") && signedWith(item, secretB, secretA)),
+	);
+	expect(afterRefresh).toBeDefined();
+}, 40000);
+
+it("rejects modern requests with array-valued client capabilities", async (test) => {
+	const { app, cookie } = await installed(test);
+	const { access } = await connect(app.url, cookie, "Modern client", "modern-bot");
+	const response = await modern(app.url, access, 1, "tools/call", {
+		name: "search_messages",
+		arguments: { query: "test" },
+	});
+	expect(response.status).toBe(200);
+	const malformed = await fetch(`${app.url}/mcp`, {
+		method: "POST",
+		headers: {
+			authorization: `Bearer ${access}`,
+			accept: "application/json, text/event-stream",
+			"content-type": "application/json",
+			"mcp-protocol-version": "2026-07-28",
+		},
+		body: JSON.stringify({
+			jsonrpc: "2.0",
+			id: 2,
+			method: "tools/call",
+			params: {
+				name: "search_messages",
+				arguments: { query: "test" },
+				_meta: {
+					"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+					"io.modelcontextprotocol/clientCapabilities": [],
+				},
+			},
+		}),
+	});
+	expect(malformed.status).toBe(400);
+	const body: unknown = await malformed.json();
+	expect(Reflect.get(Object(body), "error")).toMatchObject({ code: -32602 });
+}, 40000);
+
 it("refuses callbacks that are not public HTTPS endpoints without connecting to them", async (test) => {
 	const { app, cookie } = await installed(test);
 	const { access } = await connect(app.url, cookie, "Event client", "gpt-bot");

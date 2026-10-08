@@ -135,7 +135,12 @@ export default (api: Api) =>
 						message.method !== "initialize" &&
 						(requested !== undefined || capabilities !== undefined || headerVersion === modernVersion)
 					) {
-						if (typeof requested !== "string" || typeof capabilities !== "object" || capabilities === null)
+						if (
+							typeof requested !== "string" ||
+							typeof capabilities !== "object" ||
+							capabilities === null ||
+							Array.isArray(capabilities)
+						)
 							return rpcError(
 								id,
 								-32602,
