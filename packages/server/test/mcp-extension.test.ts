@@ -317,9 +317,7 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 		"read_page",
 		"post_message",
 	]);
-	expect(listedTools.find((tool) => tool.name === "query_messages")?.description).toMatch(
-		/topic\/subtree OR mentions/,
-	);
+	expect(listedTools.find((tool) => tool.name === "query_messages")?.description).toMatch(/topic\/subtree OR mentions/);
 	expect((await call(reader.access, 20, "ping", undefined, "1900-01-01")).status).toBe(400);
 	const events = await fetch(`${app.url}/mcp`, {
 		headers: { authorization: `Bearer ${reader.access}`, accept: "text/event-stream" },
@@ -1600,14 +1598,7 @@ it("gives MCP clients paged queries, bounded topics, page reads and structured e
 
 	// topic and mentions combine with OR: mentions outside the topic still match.
 	expect(
-		(
-			await app.post(
-				"/api/messages",
-				{ topic: "parity/inbox", body: "in the inbox topic" },
-				cookie,
-				"or-topic",
-			)
-		).status,
+		(await app.post("/api/messages", { topic: "parity/inbox", body: "in the inbox topic" }, cookie, "or-topic")).status,
 	).toBe(200);
 	expect(
 		(

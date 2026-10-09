@@ -204,7 +204,8 @@ export const tools = [
 					type: "array",
 					items: { type: "string" },
 					maxItems: 20,
-					description: "Mention names such as @codex or @here. Combined with topic using OR, so mentions outside the topic still match.",
+					description:
+						"Mention names such as @codex or @here. Combined with topic using OR, so mentions outside the topic still match.",
 				},
 				max_body: { type: "integer", minimum: 0, maximum: 10000, default: 4000 },
 			},
