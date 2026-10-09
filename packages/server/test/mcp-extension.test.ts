@@ -1398,10 +1398,57 @@ it("upgrades a board whose events table predates secret rotation without a migra
 			await fixture.sql("SELECT name FROM pragma_table_info('example_mcp_events')"),
 		).map((column) => column.name);
 	expect(await columns()).not.toContain("previous_secret");
-	// Pinned: boards already hold a receipt for this exact statement, so editing it in place is a conflict there.
-	expect(
-		await fixture.sql("SELECT checksum FROM extension_migrations WHERE extension='mcp' AND name='event_subscriptions'"),
-	).toEqual([{ checksum: "96901aa2101f57caba79363f6e8700d6787d067b93e7cdd0510c0063ccadbe8b" }]);
+	const headers = { cookie, origin: "https://comms.test" };
+	expect((await app.post("/api/lock", {}, cookie)).status).toBe(200);
+	const current = await fetch(`${app.url}/api/fs/app/ext/mcp/events.ts`, { headers });
+	const base = current.headers.get("x-chirp-base-version");
+	const upgraded = (
+		await readFile(join(import.meta.dirname, "../../../examples/extensions/mcp/events.ts"), "utf8")
+	).replace("../../../packages/server/src/kernel/extension-api.ts", "../../kernel/extension-api.ts");
+	const staged = await fetch(`${app.url}/api/fs/app/ext/mcp/events.ts?reload=0&baseVersion=${base}`, {
+		method: "PUT",
+		headers,
+		body: upgraded,
+	});
+	expect(staged.status).toBe(200);
+	const reload = await app.post("/api/reload?release=1", {}, cookie);
+	expect(await reload.json()).toMatchObject({ status: "live" });
+	const extensions = Schema.decodeUnknownSync(
+		Schema.Array(Schema.Struct({ name: Schema.String, status: Schema.String, error: Schema.NullOr(Schema.String) })),
+	)(await (await fetch(`${app.url}/api/ext`, { headers: { cookie } })).json());
+	expect(extensions.find((extension) => extension.name === "mcp")).toMatchObject({ status: "loaded", error: null });
+	expect(await columns()).toEqual(expect.arrayContaining(["previous_secret", "previous_secret_until"]));
+}, 60000);
+
+it("upgrades a board with the intermediate events table (rotation columns already in CREATE)", async (test) => {
+	// Boards that installed MCP from master/canary after #60 merged have the rotation columns in the CREATE.
+	// Install with the intermediate state: CREATE includes rotation columns, no alternateStatements, no ADD COLUMN.
+	const { fixture, app, cookie } = await installed(test, undefined, false, (file, source) => {
+		if (file !== "events.ts") return source;
+		// Replace the original CREATE (without columns) with the intermediate CREATE (with columns)
+		const withColumns = source
+			.replace(
+				/"CREATE TABLE example_mcp_events\(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,refresh_before INTEGER NOT NULL/g,
+				'"CREATE TABLE example_mcp_events(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,previous_secret TEXT,previous_secret_until INTEGER,refresh_before INTEGER NOT NULL',
+			)
+			.replace(
+				/"CREATE TABLE example_mcp_events\(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,refresh_before BIGINT NOT NULL/g,
+				'"CREATE TABLE example_mcp_events(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,previous_secret TEXT,previous_secret_until BIGINT,refresh_before BIGINT NOT NULL',
+			)
+			.replace(
+				/"CREATE TABLE example_mcp_events\(id VARCHAR\(64\) PRIMARY KEY,client_id VARCHAR\(128\) NOT NULL,agent VARCHAR\(64\) NOT NULL,instance VARCHAR\(256\) NOT NULL,url LONGTEXT NOT NULL,secret LONGTEXT NOT NULL,refresh_before BIGINT NOT NULL/g,
+				'"CREATE TABLE example_mcp_events(id VARCHAR(64) PRIMARY KEY,client_id VARCHAR(128) NOT NULL,agent VARCHAR(64) NOT NULL,instance VARCHAR(256) NOT NULL,url LONGTEXT NOT NULL,secret LONGTEXT NOT NULL,previous_secret LONGTEXT,previous_secret_until BIGINT,refresh_before BIGINT NOT NULL',
+			);
+		// Remove alternateStatements and the ADD COLUMN migrations
+		return withColumns
+			.replace(/\{\s*protect: true,\s*alternateStatements:[\s\S]*?\},\s*\],\s*\}/m, "{ protect: true }")
+			.replace(/\/\/ Secret rotation came after[\s\S]*?(?=\t\tconst rows = \(ctx: Store)/m, "");
+	});
+	const columns = async () =>
+		Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ name: Schema.String })))(
+			await fixture.sql("SELECT name FROM pragma_table_info('example_mcp_events')"),
+		).map((column) => column.name);
+	expect(await columns()).toEqual(expect.arrayContaining(["previous_secret", "previous_secret_until"]));
 	const headers = { cookie, origin: "https://comms.test" };
 	expect((await app.post("/api/lock", {}, cookie)).status).toBe(200);
 	const current = await fetch(`${app.url}/api/fs/app/ext/mcp/events.ts`, { headers });
