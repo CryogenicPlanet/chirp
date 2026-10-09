@@ -494,7 +494,7 @@ export const callTool = (
 			const args = decode(PageInput, input.arguments ?? {});
 			const value = Option.getOrUndefined(args);
 			const maxBytes = bounded(value?.max_bytes, 100000, 1, 200000);
-			const path = value?.path.replace(/^\/?p\//, "").replace(/^\/+/, "") ?? "";
+			const path = value?.path.replace(/^\/p\//, "").replace(/^\/+/, "") ?? "";
 			if (!value || maxBytes === null || !path || path.split("/").some((part) => part === ".." || part === "."))
 				return toolError("input_invalid", "path must name a page below /p/ and max_bytes must be 1–200000");
 			// The page service applies the same publication fence and path checks as /p/, under this connection's read grant.
