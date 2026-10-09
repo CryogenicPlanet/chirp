@@ -1416,3 +1416,33 @@ it("upgrades a board whose events table predates secret rotation without a migra
 	expect(extensions.find((extension) => extension.name === "mcp")).toMatchObject({ status: "loaded", error: null });
 	expect(await columns()).toEqual(expect.arrayContaining(["previous_secret", "previous_secret_until"]));
 }, 60000);
+
+it("upgrades a board with the intermediate events table (rotation columns already in CREATE)", async (test) => {
+	// Boards that installed MCP from master/canary after #60 merged have the rotation columns in the CREATE.
+	const { fixture, app, cookie } = await installed(test);
+	const columns = async () =>
+		Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ name: Schema.String })))(
+			await fixture.sql("SELECT name FROM pragma_table_info('example_mcp_events')"),
+		).map((column) => column.name);
+	expect(await columns()).toEqual(expect.arrayContaining(["previous_secret", "previous_secret_until"]));
+	const headers = { cookie, origin: "https://comms.test" };
+	expect((await app.post("/api/lock", {}, cookie)).status).toBe(200);
+	const current = await fetch(`${app.url}/api/fs/app/ext/mcp/events.ts`, { headers });
+	const base = current.headers.get("x-chirp-base-version");
+	const upgraded = (
+		await readFile(join(import.meta.dirname, "../../../examples/extensions/mcp/events.ts"), "utf8")
+	).replace("../../../packages/server/src/kernel/extension-api.ts", "../../kernel/extension-api.ts");
+	const staged = await fetch(`${app.url}/api/fs/app/ext/mcp/events.ts?reload=0&baseVersion=${base}`, {
+		method: "PUT",
+		headers,
+		body: upgraded,
+	});
+	expect(staged.status).toBe(200);
+	const reload = await app.post("/api/reload?release=1", {}, cookie);
+	expect(await reload.json()).toMatchObject({ status: "live" });
+	const extensions = Schema.decodeUnknownSync(
+		Schema.Array(Schema.Struct({ name: Schema.String, status: Schema.String, error: Schema.NullOr(Schema.String) })),
+	)(await (await fetch(`${app.url}/api/ext`, { headers: { cookie } })).json());
+	expect(extensions.find((extension) => extension.name === "mcp")).toMatchObject({ status: "loaded", error: null });
+	expect(await columns()).toEqual(expect.arrayContaining(["previous_secret", "previous_secret_until"]));
+}, 60000);
