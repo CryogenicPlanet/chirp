@@ -132,6 +132,10 @@ export const makeExtensionMigrate = (sql: SqlClient.SqlClient, epoch: string, ex
 				});
 				if (mysql) {
 					if (yield* prior) return;
+					const columnExists = yield* skipColumnCheck;
+					if (columnExists) {
+						return yield* sql.withTransaction(receipt);
+					}
 					return yield* mysqlMigration(sql, epoch, extension, name, sql.withTransaction(operation), receipt);
 				}
 				yield* sql.withTransaction(

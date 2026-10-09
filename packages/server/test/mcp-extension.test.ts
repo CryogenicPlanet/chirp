@@ -1425,21 +1425,21 @@ it("upgrades a board with the intermediate events table (rotation columns alread
 		// Replace the original CREATE (without columns) with the intermediate CREATE (with columns)
 		const withColumns = source
 			.replace(
-				/CREATE TABLE example_mcp_events\(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,refresh_before INTEGER NOT NULL/,
-				"CREATE TABLE example_mcp_events(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,previous_secret TEXT,previous_secret_until INTEGER,refresh_before INTEGER NOT NULL",
+				/"CREATE TABLE example_mcp_events\(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,refresh_before INTEGER NOT NULL/g,
+				'"CREATE TABLE example_mcp_events(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,previous_secret TEXT,previous_secret_until INTEGER,refresh_before INTEGER NOT NULL',
 			)
 			.replace(
-				/CREATE TABLE example_mcp_events\(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,refresh_before BIGINT NOT NULL/,
-				"CREATE TABLE example_mcp_events(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,previous_secret TEXT,previous_secret_until BIGINT,refresh_before BIGINT NOT NULL",
+				/"CREATE TABLE example_mcp_events\(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,refresh_before BIGINT NOT NULL/g,
+				'"CREATE TABLE example_mcp_events(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,previous_secret TEXT,previous_secret_until BIGINT,refresh_before BIGINT NOT NULL',
 			)
 			.replace(
-				/CREATE TABLE example_mcp_events\(id VARCHAR\(64\) PRIMARY KEY,client_id VARCHAR\(128\) NOT NULL,agent VARCHAR\(64\) NOT NULL,instance VARCHAR\(256\) NOT NULL,url LONGTEXT NOT NULL,secret LONGTEXT NOT NULL,refresh_before BIGINT NOT NULL/,
-				"CREATE TABLE example_mcp_events(id VARCHAR(64) PRIMARY KEY,client_id VARCHAR(128) NOT NULL,agent VARCHAR(64) NOT NULL,instance VARCHAR(256) NOT NULL,url LONGTEXT NOT NULL,secret LONGTEXT NOT NULL,previous_secret LONGTEXT,previous_secret_until BIGINT,refresh_before BIGINT NOT NULL",
+				/"CREATE TABLE example_mcp_events\(id VARCHAR\(64\) PRIMARY KEY,client_id VARCHAR\(128\) NOT NULL,agent VARCHAR\(64\) NOT NULL,instance VARCHAR\(256\) NOT NULL,url LONGTEXT NOT NULL,secret LONGTEXT NOT NULL,refresh_before BIGINT NOT NULL/g,
+				'"CREATE TABLE example_mcp_events(id VARCHAR(64) PRIMARY KEY,client_id VARCHAR(128) NOT NULL,agent VARCHAR(64) NOT NULL,instance VARCHAR(256) NOT NULL,url LONGTEXT NOT NULL,secret LONGTEXT NOT NULL,previous_secret LONGTEXT,previous_secret_until BIGINT,refresh_before BIGINT NOT NULL',
 			);
 		// Remove alternateStatements and the ADD COLUMN migrations
 		return withColumns
-			.replace(/alternateStatements: \[\s*on\(sql,[\s\S]*?\},\s*\),\s*\],\s*/, "")
-			.replace(/\/\/ Secret rotation came after[\s\S]*?(?=\t\tconst rows = \(ctx: Store)/, "");
+			.replace(/\{\s*protect: true,\s*alternateStatements:[\s\S]*?\},\s*\],\s*\}/m, "{ protect: true }")
+			.replace(/\/\/ Secret rotation came after[\s\S]*?(?=\t\tconst rows = \(ctx: Store)/m, "");
 	});
 	const columns = async () =>
 		Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ name: Schema.String })))(
