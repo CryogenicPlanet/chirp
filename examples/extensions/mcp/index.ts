@@ -10,7 +10,7 @@ const supportedVersions: ReadonlyArray<string> = ["2025-03-26", "2025-06-18", pr
 const modernVersion = "2026-07-28";
 const serverInfo = { name: "chirp", title: "chirp", version: "1.0.0" };
 const instructions =
-	"Search and fetch before answering from the board, read_topic or query_messages for history, and read_page for page contents. Call connection_info to see your posting name and scopes. Use post_message and set_topic_meta only when the user asks you to write.";
+	"Search and fetch before answering from the board, read_topic or query_messages for history, and read_page for page contents. Call connection_info to see your posting name and scopes. Use post_message only when the user asks you to write.";
 const field = (value: unknown, key: string): unknown =>
 	typeof value === "object" && value !== null ? Reflect.get(value, key) : undefined;
 const boardOrigin = "https://your-board.example";
@@ -128,12 +128,18 @@ export default (api: Api) =>
 							const call = decode(ToolCall, params ?? {});
 							if (Option.isNone(call)) return undefined;
 							// Board refusals keep their code and recovery hint instead of collapsing into text.
-							return yield* callTool(ctx, origin, connection, caller, call.value).pipe(
+							const result = yield* callTool(ctx, origin, connection, caller, call.value).pipe(
 								Effect.catchTag("KernelError", (error) =>
 									Effect.succeed(toolError(error.code, undefined, error.detail?.hint)),
 								),
 								Effect.catchTag("PageRejected", (error) => Effect.succeed(toolError(error.code))),
 							);
+							// Strict clients check structuredContent against a tool's outputSchema even on errors,
+							// so a refusal from such a tool carries its structured error as text only.
+							const declared = tools.find((tool) => tool.name === call.value.name);
+							return "isError" in result && declared !== undefined && "outputSchema" in declared
+								? { content: result.content, isError: true }
+								: result;
 						});
 					const meta = field(message.params, "_meta");
 					const requested = field(meta, "io.modelcontextprotocol/protocolVersion");

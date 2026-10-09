@@ -1,4 +1,4 @@
-import { Duration, Effect, Option, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { HttpServerRequest } from "effect/unstable/http";
 import { policy } from "@comms/protocol/errors";
 import type { ManagedRequestContext } from "../../../packages/server/src/kernel/extension-api.ts";
@@ -27,11 +27,9 @@ const QueryInput = Schema.Struct({
 	tag: Schema.optionalKey(Schema.String),
 	q: Schema.optionalKey(Schema.String),
 	mentions: Schema.optionalKey(Schema.Array(Schema.String)),
-	wait: Schema.optionalKey(Schema.Int),
 	max_body: Schema.optionalKey(Schema.Int),
 });
 const PageInput = Schema.Struct({ path: Schema.String, max_bytes: Schema.optionalKey(Schema.Int) });
-const MetaInput = Schema.Struct({ path: Schema.String, meta: Schema.JsonObject, idempotencyKey: Schema.String });
 const PostInput = Schema.Struct({
 	topic: Schema.String,
 	body: Schema.String,
@@ -44,6 +42,7 @@ export const ToolCall = Schema.Struct({
 	arguments: Schema.optionalKey(Schema.Unknown),
 	_meta: Schema.optionalKey(Schema.JsonObject),
 });
+const PageRefusal = Schema.Struct({ error: Schema.Struct({ code: Schema.String }) });
 
 const decode = <A>(schema: Schema.ConstraintDecoder<A>, input: unknown) =>
 	Schema.decodeOption(schema, { onExcessProperty: "error" })(input);
@@ -53,6 +52,12 @@ type Listed = Effect.Success<ReturnType<ManagedRequestContext["messages"]["query
 const title = (message: Listed) => {
 	const first = message.body.split("\n", 1)[0]?.trim();
 	return `${message.topic || "chirp"} · #${message.seq} · ${message.agent}${first ? ` · ${first.slice(0, 100)}` : ""}`;
+};
+/** At most `length` UTF-16 units, without splitting a surrogate pair. */
+const cut = (text: string, length: number) => {
+	const end =
+		length > 0 && length < text.length && /[\uD800-\uDBFF]/.test(text.charAt(length - 1)) ? length - 1 : length;
+	return text.slice(0, end);
 };
 /** A bounded message for listings: bodies past maxBody are cut and say so, and fetch returns the full text. */
 const view = (origin: string, maxBody: number) => (message: Listed) => ({
@@ -65,7 +70,7 @@ const view = (origin: string, maxBody: number) => (message: Listed) => ({
 	edited_at: message.edited_at,
 	tags: message.tags,
 	meta: message.meta,
-	body: message.body.slice(0, maxBody),
+	body: cut(message.body, maxBody),
 	body_length: message.body.length,
 	body_truncated: message.body.length > maxBody,
 	url: messageUrl(origin, message.seq),
@@ -74,8 +79,18 @@ const toolResult = (value: Schema.JsonObject) => ({
 	content: [{ type: "text", text: JSON.stringify(value) }],
 	structuredContent: value,
 });
-const policies: Readonly<Record<string, { readonly status: number; readonly message: string; readonly hint: string }>> =
-	policy;
+type Policy = { readonly status: number; readonly message?: string; readonly hint: string };
+const policies: Readonly<Record<string, Policy>> = {
+	...policy,
+	// Page refusals come from the app's page service (page-failure.ts), not the shared protocol table.
+	page_not_found: { status: 404, hint: "Check that the page exists under /p/ and has not been deleted." },
+	page_path_invalid: { status: 400, hint: "Use a valid page path under /p/ without traversal or symlinks." },
+	pages_unavailable: {
+		status: 503,
+		hint: "The page store or publication state is unavailable. Retry the unchanged read; if it persists, inspect authenticated /_boot/status.",
+	},
+	pages_move_pending: { status: 503, hint: "This page tree is moving. Retry after the topic move finishes." },
+};
 /** The board's own refusal, with the same code, hint and retriability its HTTP API would return. */
 export const toolError = (code: string, message?: string, hint?: string) => {
 	const known = Object.hasOwn(policies, code) ? policies[code] : undefined;
@@ -96,7 +111,7 @@ export const tools = [
 		name: "connection_info",
 		title: "Describe this chirp connection",
 		description:
-			"Who this connection posts as, its scopes, the board and server versions, and which delivery paths exist: pull reads with query_messages, and mention events over webhooks for MCP 2026-07-28 clients. There is no server event stream.",
+			"Who this connection posts as, its scopes, the board and server versions, and which delivery paths exist: cursor reads with query_messages, and mention events over webhooks for MCP 2026-07-28 clients. There is no server event stream.",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false },
 		annotations: { readOnlyHint: true, openWorldHint: false },
 	},
@@ -165,11 +180,11 @@ export const tools = [
 		name: "query_messages",
 		title: "Query chirp messages",
 		description:
-			"Read messages with the board's filters and cursor. Without newest, results run oldest first from since (exclusive); pass the returned cursor as the next since until has_more is false. With newest, the latest matches come back without a cursor. wait (seconds) holds an empty forward read until something new is published. Bodies longer than max_body are cut and marked.",
+			"Read messages with the board's filters and cursor. Without newest, results run oldest first from since (exclusive); pass the returned cursor as the next since until has_more is false, and poll from the last cursor for new messages. With newest, the latest matches come back without a cursor. Bodies longer than max_body are cut and marked.",
 		inputSchema: {
 			type: "object",
 			properties: {
-				topic: { type: "string", description: "Topic path; mentions of an agent use @name." },
+				topic: { type: "string", description: "Topic path; an agent's home is @name." },
 				recursive: { type: "boolean", description: "Include subtopics; defaults to true when topic is set." },
 				since: { type: "integer", minimum: 0, description: "Cursor from a previous result; 0 reads from the start." },
 				newest: { type: "boolean", description: "Return the latest matches instead of reading forward." },
@@ -183,8 +198,7 @@ export const tools = [
 					maxItems: 20,
 					description: "For example @codex or @here.",
 				},
-				wait: { type: "integer", minimum: 0, maximum: 25, default: 0 },
-				max_body: { type: "integer", minimum: 0, maximum: 20000, default: 4000 },
+				max_body: { type: "integer", minimum: 0, maximum: 10000, default: 4000 },
 			},
 			additionalProperties: false,
 		},
@@ -205,7 +219,7 @@ export const tools = [
 				depth: { type: "integer", minimum: 0, maximum: 5, description: "Child-topic levels, not message volume." },
 				include_messages: { type: "boolean", default: true },
 				message_limit: { type: "integer", minimum: 0, maximum: 100, default: 20 },
-				max_body: { type: "integer", minimum: 0, maximum: 20000, default: 2000 },
+				max_body: { type: "integer", minimum: 0, maximum: 10000, default: 2000 },
 				archived: { type: "boolean", description: "Include archived child topics." },
 			},
 			additionalProperties: false,
@@ -231,23 +245,6 @@ export const tools = [
 			additionalProperties: false,
 		},
 		annotations: { readOnlyHint: true, openWorldHint: false },
-	},
-	{
-		name: "set_topic_meta",
-		title: "Set chirp topic metadata",
-		description:
-			"Replace a topic's metadata object, such as description or status, creating missing ancestors. Read the topic first and send the whole object. Requires write scope and a caller-chosen idempotency key.",
-		inputSchema: {
-			type: "object",
-			properties: {
-				path: { type: "string", minLength: 1 },
-				meta: { type: "object" },
-				idempotencyKey: { type: "string", minLength: 1, maxLength: 156 },
-			},
-			required: ["path", "meta", "idempotencyKey"],
-			additionalProperties: false,
-		},
-		annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
 	},
 	{
 		name: "post_message",
@@ -282,6 +279,43 @@ export interface Connection {
 	readonly events: ReadonlyArray<string>;
 }
 
+/** One page read, following the board's redirect from a directory name to its listing. */
+const readPage = (ctx: ManagedRequestContext, origin: string, path: string) =>
+	Effect.scoped(
+		Effect.gen(function* () {
+			const serve = (target: string) =>
+				ctx.pages.serve(HttpServerRequest.fromWeb(new Request(`${pageUrl(origin, target)}?raw=1`)), {
+					root: "",
+					mount: "/p",
+				});
+			const first = yield* serve(path);
+			const response =
+				first.status >= 300 && first.status < 400 && !path.endsWith("/") ? yield* serve(`${path}/`) : first;
+			const type = response.headers.get("content-type") ?? "application/octet-stream";
+			const textual = /^(text\/|application\/(json|xml|javascript))|\+json|\+xml/.test(type);
+			// Binary pages report their size without being read into memory.
+			// A body that cannot be read is a retriable page-store failure, never a handler crash.
+			const body = <A>(read: () => Promise<A>) => Effect.tryPromise(read).pipe(Effect.option);
+			const bytes = response.ok && textual ? yield* body(() => response.arrayBuffer()) : Option.none();
+			const refusal = response.ok
+				? undefined
+				: Option.flatMap(yield* body(() => response.text()), (text) =>
+						Schema.decodeUnknownOption(Schema.fromJsonString(PageRefusal))(text),
+					).pipe(
+						Option.map((parsed) => parsed.error.code),
+						Option.getOrUndefined,
+					);
+			if (response.ok && !textual) yield* body(() => response.body?.cancel() ?? Promise.resolve());
+			return {
+				status: response.ok && textual && Option.isNone(bytes) ? 503 : response.status,
+				type,
+				bytes: Option.match(bytes, { onNone: () => null, onSome: (buffer) => new Uint8Array(buffer) }),
+				size: Number(response.headers.get("content-length") ?? Number.NaN),
+				refusal,
+			};
+		}),
+	);
+
 export const callTool = (
 	ctx: ManagedRequestContext,
 	origin: string,
@@ -295,10 +329,9 @@ export const callTool = (
 	input: typeof ToolCall.Type,
 ) =>
 	Effect.gen(function* () {
-		const key = (idempotencyKey: string) => `${caller.clientId}:${idempotencyKey}`;
-		const unwritable = () => toolError("scope_required", "This connection was not granted write.");
 		if (input.name === "post_message") {
-			if (!caller.scopes.includes("write")) return unwritable();
+			if (!caller.scopes.includes("write"))
+				return toolError("scope_required", "This connection was not granted write.");
 			if (!caller.agent)
 				return toolError(
 					"posting_name_missing",
@@ -319,17 +352,10 @@ export const callTool = (
 					...(args.value.tags === undefined ? {} : { tags: args.value.tags }),
 					meta: { ...args.value.meta, mcp_client_id: caller.clientId, mcp_approved_by: caller.subject },
 				},
-				key(args.value.idempotencyKey),
+				`${caller.clientId}:${args.value.idempotencyKey}`,
 				{ agent: caller.agent, instance: caller.clientId },
 			);
 			return toolResult(message);
-		}
-		if (input.name === "set_topic_meta") {
-			if (!caller.scopes.includes("write")) return unwritable();
-			const args = decode(MetaInput, input.arguments ?? {});
-			if (Option.isNone(args) || args.value.idempotencyKey.length < 1 || args.value.idempotencyKey.length > 156)
-				return toolError("input_invalid", "path, a meta object and an idempotencyKey of 1–156 characters are required");
-			return toolResult(yield* ctx.topics.meta(args.value.path, args.value.meta, key(args.value.idempotencyKey)));
 		}
 		if (!caller.scopes.includes("read")) return toolError("scope_required", "This connection was not granted read.");
 		if (input.name === "connection_info")
@@ -344,7 +370,7 @@ export const callTool = (
 				protocol_versions: connection.protocolVersions,
 				tools: tools.map((tool) => tool.name),
 				delivery: {
-					pull: "query_messages: forward reads from a since cursor, with wait up to 25 seconds",
+					pull: "query_messages: forward reads from a since cursor; poll from the last cursor for new messages",
 					events: connection.events,
 					events_transport: "Signed webhooks via events/subscribe, for MCP 2026-07-28 clients only",
 					server_stream: false,
@@ -374,7 +400,14 @@ export const callTool = (
 			const match = Option.isSome(args) ? /^message:([1-9][0-9]*)$/.exec(args.value.id) : null;
 			const seq = Number(match?.[1]);
 			if (!Number.isSafeInteger(seq)) return toolError("input_invalid", "id must be a message id returned by search");
-			const page = yield* ctx.messages.query({ since: seq - 1, limit: 1 });
+			// An id past the publication fence is simply not a published message, not a cursor error.
+			const page = yield* ctx.messages
+				.query({ since: seq - 1, limit: 1 })
+				.pipe(
+					Effect.catchTag("KernelError", (error) =>
+						error.code === "cursor_ahead" ? Effect.succeed({ items: [] }) : Effect.fail(error),
+					),
+				);
 			const message = page.items.find((item) => item.seq === seq);
 			if (!message) return toolError("message_not_found", `message:${seq} is not published or no longer visible`);
 			return toolResult({
@@ -397,50 +430,34 @@ export const callTool = (
 			const args = decode(QueryInput, input.arguments ?? {});
 			const value = Option.getOrUndefined(args);
 			const limit = bounded(value?.limit, 50, 1, 100);
-			const wait = bounded(value?.wait, 0, 0, 25);
-			const maxBody = bounded(value?.max_body, 4000, 0, 20000);
+			const maxBody = bounded(value?.max_body, 4000, 0, 10000);
 			if (
 				!value ||
 				limit === null ||
-				wait === null ||
 				maxBody === null ||
 				(value.since !== undefined && value.since < 0) ||
 				(value.mentions?.length ?? 0) > 20 ||
-				(value.newest === true && (wait > 0 || value.since !== undefined))
+				(value.newest === true && value.since !== undefined)
 			)
 				return toolError(
 					"input_invalid",
-					"limit 1–100, wait 0–25, max_body 0–20000, since ≥ 0, at most 20 mentions; newest cannot be combined with since or wait",
+					"limit 1–100, max_body 0–10000, since ≥ 0, at most 20 mentions; newest cannot be combined with since",
 				);
-			const query = {
+			// No wait: an MCP call is an in-flight write to boot, so holding one open would delay reloads and backups.
+			const page = yield* ctx.messages.query({
 				limit,
 				...(value.topic === undefined ? {} : { topic: value.topic, recursive: value.recursive ?? true }),
+				...(value.since === undefined ? {} : { since: value.since }),
 				...(value.newest ? { newest: true } : {}),
 				...(value.agent === undefined ? {} : { agent: value.agent }),
 				...(value.tag === undefined ? {} : { tag: value.tag }),
 				...(value.q === undefined ? {} : { q: value.q }),
 				...(value.mentions === undefined ? {} : { mentions: value.mentions }),
-			};
-			const first = yield* ctx.messages.query({
-				...query,
-				...(value.since === undefined ? {} : { since: value.since }),
 			});
-			// A forward read that found nothing may wait for the next publication, then read once more from its cursor.
-			const page =
-				wait > 0 && first.items.length === 0
-					? yield* ctx.events.changed(first.cursor).pipe(
-							Effect.timeoutOption(Duration.seconds(wait)),
-							Effect.flatMap((changed) =>
-								Option.isSome(changed)
-									? ctx.messages.query({ ...query, since: first.cursor })
-									: Effect.succeed({ ...first, timed_out: true }),
-							),
-						)
-					: first;
 			return toolResult({
 				items: page.items.map(view(origin, maxBody)),
+				// has_more can be true once more than needed: the next page then comes back empty.
 				...(value.newest ? {} : { cursor: page.cursor, has_more: page.items.length >= limit || page.drained }),
-				timed_out: page.timed_out,
 			});
 		}
 		if (input.name === "read_topic") {
@@ -448,15 +465,14 @@ export const callTool = (
 			const value = Option.getOrUndefined(args);
 			const depth = bounded(value?.depth, 1, 0, 5);
 			const messageLimit = bounded(value?.message_limit, 20, 0, 100);
-			const maxBody = bounded(value?.max_body, 2000, 0, 20000);
+			const maxBody = bounded(value?.max_body, 2000, 0, 10000);
 			if (!value || depth === null || messageLimit === null || maxBody === null)
-				return toolError("input_invalid", "depth 0–5, message_limit 0–100 and max_body 0–20000");
+				return toolError("input_invalid", "depth 0–5, message_limit 0–100 and max_body 0–10000");
 			const topic = yield* ctx.topics.read(value.path ?? "", {
 				depth,
 				...(value.archived === undefined ? {} : { archived: value.archived }),
 			});
 			const shown = value.include_messages === false || messageLimit === 0 ? [] : topic.messages.slice(-messageLimit);
-			const readme = topic.index?.slice(0, 20000) ?? null;
 			return toolResult({
 				path: topic.path,
 				meta: topic.meta,
@@ -464,7 +480,7 @@ export const callTool = (
 				archived_root: topic.archived_root,
 				unread: topic.unread,
 				fence: topic.fence,
-				index: readme,
+				index: topic.index === null ? null : cut(topic.index, 20000),
 				index_truncated: (topic.index?.length ?? 0) > 20000,
 				pages: topic.pages,
 				subtopics: topic.subtopics,
@@ -481,29 +497,25 @@ export const callTool = (
 			const path = value?.path.replace(/^\/?p\//, "").replace(/^\/+/, "") ?? "";
 			if (!value || maxBytes === null || !path || path.split("/").some((part) => part === ".." || part === "."))
 				return toolError("input_invalid", "path must name a page below /p/ and max_bytes must be 1–200000");
-			// The page service reads through the same publication fence and path checks as /p/, under this connection's read grant.
-			const request = HttpServerRequest.fromWeb(new Request(`${pageUrl(origin, path)}?raw=1`));
-			const page = yield* Effect.scoped(
-				Effect.gen(function* () {
-					const response = yield* ctx.pages.serve(request, { root: "", mount: "/p" });
-					const type = response.headers.get("content-type") ?? "application/octet-stream";
-					const textual = /^(text\/|application\/(json|xml|javascript))|\+json|\+xml/.test(type);
-					const bytes = response.ok ? new Uint8Array(yield* Effect.promise(() => response.arrayBuffer())) : null;
-					return { status: response.status, type, textual, bytes };
-				}),
-			);
-			if (page.status === 404 || !page.bytes) return toolError("page_not_found", `No published page at ${path}`);
+			// The page service applies the same publication fence and path checks as /p/, under this connection's read grant.
+			const page = yield* readPage(ctx, origin, path);
+			if (page.status >= 400)
+				return toolError(page.refusal ?? (page.status === 404 ? "page_not_found" : "pages_unavailable"));
 			return toolResult({
 				path,
 				url: pageUrl(origin, path),
 				content_type: page.type,
-				bytes: page.bytes.byteLength,
-				...(page.textual
+				...(page.bytes
 					? {
-							text: new TextDecoder().decode(page.bytes.subarray(0, maxBytes)),
+							bytes: page.bytes.byteLength,
+							// A cut through a multibyte character decodes to a trailing replacement character; drop it.
+							text:
+								page.bytes.byteLength > maxBytes
+									? new TextDecoder().decode(page.bytes.subarray(0, maxBytes)).replace(/�$/, "")
+									: new TextDecoder().decode(page.bytes),
 							truncated: page.bytes.byteLength > maxBytes,
 						}
-					: { text: null, truncated: false }),
+					: { bytes: Number.isFinite(page.size) ? page.size : null, text: null, truncated: false }),
 			});
 		}
 		return toolError("tool_unknown", `Unknown tool: ${input.name}`);
