@@ -2,6 +2,7 @@
 	"extends": "./tsconfig.base.json",
 	"compilerOptions": {
 		"paths": {
+			"@comms/protocol/*": ["./packages/protocol/src/*"],
 			"@comms/storage/*": ["./packages/storage/src/*"]
 		}
 	},

@@ -308,9 +308,13 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 	});
 	const listed = await (await call(reader.access, 2, "tools/list")).json();
 	expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
+		"connection_info",
 		"search",
 		"fetch",
+		"query_messages",
 		"read_topic",
+		"read_page",
+		"set_topic_meta",
 		"post_message",
 	]);
 	expect((await call(reader.access, 20, "ping", undefined, "1900-01-01")).status).toBe(400);
@@ -1415,4 +1419,165 @@ it("upgrades a board whose events table predates secret rotation without a migra
 	)(await (await fetch(`${app.url}/api/ext`, { headers: { cookie } })).json());
 	expect(extensions.find((extension) => extension.name === "mcp")).toMatchObject({ status: "loaded", error: null });
 	expect(await columns()).toEqual(expect.arrayContaining(["previous_secret", "previous_secret_until"]));
+}, 60000);
+
+it("gives MCP clients paged queries, bounded topics, page reads, topic metadata and structured errors", async (test) => {
+	const { app, cookie } = await installed(test);
+	const boardHeaders = { cookie, origin: "https://comms.test", "content-type": "application/json" };
+	const register = await fetch(`${app.url}/mcp/oauth/register`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ client_name: "Parity client", redirect_uris: ["https://client.test/callback"] }),
+	});
+	const clientId = stringField(await register.json(), "client_id");
+	const verifier = createHash("sha256").update("parity-verifier").digest("base64url");
+	const query = new URLSearchParams({
+		response_type: "code",
+		client_id: clientId,
+		redirect_uri: "https://client.test/callback",
+		code_challenge: createHash("sha256").update(verifier).digest("base64url"),
+		code_challenge_method: "S256",
+		resource: "https://comms.test/mcp",
+	});
+	const approval = await fetch(`${app.url}/mcp/oauth/authorize`, {
+		method: "POST",
+		redirect: "manual",
+		headers: { cookie, origin: "https://comms.test", "content-type": "application/x-www-form-urlencoded" },
+		body: new URLSearchParams({ ...Object.fromEntries(query), decision: "approve", agent: "parity-bot" }),
+	});
+	const code = new URL(approval.headers.get("location") ?? "").searchParams.get("code") ?? "";
+	const token = await fetch(`${app.url}/mcp/oauth/token`, {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded" },
+		body: new URLSearchParams({
+			grant_type: "authorization_code",
+			client_id: clientId,
+			redirect_uri: "https://client.test/callback",
+			resource: "https://comms.test/mcp",
+			code,
+			code_verifier: verifier,
+		}),
+	});
+	const access = stringField(await token.json(), "access_token");
+	let id = 0;
+	const tool = async (name: string, args: Readonly<Record<string, unknown>> = {}) => {
+		const response = await fetch(`${app.url}/mcp`, {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${access}`,
+				accept: "application/json, text/event-stream",
+				"content-type": "application/json",
+				"mcp-protocol-version": "2025-11-25",
+			},
+			body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method: "tools/call", params: { name, arguments: args } }),
+		});
+		const text = await response.text();
+		try {
+			const body = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(text);
+			return Schema.decodeUnknownSync(
+				Schema.Struct({
+					result: Schema.Struct({ structuredContent: Schema.Unknown, isError: Schema.optionalKey(Schema.Boolean) }),
+				}),
+			)(body).result;
+		} catch (error) {
+			throw new Error(`${name} returned ${response.status} ${text.slice(0, 600)}`, { cause: error });
+		}
+	};
+
+	expect((await tool("connection_info")).structuredContent).toMatchObject({
+		posting_name: "parity-bot",
+		scopes: ["read", "write"],
+		client_id: clientId,
+		delivery: { server_stream: false, events: ["mention.created"] },
+	});
+
+	// Twenty-five matches are fully retrievable by cursor, with completeness explicit.
+	for (let index = 0; index < 25; index++)
+		expect(
+			(
+				await app.post(
+					"/api/messages",
+					{ topic: "parity/history", body: `milestone ${index} ${"x".repeat(index === 0 ? 300 : 0)}` },
+					cookie,
+					`history-${index}`,
+				)
+			).status,
+		).toBe(200);
+	const Page = Schema.Struct({
+		items: Schema.Array(
+			Schema.Struct({ seq: Schema.Int, body: Schema.String, body_truncated: Schema.Boolean, body_length: Schema.Int }),
+		),
+		cursor: Schema.Int,
+		has_more: Schema.Boolean,
+	});
+	const seen: Array<number> = [];
+	let since = 0;
+	for (let round = 0; round < 50; round++) {
+		const page = Schema.decodeUnknownSync(Page)(
+			(await tool("query_messages", { topic: "parity", q: "milestone", since, limit: 10, max_body: 100 }))
+				.structuredContent,
+		);
+		seen.push(...page.items.map((item) => item.seq));
+		since = page.cursor;
+		if (!page.has_more) break;
+	}
+	expect(new Set(seen).size).toBe(25);
+	const firstPage = Schema.decodeUnknownSync(Page)(
+		(await tool("query_messages", { topic: "parity/history", since: 0, limit: 1, max_body: 100 })).structuredContent,
+	);
+	expect(firstPage.items[0]).toMatchObject({ body_truncated: true, body_length: 312 });
+	expect(firstPage.has_more).toBe(true);
+	expect((await tool("query_messages", { newest: true, wait: 5 })).isError).toBe(true);
+
+	// An empty forward read waits for the next publication instead of polling.
+	const tail = Schema.decodeUnknownSync(Schema.Struct({ items: Schema.Array(Schema.Struct({ seq: Schema.Int })) }))(
+		(await tool("query_messages", { topic: "parity", newest: true, limit: 1 })).structuredContent,
+	).items[0]?.seq;
+	const waiting = tool("query_messages", { topic: "parity/live", since: tail, wait: 10 });
+	await delay(300);
+	await app.post("/api/messages", { topic: "parity/live", body: "arrived while waiting" }, cookie, "live-1");
+	expect((await waiting).structuredContent).toMatchObject({ items: [{ body: "arrived while waiting" }] });
+
+	// Topic reads are bounded, and discovery can skip messages entirely.
+	expect(
+		(await tool("read_topic", { path: "parity/history", message_limit: 3, max_body: 10 })).structuredContent,
+	).toMatchObject({
+		messages_returned: 3,
+		messages_in_view: 25,
+		more_messages: true,
+	});
+	expect((await tool("read_topic", { path: "parity", include_messages: false })).structuredContent).toMatchObject({
+		messages: [],
+		messages_returned: 0,
+	});
+
+	// Pages read raw, under the same grant; a missing page is a structured refusal.
+	const published = await fetch(`${app.url}/api/fs/pages/parity/plan.md?baseVersion=null`, {
+		method: "PUT",
+		headers: { cookie, origin: "https://comms.test" },
+		body: "# Plan\n\nShip the parity tools.",
+	});
+	expect(published.status).toBe(200);
+	expect((await tool("read_page", { path: "/p/parity/plan.md" })).structuredContent).toMatchObject({
+		path: "parity/plan.md",
+		text: "# Plan\n\nShip the parity tools.",
+		truncated: false,
+	});
+	expect(await tool("read_page", { path: "parity/missing.md" })).toMatchObject({
+		isError: true,
+		structuredContent: { error: { code: "page_not_found", retriable: false } },
+	});
+
+	// Topic metadata writes are idempotent per key, and kernel refusals keep their code and hint.
+	expect(
+		(await tool("set_topic_meta", { path: "parity", meta: { description: "MCP parity" }, idempotencyKey: "meta-1" }))
+			.structuredContent,
+	).toMatchObject({ meta: { description: "MCP parity" } });
+	expect((await (await fetch(`${app.url}/api/topics/parity?mark=0`, { headers: boardHeaders })).json()).meta).toEqual({
+		description: "MCP parity",
+	});
+	expect(await tool("read_topic", { path: "parity/nowhere" })).toMatchObject({
+		isError: true,
+		structuredContent: { error: { code: "topic_not_found", hint: expect.stringContaining("topic path") } },
+	});
 }, 60000);
