@@ -26,7 +26,12 @@ it("keeps MCP absent until its extension package is installed", async (test) => 
 	expect((await fetch(`${app.url}/mcp`, { headers: { cookie } })).status).toBeGreaterThanOrEqual(400);
 }, 20000);
 
-const installed = async (test: TestContext, mcpOrigin?: string, localCallbacks = false) => {
+const installed = async (
+	test: TestContext,
+	mcpOrigin?: string,
+	localCallbacks = false,
+	edit = (_file: string, source: string) => source,
+) => {
 	const fixture = await conversation(test);
 	const seed = join(fixture.root, "seed");
 	await cp(join(import.meta.dirname, "../src"), seed, { recursive: true });
@@ -39,9 +44,12 @@ const installed = async (test: TestContext, mcpOrigin?: string, localCallbacks =
 			.replace("const allowLocalCallbacks = false;", `const allowLocalCallbacks = ${localCallbacks};`);
 		await writeFile(
 			path,
-			mcpOrigin === undefined
-				? source
-				: source.replace("const mcpOrigin = boardOrigin;", `const mcpOrigin = ${JSON.stringify(mcpOrigin)};`),
+			edit(
+				file,
+				mcpOrigin === undefined
+					? source
+					: source.replace("const mcpOrigin = boardOrigin;", `const mcpOrigin = ${JSON.stringify(mcpOrigin)};`),
+			),
 		);
 	}
 	await writeFile(join(fixture.root, "boot.config.json"), JSON.stringify({ applicationManagedIngress: true }));
@@ -1375,3 +1383,36 @@ it("rejects malformed modern envelope before legacy fallback", async (test) => {
 		},
 	});
 }, 30000);
+
+it("upgrades a board whose events table predates secret rotation without a migration conflict", async (test) => {
+	// The first published events package created the table without the rotation columns; the live board ran it.
+	const ladder = /\t\t\/\/ Secret rotation came after[\s\S]*?(?=\t\tconst rows = \(ctx: Store)/;
+	const { fixture, app, cookie } = await installed(test, undefined, false, (file, source) =>
+		file === "events.ts" ? source.replace(ladder, "") : source,
+	);
+	const columns = async () =>
+		Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ name: Schema.String })))(
+			await fixture.sql("SELECT name FROM pragma_table_info('example_mcp_events')"),
+		).map((column) => column.name);
+	expect(await columns()).not.toContain("previous_secret");
+	const headers = { cookie, origin: "https://comms.test" };
+	expect((await app.post("/api/lock", {}, cookie)).status).toBe(200);
+	const current = await fetch(`${app.url}/api/fs/app/ext/mcp/events.ts`, { headers });
+	const base = current.headers.get("x-chirp-base-version");
+	const upgraded = (
+		await readFile(join(import.meta.dirname, "../../../examples/extensions/mcp/events.ts"), "utf8")
+	).replace("../../../packages/server/src/kernel/extension-api.ts", "../../kernel/extension-api.ts");
+	const staged = await fetch(`${app.url}/api/fs/app/ext/mcp/events.ts?reload=0&baseVersion=${base}`, {
+		method: "PUT",
+		headers,
+		body: upgraded,
+	});
+	expect(staged.status).toBe(200);
+	const reload = await app.post("/api/reload?release=1", {}, cookie);
+	expect(await reload.json()).toMatchObject({ status: "live" });
+	const extensions = Schema.decodeUnknownSync(
+		Schema.Array(Schema.Struct({ name: Schema.String, status: Schema.String, error: Schema.NullOr(Schema.String) })),
+	)(await (await fetch(`${app.url}/api/ext`, { headers: { cookie } })).json());
+	expect(extensions.find((extension) => extension.name === "mcp")).toMatchObject({ status: "loaded", error: null });
+	expect(await columns()).toEqual(expect.arrayContaining(["previous_secret", "previous_secret_until"]));
+}, 60000);

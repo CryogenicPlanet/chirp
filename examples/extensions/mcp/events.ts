@@ -162,13 +162,31 @@ export const installEvents = (api: Api, origin: string) =>
 			"event_subscriptions",
 			on(sql, {
 				sqlite: () =>
-					"CREATE TABLE example_mcp_events(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,previous_secret TEXT,previous_secret_until INTEGER,refresh_before INTEGER NOT NULL,verified_at INTEGER NOT NULL,position INTEGER NOT NULL,attempts INTEGER NOT NULL,next_attempt INTEGER NOT NULL,last_error TEXT)",
+					"CREATE TABLE example_mcp_events(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,refresh_before INTEGER NOT NULL,verified_at INTEGER NOT NULL,position INTEGER NOT NULL,attempts INTEGER NOT NULL,next_attempt INTEGER NOT NULL,last_error TEXT)",
 				pg: () =>
-					"CREATE TABLE example_mcp_events(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,previous_secret TEXT,previous_secret_until BIGINT,refresh_before BIGINT NOT NULL,verified_at BIGINT NOT NULL,position BIGINT NOT NULL,attempts INTEGER NOT NULL,next_attempt BIGINT NOT NULL,last_error TEXT)",
+					"CREATE TABLE example_mcp_events(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,refresh_before BIGINT NOT NULL,verified_at BIGINT NOT NULL,position BIGINT NOT NULL,attempts INTEGER NOT NULL,next_attempt BIGINT NOT NULL,last_error TEXT)",
 				mysql: () =>
-					"CREATE TABLE example_mcp_events(id VARCHAR(64) PRIMARY KEY,client_id VARCHAR(128) NOT NULL,agent VARCHAR(64) NOT NULL,instance VARCHAR(256) NOT NULL,url LONGTEXT NOT NULL,secret LONGTEXT NOT NULL,previous_secret LONGTEXT,previous_secret_until BIGINT,refresh_before BIGINT NOT NULL,verified_at BIGINT NOT NULL,position BIGINT NOT NULL,attempts INTEGER NOT NULL,next_attempt BIGINT NOT NULL,last_error VARCHAR(32)) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin",
+					"CREATE TABLE example_mcp_events(id VARCHAR(64) PRIMARY KEY,client_id VARCHAR(128) NOT NULL,agent VARCHAR(64) NOT NULL,instance VARCHAR(256) NOT NULL,url LONGTEXT NOT NULL,secret LONGTEXT NOT NULL,refresh_before BIGINT NOT NULL,verified_at BIGINT NOT NULL,position BIGINT NOT NULL,attempts INTEGER NOT NULL,next_attempt BIGINT NOT NULL,last_error VARCHAR(32)) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin",
 			}),
 			{ protect: true },
+		);
+		// Secret rotation came after boards had created the table, so it is added by later steps rather than by
+		// editing the first one: a changed migration is refused as extension_migration_conflict on those boards.
+		yield* api.migrate(
+			"event_previous_secret",
+			on(sql, {
+				sqlite: () => "ALTER TABLE example_mcp_events ADD COLUMN previous_secret TEXT",
+				pg: () => "ALTER TABLE example_mcp_events ADD COLUMN previous_secret TEXT",
+				mysql: () => "ALTER TABLE example_mcp_events ADD COLUMN previous_secret LONGTEXT",
+			}),
+		);
+		yield* api.migrate(
+			"event_previous_secret_until",
+			on(sql, {
+				sqlite: () => "ALTER TABLE example_mcp_events ADD COLUMN previous_secret_until INTEGER",
+				pg: () => "ALTER TABLE example_mcp_events ADD COLUMN previous_secret_until BIGINT",
+				mysql: () => "ALTER TABLE example_mcp_events ADD COLUMN previous_secret_until BIGINT",
+			}),
 		);
 		const rows = (ctx: Store, clientId?: string) =>
 			ctx.read(() =>
