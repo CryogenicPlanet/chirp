@@ -204,6 +204,24 @@ export const installEvents = (api: Api, origin: string) =>
 			}),
 			{ skipIfColumnExists: { table: "example_mcp_events", column: "previous_secret_until" } },
 		);
+		// Secret rotation came after boards had created the table, so it is added by later steps rather than by
+		// editing the first one: a changed migration is refused as extension_migration_conflict on those boards.
+		yield* api.migrate(
+			"event_previous_secret",
+			on(sql, {
+				sqlite: () => "ALTER TABLE example_mcp_events ADD COLUMN previous_secret TEXT",
+				pg: () => "ALTER TABLE example_mcp_events ADD COLUMN previous_secret TEXT",
+				mysql: () => "ALTER TABLE example_mcp_events ADD COLUMN previous_secret LONGTEXT",
+			}),
+		);
+		yield* api.migrate(
+			"event_previous_secret_until",
+			on(sql, {
+				sqlite: () => "ALTER TABLE example_mcp_events ADD COLUMN previous_secret_until INTEGER",
+				pg: () => "ALTER TABLE example_mcp_events ADD COLUMN previous_secret_until BIGINT",
+				mysql: () => "ALTER TABLE example_mcp_events ADD COLUMN previous_secret_until BIGINT",
+			}),
+		);
 		const rows = (ctx: Store, clientId?: string) =>
 			ctx.read(() =>
 				(clientId === undefined

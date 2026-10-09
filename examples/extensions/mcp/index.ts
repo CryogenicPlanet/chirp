@@ -10,7 +10,7 @@ const supportedVersions: ReadonlyArray<string> = ["2025-03-26", "2025-06-18", pr
 const modernVersion = "2026-07-28";
 const serverInfo = { name: "chirp", title: "chirp", version: "1.0.0" };
 const instructions =
-	"Search and fetch before answering from the board. Use post_message only when the user asks you to write.";
+	"Search and fetch before answering from the board, read_topic or query_messages for history, and read_page for page contents. Call connection_info to see your posting name and scopes. Use post_message only when the user asks you to write.";
 const field = (value: unknown, key: string): unknown =>
 	typeof value === "object" && value !== null ? Reflect.get(value, key) : undefined;
 const boardOrigin = "https://your-board.example";
@@ -67,6 +67,12 @@ export default (api: Api) =>
 			return yield* Effect.die("Set boardOrigin and mcpOrigin to this board's exact HTTPS origins before enabling MCP");
 		const authenticate = yield* installOAuth(api, origin, resourceOrigin);
 		const events = yield* installEvents(api, origin);
+		const connection = {
+			mcpUrl: `${resourceOrigin}/mcp`,
+			server: { name: serverInfo.name, version: serverInfo.version },
+			protocolVersions: [modernVersion, ...supportedVersions],
+			events: events.list.events.map((event) => event.name),
+		};
 		api.route("GET", "/mcp", {
 			description: "Decline the optional MCP server event stream because this extension is stateless.",
 			access: "application-managed",
@@ -121,11 +127,19 @@ export default (api: Api) =>
 						Effect.gen(function* () {
 							const call = decode(ToolCall, params ?? {});
 							if (Option.isNone(call)) return undefined;
-							return yield* callTool(ctx, origin, caller, call.value).pipe(
+							// Board refusals keep their code and recovery hint instead of collapsing into text.
+							const result = yield* callTool(ctx, origin, connection, caller, call.value).pipe(
 								Effect.catchTag("KernelError", (error) =>
-									Effect.succeed(toolError(`Chirp refused the tool call: ${error.code}`)),
+									Effect.succeed(toolError(error.code, undefined, error.detail?.hint)),
 								),
+								Effect.catchTag("PageRejected", (error) => Effect.succeed(toolError(error.code))),
 							);
+							// Strict clients check structuredContent against a tool's outputSchema even on errors,
+							// so a refusal from such a tool carries its structured error as text only.
+							const declared = tools.find((tool) => tool.name === call.value.name);
+							return "isError" in result && declared !== undefined && "outputSchema" in declared
+								? { content: result.content, isError: true }
+								: result;
 						});
 					const meta = field(message.params, "_meta");
 					const requested = field(meta, "io.modelcontextprotocol/protocolVersion");
