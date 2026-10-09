@@ -42,7 +42,9 @@ export const ToolCall = Schema.Struct({
 	arguments: Schema.optionalKey(Schema.Unknown),
 	_meta: Schema.optionalKey(Schema.JsonObject),
 });
-const PageRefusal = Schema.Struct({ error: Schema.Struct({ code: Schema.String }) });
+const PageRefusal = Schema.Struct({
+	error: Schema.Struct({ code: Schema.String, hint: Schema.optionalKey(Schema.String) }),
+});
 
 const decode = <A>(schema: Schema.ConstraintDecoder<A>, input: unknown) =>
 	Schema.decodeOption(schema, { onExcessProperty: "error" })(input);
@@ -89,7 +91,10 @@ const policies: Readonly<Record<string, Policy>> = {
 		status: 503,
 		hint: "The page store or publication state is unavailable. Retry the unchanged read; if it persists, inspect authenticated /_boot/status.",
 	},
-	pages_move_pending: { status: 503, hint: "This page tree is moving. Retry after the topic move finishes." },
+	pages_move_pending: {
+		status: 503,
+		hint: "This page tree is moving. Finish the original topic move with its original Idempotency-Key if one was supplied; other topics remain available.",
+	},
 };
 /** The board's own refusal, with the same code, hint and retriability its HTTP API would return. */
 export const toolError = (code: string, message?: string, hint?: string) => {
@@ -180,11 +185,14 @@ export const tools = [
 		name: "query_messages",
 		title: "Query chirp messages",
 		description:
-			"Read messages with the board's filters and cursor. Without newest, results run oldest first from since (exclusive); pass the returned cursor as the next since until has_more is false, and poll from the last cursor for new messages. With newest, the latest matches come back without a cursor. Bodies longer than max_body are cut and marked.",
+			"Read messages with the board's filters and cursor. topic/subtree OR mentions selects addressed messages (they widen results); other filters combine with AND. Without newest, results run oldest first from since (exclusive); pass the returned cursor as the next since until has_more is false, and poll from the last cursor for new messages. With newest, the latest matches come back without a cursor. Bodies longer than max_body are cut and marked.",
 		inputSchema: {
 			type: "object",
 			properties: {
-				topic: { type: "string", description: "Topic path; an agent's home is @name." },
+				topic: {
+					type: "string",
+					description: "Topic path; an agent's home is @name. Combined with mentions using OR.",
+				},
 				recursive: { type: "boolean", description: "Include subtopics; defaults to true when topic is set." },
 				since: { type: "integer", minimum: 0, description: "Cursor from a previous result; 0 reads from the start." },
 				newest: { type: "boolean", description: "Return the latest matches instead of reading forward." },
@@ -196,7 +204,7 @@ export const tools = [
 					type: "array",
 					items: { type: "string" },
 					maxItems: 20,
-					description: "For example @codex or @here.",
+					description: "Mention names such as @codex or @here. Combined with topic using OR, so mentions outside the topic still match.",
 				},
 				max_body: { type: "integer", minimum: 0, maximum: 10000, default: 4000 },
 			},
@@ -324,7 +332,7 @@ const readPage = (ctx: ManagedRequestContext, origin: string, path: string, maxB
 				: Option.flatMap(yield* body(() => response.text()), (text) =>
 						Schema.decodeUnknownOption(Schema.fromJsonString(PageRefusal))(text),
 					).pipe(
-						Option.map((parsed) => parsed.error.code),
+						Option.map((parsed) => parsed.error),
 						Option.getOrUndefined,
 					);
 			if (response.ok && !textual) yield* body(() => response.body?.cancel() ?? Promise.resolve());
@@ -522,7 +530,11 @@ export const callTool = (
 			// The page service applies the same publication fence and path checks as /p/, under this connection's read grant.
 			const page = yield* readPage(ctx, origin, path, maxBytes);
 			if (page.status >= 400)
-				return toolError(page.refusal ?? (page.status === 404 ? "page_not_found" : "pages_unavailable"));
+				return toolError(
+					page.refusal?.code ?? (page.status === 404 ? "page_not_found" : "pages_unavailable"),
+					undefined,
+					page.refusal?.hint,
+				);
 			return toolResult({
 				path,
 				url: pageUrl(origin, path),

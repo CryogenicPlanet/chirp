@@ -307,7 +307,8 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 		capabilities: { tools: { listChanged: false } },
 	});
 	const listed = await (await call(reader.access, 2, "tools/list")).json();
-	expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
+	const listedTools: Array<{ name: string; description?: string }> = listed.result.tools;
+	expect(listedTools.map((tool) => tool.name)).toEqual([
 		"connection_info",
 		"search",
 		"fetch",
@@ -316,6 +317,9 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 		"read_page",
 		"post_message",
 	]);
+	expect(listedTools.find((tool) => tool.name === "query_messages")?.description).toMatch(
+		/topic\/subtree OR mentions/,
+	);
 	expect((await call(reader.access, 20, "ping", undefined, "1900-01-01")).status).toBe(400);
 	const events = await fetch(`${app.url}/mcp`, {
 		headers: { authorization: `Bearer ${reader.access}`, accept: "text/event-stream" },
@@ -1472,7 +1476,7 @@ it("upgrades a board with the intermediate events table (rotation columns alread
 }, 60000);
 
 it("gives MCP clients paged queries, bounded topics, page reads and structured errors", async (test) => {
-	const { app, cookie } = await installed(test);
+	const { fixture, app, cookie } = await installed(test);
 	const register = await fetch(`${app.url}/mcp/oauth/register`, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
@@ -1594,6 +1598,46 @@ it("gives MCP clients paged queries, bounded topics, page reads and structured e
 		{ items: [{ body: "arrived after the cursor" }], has_more: false },
 	);
 
+	// topic and mentions combine with OR: mentions outside the topic still match.
+	expect(
+		(
+			await app.post(
+				"/api/messages",
+				{ topic: "parity/inbox", body: "in the inbox topic" },
+				cookie,
+				"or-topic",
+			)
+		).status,
+	).toBe(200);
+	expect(
+		(
+			await app.post(
+				"/api/messages",
+				{ topic: "parity/other", body: "over to @codex from elsewhere" },
+				cookie,
+				"or-mention",
+			)
+		).status,
+	).toBe(200);
+	expect(
+		(await app.post("/api/messages", { topic: "parity/other", body: "unrelated noise" }, cookie, "or-noise")).status,
+	).toBe(200);
+	const union = Schema.decodeUnknownSync(Page)(
+		(
+			await tool("query_messages", {
+				topic: "parity/inbox",
+				mentions: ["@codex"],
+				since: 0,
+				limit: 50,
+				max_body: 100,
+			})
+		).structuredContent,
+	);
+	expect(union.items.map((item) => item.body)).toEqual(
+		expect.arrayContaining(["in the inbox topic", "over to @codex from elsewhere"]),
+	);
+	expect(union.items.map((item) => item.body)).not.toContain("unrelated noise");
+
 	// A refusal from a tool with an outputSchema is text only, so strict clients don't reject it.
 	const missing = await tool("fetch", { id: "message:999999" });
 	expect(missing).toMatchObject({ isError: true });
@@ -1634,6 +1678,19 @@ it("gives MCP clients paged queries, bounded topics, page reads and structured e
 	expect(await tool("read_page", { path: "parity/missing.md" })).toMatchObject({
 		isError: true,
 		structuredContent: { error: { code: "page_not_found", retriable: false } },
+	});
+	await fixture.sql(
+		"INSERT INTO topic_page_continuations VALUES (999999,'parity/moving','parity/moved','pending-mcp-test',0)",
+	);
+	expect(await tool("read_page", { path: "parity/moving/file.md" })).toMatchObject({
+		isError: true,
+		structuredContent: {
+			error: {
+				code: "pages_move_pending",
+				retriable: true,
+				hint: expect.stringContaining("Idempotency-Key"),
+			},
+		},
 	});
 
 	// Kernel refusals keep their code and hint.
