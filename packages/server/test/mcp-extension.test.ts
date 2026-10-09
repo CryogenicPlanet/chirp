@@ -1419,7 +1419,28 @@ it("upgrades a board whose events table predates secret rotation without a migra
 
 it("upgrades a board with the intermediate events table (rotation columns already in CREATE)", async (test) => {
 	// Boards that installed MCP from master/canary after #60 merged have the rotation columns in the CREATE.
-	const { fixture, app, cookie } = await installed(test);
+	// Install with the intermediate state: CREATE includes rotation columns, no alternateStatements, no ADD COLUMN.
+	const { fixture, app, cookie } = await installed(test, undefined, false, (file, source) => {
+		if (file !== "events.ts") return source;
+		// Replace the original CREATE (without columns) with the intermediate CREATE (with columns)
+		const withColumns = source
+			.replace(
+				/CREATE TABLE example_mcp_events\(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,refresh_before INTEGER NOT NULL/,
+				"CREATE TABLE example_mcp_events(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,previous_secret TEXT,previous_secret_until INTEGER,refresh_before INTEGER NOT NULL",
+			)
+			.replace(
+				/CREATE TABLE example_mcp_events\(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,refresh_before BIGINT NOT NULL/,
+				"CREATE TABLE example_mcp_events(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,agent TEXT NOT NULL,instance TEXT NOT NULL,url TEXT NOT NULL,secret TEXT NOT NULL,previous_secret TEXT,previous_secret_until BIGINT,refresh_before BIGINT NOT NULL",
+			)
+			.replace(
+				/CREATE TABLE example_mcp_events\(id VARCHAR\(64\) PRIMARY KEY,client_id VARCHAR\(128\) NOT NULL,agent VARCHAR\(64\) NOT NULL,instance VARCHAR\(256\) NOT NULL,url LONGTEXT NOT NULL,secret LONGTEXT NOT NULL,refresh_before BIGINT NOT NULL/,
+				"CREATE TABLE example_mcp_events(id VARCHAR(64) PRIMARY KEY,client_id VARCHAR(128) NOT NULL,agent VARCHAR(64) NOT NULL,instance VARCHAR(256) NOT NULL,url LONGTEXT NOT NULL,secret LONGTEXT NOT NULL,previous_secret LONGTEXT,previous_secret_until BIGINT,refresh_before BIGINT NOT NULL",
+			);
+		// Remove alternateStatements and the ADD COLUMN migrations
+		return withColumns
+			.replace(/alternateStatements: \[\s*on\(sql,[\s\S]*?\},\s*\),\s*\],\s*/, "")
+			.replace(/\/\/ Secret rotation came after[\s\S]*?(?=\t\tconst rows = \(ctx: Store)/, "");
+	});
 	const columns = async () =>
 		Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ name: Schema.String })))(
 			await fixture.sql("SELECT name FROM pragma_table_info('example_mcp_events')"),

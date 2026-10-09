@@ -94,27 +94,32 @@ export const makeExtensionMigrate = (sql: SqlClient.SqlClient, epoch: string, ex
 					}),
 				);
 				let finishProtection: Effect.Effect<void, Effect.Error<ReturnType<typeof extensionProtection>>> = Effect.void;
+				const columnCheck = options?.skipIfColumnExists;
+				const skipColumnCheck =
+					columnCheck !== undefined
+						? Effect.gen(function* () {
+								const { table: tableName, column: columnName } = columnCheck;
+								return yield* on(sql, {
+									sqlite: () =>
+										sql`SELECT name FROM pragma_table_info(${tableName}) WHERE lower(name)=lower(${columnName})`.pipe(
+											Effect.map((rows) => rows.length > 0),
+										),
+									pg: () =>
+										sql`SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND lower(table_name)=lower(${tableName}) AND lower(column_name)=lower(${columnName})`.pipe(
+											Effect.map((rows) => rows.length > 0),
+										),
+									mysql: () =>
+										sql`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND lower(TABLE_NAME)=lower(${tableName}) AND lower(COLUMN_NAME)=lower(${columnName})`.pipe(
+											Effect.map((rows) => rows.length > 0),
+										),
+								});
+							})
+						: Effect.succeed(false);
 				const operation = Effect.gen(function* () {
-					if (options?.skipIfColumnExists) {
-						const { table: tableName, column: columnName } = options.skipIfColumnExists;
-						const exists = yield* on(sql, {
-							sqlite: () =>
-								sql`SELECT name FROM pragma_table_info(${tableName}) WHERE name=${columnName}`.pipe(
-									Effect.map((rows) => rows.length > 0),
-								),
-							pg: () =>
-								sql`SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND lower(table_name)=lower(${tableName}) AND lower(column_name)=lower(${columnName})`.pipe(
-									Effect.map((rows) => rows.length > 0),
-								),
-							mysql: () =>
-								sql`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND lower(TABLE_NAME)=lower(${tableName}) AND lower(COLUMN_NAME)=lower(${columnName})`.pipe(
-									Effect.map((rows) => rows.length > 0),
-								),
-						});
-						if (exists) {
-							finishProtection = Effect.void;
-							return;
-						}
+					const columnExists = yield* skipColumnCheck;
+					if (columnExists) {
+						finishProtection = Effect.void;
+						return;
 					}
 					const protection = yield* extensionProtection(sql, extension, statement, options?.unprotect);
 					yield* preserveMigrationState(sql, sql.unsafe(statement), protection.tables);
