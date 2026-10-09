@@ -280,7 +280,7 @@ export interface Connection {
 }
 
 /** One page read, following the board's redirect from a directory name to its listing. */
-const readPage = (ctx: ManagedRequestContext, origin: string, path: string) =>
+const readPage = (ctx: ManagedRequestContext, origin: string, path: string, maxBytes: number) =>
 	Effect.scoped(
 		Effect.gen(function* () {
 			const serve = (target: string) =>
@@ -293,10 +293,32 @@ const readPage = (ctx: ManagedRequestContext, origin: string, path: string) =>
 				first.status >= 300 && first.status < 400 && !path.endsWith("/") ? yield* serve(`${path}/`) : first;
 			const type = response.headers.get("content-type") ?? "application/octet-stream";
 			const textual = /^(text\/|application\/(json|xml|javascript))|\+json|\+xml/.test(type);
+			const size = Number(response.headers.get("content-length") ?? Number.NaN);
 			// Binary pages report their size without being read into memory.
 			// A body that cannot be read is a retriable page-store failure, never a handler crash.
 			const body = <A>(read: () => Promise<A>) => Effect.tryPromise(read).pipe(Effect.option);
-			const bytes = response.ok && textual ? yield* body(() => response.arrayBuffer()) : Option.none();
+			// Stream textual pages, reading at most maxBytes + 1 to detect truncation without materializing large files.
+			const bytes =
+				response.ok && textual
+					? yield* body(async () => {
+							const reader = response.body?.getReader();
+							if (!reader) throw new Error("page response has no body");
+							const limited = new Uint8Array(maxBytes + 1);
+							let length = 0;
+							try {
+								while (length < limited.length) {
+									const next = await reader.read();
+									if (next.done) break;
+									const count = Math.min(next.value.byteLength, limited.length - length);
+									limited.set(next.value.subarray(0, count), length);
+									length += count;
+								}
+								return limited.subarray(0, length);
+							} finally {
+								await reader.cancel();
+							}
+						})
+					: Option.none();
 			const refusal = response.ok
 				? undefined
 				: Option.flatMap(yield* body(() => response.text()), (text) =>
@@ -309,8 +331,8 @@ const readPage = (ctx: ManagedRequestContext, origin: string, path: string) =>
 			return {
 				status: response.ok && textual && Option.isNone(bytes) ? 503 : response.status,
 				type,
-				bytes: Option.match(bytes, { onNone: () => null, onSome: (buffer) => new Uint8Array(buffer) }),
-				size: Number(response.headers.get("content-length") ?? Number.NaN),
+				bytes: Option.match(bytes, { onNone: () => null, onSome: (buffer) => buffer }),
+				size,
 				refusal,
 			};
 		}),
@@ -498,7 +520,7 @@ export const callTool = (
 			if (!value || maxBytes === null || !path || path.split("/").some((part) => part === ".." || part === "."))
 				return toolError("input_invalid", "path must name a page below /p/ and max_bytes must be 1–200000");
 			// The page service applies the same publication fence and path checks as /p/, under this connection's read grant.
-			const page = yield* readPage(ctx, origin, path);
+			const page = yield* readPage(ctx, origin, path, maxBytes);
 			if (page.status >= 400)
 				return toolError(page.refusal ?? (page.status === 404 ? "page_not_found" : "pages_unavailable"));
 			return toolResult({
@@ -507,13 +529,13 @@ export const callTool = (
 				content_type: page.type,
 				...(page.bytes
 					? {
-							bytes: page.bytes.byteLength,
+							bytes: Number.isFinite(page.size) ? page.size : page.bytes.byteLength,
 							// A cut through a multibyte character decodes to a trailing replacement character; drop it.
 							text:
 								page.bytes.byteLength > maxBytes
 									? new TextDecoder().decode(page.bytes.subarray(0, maxBytes)).replace(/�$/, "")
 									: new TextDecoder().decode(page.bytes),
-							truncated: page.bytes.byteLength > maxBytes,
+							truncated: page.bytes.byteLength > maxBytes || (Number.isFinite(page.size) && page.size > maxBytes),
 						}
 					: { bytes: Number.isFinite(page.size) ? page.size : null, text: null, truncated: false }),
 			});
