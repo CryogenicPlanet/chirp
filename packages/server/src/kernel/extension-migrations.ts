@@ -13,7 +13,16 @@ import { writerGate } from "./database.ts";
 export const makeExtensionMigrate = (sql: SqlClient.SqlClient, epoch: string, extension: string) =>
 	Effect.gen(function* () {
 		const gate = yield* Semaphore.make(1);
-		return (name: string, statement: string, options?: { readonly protect?: boolean; readonly unprotect?: string }) =>
+		return (
+			name: string,
+			statement: string,
+			options?: {
+				readonly protect?: boolean;
+				readonly unprotect?: string;
+				readonly alternateStatements?: ReadonlyArray<string>;
+				readonly skipIfColumnExists?: { readonly table: string; readonly column: string };
+			},
+		) =>
 			Effect.gen(function* () {
 				if (
 					!name ||
@@ -35,6 +44,9 @@ export const makeExtensionMigrate = (sql: SqlClient.SqlClient, epoch: string, ex
 				if (options?.protect && table === undefined)
 					return yield* new KernelError({ code: "extension_migration_invalid" });
 				const { checksum, legacyChecksum } = yield* extensionChecksums(statement, options);
+				const alternateChecksums = options?.alternateStatements
+					? yield* Effect.forEach(options.alternateStatements, (stmt) => extensionChecksums(stmt, options))
+					: [];
 				const mysql = on(sql, { sqlite: () => false, pg: () => false, mysql: () => true });
 				const prior = sql.withTransaction(
 					Effect.gen(function* () {
@@ -53,9 +65,14 @@ export const makeExtensionMigrate = (sql: SqlClient.SqlClient, epoch: string, ex
 								Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ checksum: Schema.String })))),
 							);
 						if (previous.length > 0) {
+							const priorChecksum = previous[0]?.checksum;
+							const isAlternate = alternateChecksums.some(
+								(alt) => alt.checksum === priorChecksum || alt.legacyChecksum === priorChecksum,
+							);
 							if (
-								previous[0]?.checksum !== checksum &&
-								!(options?.unprotect === undefined && previous[0]?.checksum === legacyChecksum)
+								priorChecksum !== checksum &&
+								!(options?.unprotect === undefined && priorChecksum === legacyChecksum) &&
+								!isAlternate
 							)
 								return yield* new KernelError({ code: "extension_migration_conflict" });
 							return true;
@@ -77,7 +94,33 @@ export const makeExtensionMigrate = (sql: SqlClient.SqlClient, epoch: string, ex
 					}),
 				);
 				let finishProtection: Effect.Effect<void, Effect.Error<ReturnType<typeof extensionProtection>>> = Effect.void;
+				const columnCheck = options?.skipIfColumnExists;
+				const skipColumnCheck =
+					columnCheck !== undefined
+						? Effect.gen(function* () {
+								const { table: tableName, column: columnName } = columnCheck;
+								return yield* on(sql, {
+									sqlite: () =>
+										sql`SELECT name FROM pragma_table_info(${tableName}) WHERE lower(name)=lower(${columnName})`.pipe(
+											Effect.map((rows) => rows.length > 0),
+										),
+									pg: () =>
+										sql`SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND lower(table_name)=lower(${tableName}) AND lower(column_name)=lower(${columnName})`.pipe(
+											Effect.map((rows) => rows.length > 0),
+										),
+									mysql: () =>
+										sql`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND lower(TABLE_NAME)=lower(${tableName}) AND lower(COLUMN_NAME)=lower(${columnName})`.pipe(
+											Effect.map((rows) => rows.length > 0),
+										),
+								});
+							})
+						: Effect.succeed(false);
 				const operation = Effect.gen(function* () {
+					const columnExists = yield* skipColumnCheck;
+					if (columnExists) {
+						finishProtection = Effect.void;
+						return;
+					}
 					const protection = yield* extensionProtection(sql, extension, statement, options?.unprotect);
 					yield* preserveMigrationState(sql, sql.unsafe(statement), protection.tables);
 					finishProtection = protection.receipt;
@@ -89,6 +132,16 @@ export const makeExtensionMigrate = (sql: SqlClient.SqlClient, epoch: string, ex
 				});
 				if (mysql) {
 					if (yield* prior) return;
+					const columnExists = yield* skipColumnCheck;
+					if (columnExists) {
+						return yield* sql.withTransaction(
+							Effect.gen(function* () {
+								yield* writerGate(sql, epoch);
+								yield* assertNoPendingMigration(sql);
+								yield* receipt;
+							}),
+						);
+					}
 					return yield* mysqlMigration(sql, epoch, extension, name, sql.withTransaction(operation), receipt);
 				}
 				yield* sql.withTransaction(
