@@ -1,4 +1,5 @@
-import { Clock, Effect, Exit, Option, Ref, Schema, Stream } from "effect";
+import { Cause, Clock, Effect, Exit, Option, Ref, Schema, Stream } from "effect";
+import { isSqlError } from "effect/unstable/sql/SqlError";
 import type { Api } from "../../../packages/server/src/kernel/extension-api.ts";
 import { installEvents } from "./events.ts";
 import { installOAuth } from "./oauth.ts";
@@ -56,9 +57,31 @@ interface RequestRecord {
 	readonly protocol: string | null;
 	readonly tool: string | null;
 	readonly event: string | null;
-	readonly status: number;
+	/** The HTTP status the client received; null when the client went away before an answer. */
+	readonly status: number | null;
+	readonly outcome: "answered" | "failed" | "cancelled";
 	readonly error: number | null;
 }
+/**
+ * A typed failure (a store outage, an OAuth lookup) answered by the extension itself, so the client and the request log
+ * agree. A retryable store error is 503 and says so; anything else is 500.
+ */
+const handlerFailure = (error: unknown, id: RpcId) => {
+	const retriable = isSqlError(error) && error.isRetryable;
+	return Response.json(
+		{
+			jsonrpc: "2.0",
+			// The decoded request id, so the client can match this answer; null only before the body was read.
+			id,
+			error: {
+				code: -32603,
+				message: retriable ? "The board store is temporarily unavailable." : "Internal error",
+				data: { retriable },
+			},
+		},
+		{ status: retriable ? 503 : 500, headers: { "cache-control": "no-store" } },
+	);
+};
 const named = (value: unknown) => (typeof value === "string" ? value.slice(0, 128) : undefined);
 type Seen = { -readonly [K in "client" | "method" | "protocol" | "tool" | "event"]?: string | undefined };
 const keptRequests = 100;
@@ -92,10 +115,16 @@ export default (api: Api) =>
 		const record = (
 			seen: Seen,
 			request: { readonly headers: Readonly<Record<string, string | undefined>> },
-			response: Response | undefined,
+			exit: Exit.Exit<Response, unknown>,
 		) =>
 			Effect.gen(function* () {
-				// A handler that failed through the error channel has no response; the kernel answers it with a 500.
+				// Only a defect reaches here without a response; the kernel answers it with 500. A client that went away gets none.
+				const response = Exit.isSuccess(exit) ? exit.value : undefined;
+				const outcome = Exit.isSuccess(exit)
+					? "answered"
+					: Cause.hasInterruptsOnly(exit.cause)
+						? "cancelled"
+						: "failed";
 				const body =
 					response === undefined
 						? Option.none()
@@ -109,14 +138,15 @@ export default (api: Api) =>
 					protocol: seen.protocol ?? null,
 					tool: seen.tool ?? null,
 					event: seen.event ?? null,
-					status: response?.status ?? 500,
+					status: Exit.isFailure(exit) ? (outcome === "failed" ? 500 : null) : (response?.status ?? null),
+					outcome,
 					error: typeof code === "number" ? code : null,
 				};
 				yield* Ref.update(recent, (items) => [...items.slice(1 - keptRequests), entry]);
 			});
 		api.route("GET", "/api/mcp/requests", {
 			description:
-				"The last 100 MCP requests, newest first: client, method, protocol version, HTTP status and JSON-RPC error code. Kept in memory only, never tokens or bodies. Requires fs.",
+				"The last 100 MCP requests, newest first: client, method, protocol version, outcome (answered, failed or cancelled), HTTP status and JSON-RPC error code. Kept in memory only, never tokens or bodies. Requires fs.",
 			scope: "fs",
 			handler: () => Ref.get(recent).pipe(Effect.map((items) => Response.json({ items: items.toReversed() }))),
 		});
@@ -131,6 +161,7 @@ export default (api: Api) =>
 			access: "application-managed",
 			handler: (request, ctx) => {
 				const seen: Seen = {};
+				const answer: { id: RpcId } = { id: null };
 				return Effect.gen(function* () {
 					if (
 						request.headers.origin !== undefined &&
@@ -178,6 +209,7 @@ export default (api: Api) =>
 						named(field(message.params, "protocolVersion"));
 					if (message.id === undefined) return new Response(null, { status: 202 });
 					const id = message.id ?? null;
+					answer.id = id;
 					const runTool = (params: unknown, handshake: string, modern: boolean) =>
 						Effect.gen(function* () {
 							const call = decode(ToolCall, params ?? {});
@@ -302,9 +334,9 @@ export default (api: Api) =>
 					}
 					return rpcError(id, -32601, `Method not found: ${message.method}`);
 				}).pipe(
-					Effect.onExit((exit) =>
-						record(seen, request, Exit.isSuccess(exit) ? exit.value : undefined).pipe(Effect.ignore),
-					),
+					// Typed failures are answered here; defects still reach the kernel, which counts them against the extension.
+					Effect.catch((error) => Effect.succeed(handlerFailure(error, answer.id))),
+					Effect.onExit((exit) => record(seen, request, exit).pipe(Effect.ignore)),
 				);
 			},
 		});
