@@ -3,13 +3,14 @@ import { backupPath, backupRelativePath, BackupRecord } from "./backup-metadata.
 import { acceptSourceRevert } from "./source-revert.ts";
 import { seedSource } from "./seed-source.ts";
 import { recoveryIntents } from "./recovery-intents.ts";
-import { Layer, Cause, Crypto, DateTime, Effect, FileSystem, Path, Ref, Schema } from "effect";
+import { Layer, Cause, Crypto, DateTime, Effect, FileSystem, Option, Path, Ref, Schema } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import { isSqlError } from "effect/unstable/sql/SqlError";
 import { GenerationPreparation } from "./generation-preparation.ts";
 import { artifactRetention, ArtifactRetentionRejected } from "./artifact-retention.ts";
 import { HeadroomPolicy, storageHeadroom, StorageRejected } from "./storage-headroom.ts";
 import { DbOps } from "./db-ops.ts";
+import { AuthError } from "./auth.ts";
 import { AppRecovery } from "./app-recovery.ts";
 import { snapshotStoreEntry, type ApplicationSource } from "./application.ts";
 import { ChildAttempts } from "./child-attempts.ts";
@@ -584,6 +585,44 @@ export const cutover = Effect.fn("cutover")(function* (options: ApplicationSourc
 			supervisor.operationGate.withPermit(authorize.pipe(Effect.andThen(completeCleanup))),
 		reload: (owner: Ownership, reloadOptions?: Parameters<typeof performReload>[1]) =>
 			supervisor.operationGate.withPermit(performReload(owner, reloadOptions)),
+		/** Grant callers never queue for the gate: their enclosing app request may be what a running reload drains. */
+		reloadIfIdle: (owner: Ownership, reloadOptions?: Parameters<typeof performReload>[1]) =>
+			supervisor.operationGate
+				.withPermitsIfAvailable(1)(performReload(owner, reloadOptions))
+				.pipe(
+					Effect.flatMap(
+						Option.match({
+							onNone: () => Effect.fail(new AuthError({ code: "board_busy" })),
+							onSome: Effect.succeed,
+						}),
+					),
+				),
+		/** Takes the gate now, so the caller can answer 202 and let its own request drain before the freeze. `start`
+		 * forks into boot's lifetime; shutdown waits for the gate, and a failure keeps the repair lock as any reload. */
+		detachReload: <R>(
+			owner: Ownership,
+			reloadOptions: { readonly release?: boolean },
+			start: (
+				reload: Effect.Effect<void, never, Effect.Services<ReturnType<typeof performReload>>>,
+			) => Effect.Effect<void, never, R>,
+		) =>
+			Effect.uninterruptible(
+				Effect.gen(function* () {
+					if (!(yield* supervisor.operationGate.takeIfAvailable(1)))
+						return yield* new AuthError({ code: "board_busy" });
+					yield* start(
+						performReload(owner, reloadOptions).pipe(
+							Effect.catchCause((cause) =>
+								Cause.hasInterruptsOnly(cause)
+									? Effect.void
+									: Effect.logWarning(`Detached reload failed: ${supervisor.child.redact(Cause.pretty(cause))}`),
+							),
+							Effect.asVoid,
+							Effect.ensuring(supervisor.operationGate.release(1)),
+						),
+					);
+				}),
+			),
 		reset,
 		revertHuman,
 		seedDigest: Effect.scoped(

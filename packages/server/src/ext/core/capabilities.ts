@@ -5,11 +5,14 @@ import type { ExtensionCapabilities, MessageAuthor } from "../../kernel/extensio
 import { markRead } from "./read-marks.ts";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 import { Pages } from "./pages.ts";
-import type { Mutation } from "../../kernel/mutate.ts";
+import { type Mutation, WriterPermit } from "../../kernel/mutate.ts";
+import { headerPrefix } from "@comms/protocol/headers";
+import { isHttpMethod } from "effect/unstable/http/HttpMethod";
 import { Publication } from "../../kernel/publication.ts";
 import { Crypto, Deferred, Effect, FileSystem, Option, Ref, Schema } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import { BootChannel, KernelError } from "../../kernel/boot-channel.ts";
+import { BootGrants } from "../../kernel/boot-grants.ts";
 import { MessageInput } from "@comms/protocol/messages";
 import { makeMessages, topicPathDetail, validTopic } from "./messages.ts";
 import type { Identity } from "../../kernel/identity.ts";
@@ -21,11 +24,25 @@ import { makeTopics } from "./topics.ts";
 const authorName = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const reservedAuthors: ReadonlyArray<string> = ["system", "boot", "rahul"];
 const authorInstance = /^[A-Za-z0-9._-]{1,128}$/;
+// Boot authenticates a grant only by name; nothing the caller supplies may claim another identity or channel.
+const droppedGrantHeaders: ReadonlyArray<string> = [
+	"authorization",
+	"cookie",
+	"host",
+	"forwarded",
+	"x-boot-secret",
+	"content-length",
+	"connection",
+	"transfer-encoding",
+];
+const grantRefusal = (field: string, hint: string) =>
+	new KernelError({ code: "input_invalid", detail: { field, hint } });
 
 /** Bind product operations to the caller; persistence stays in the shared mutation service. */
 export const extensionCapabilities = Effect.gen(function* () {
 	const sql = yield* SqlClient.SqlClient;
 	const boot = yield* BootChannel;
+	const grants = yield* BootGrants;
 	const publication = yield* Publication;
 	const pages = yield* Pages;
 	const fs = yield* FileSystem.FileSystem;
@@ -148,7 +165,62 @@ export const extensionCapabilities = Effect.gen(function* () {
 			});
 		};
 		const topics = makeTopics(sql, read, pages);
+		// Boot decides liveness: it admits grant calls only from the attempt its public route serves.
+		// A detached reload drains this request before its cutover, so the context that started one must return
+		// rather than poll: every later grant call here would hold the freeze until its deadline.
+		const reloadDetached = Ref.makeUnsafe(false);
+		const agentGrants: ExtensionCapabilities["agentGrants"] = {
+			request: (input) =>
+				writable ? grants.request({ extension, ...input }) : Effect.fail(new KernelError({ code: "scope_required" })),
+			collect: (id) => grants.collect(id, extension),
+			fetch: (family, path, init = {}) =>
+				Effect.gen(function* () {
+					// Boot may need the writer this transaction or permit holds, so the call could never finish.
+					if (Option.isSome(yield* Effect.serviceOption(sql.transactionService)) || (yield* WriterPermit))
+						return yield* grantRefusal(
+							"agentGrants.fetch",
+							"Call the board through a grant outside ctx.mutate and ctx.read.",
+						);
+					if (yield* Ref.get(reloadDetached)) return yield* new KernelError({ code: "reload_detached" });
+					const method = (init.method ?? "GET").toUpperCase();
+					if (!isHttpMethod(method))
+						return yield* grantRefusal("method", "Use an HTTP method such as GET, POST, PUT, PATCH or DELETE.");
+					if (!writable && !["GET", "HEAD", "OPTIONS"].includes(method))
+						return yield* new KernelError({ code: "scope_required" });
+					if (init.body !== undefined && (method === "GET" || method === "HEAD"))
+						return yield* grantRefusal("body", "Send a body only with a method that accepts one, such as POST or PUT.");
+					if (path.length > 8192 || !/^\/(?!\/)[\x21-\x5b\x5d-\x7e]*$/.test(path))
+						return yield* grantRefusal(
+							"path",
+							"Name a board path starting with a single /, such as /api/messages, without spaces or backslashes.",
+						);
+					const headers = Object.fromEntries(
+						Object.entries(init.headers ?? {})
+							.map(([name, value]): readonly [string, string] => [name.toLowerCase(), value])
+							.filter(
+								([name]) =>
+									!droppedGrantHeaders.includes(name) &&
+									!name.startsWith(headerPrefix) &&
+									!name.startsWith("x-forwarded-"),
+							),
+					);
+					const target = new URL(path, "http://board.invalid");
+					const reload = method === "POST" && target.pathname === "/api/reload";
+					const response = yield* grants.fetch(family, extension, path, {
+						method,
+						headers,
+						// A grant's check=1 rehearsal runs inline: preparation, dependencies, a database copy and health.
+						deadline: reload && target.searchParams.get("check") === "1" ? 180_000 : 60_000,
+						...(init.body === undefined
+							? {}
+							: { body: typeof init.body === "string" ? new TextEncoder().encode(init.body) : init.body }),
+					});
+					if (reload && response.status === 202) yield* Ref.set(reloadDetached, true);
+					return response;
+				}),
+		};
 		return {
+			agentGrants,
 			pages: {
 				serve: (request, options) =>
 					servePage(request, options, pages, read, fs).pipe(Effect.map(HttpServerResponse.toWeb)),

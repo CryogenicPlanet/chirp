@@ -91,6 +91,8 @@ const Families = Schema.Struct({
 			access_expires_at: Schema.NullOr(Schema.Int),
 			refresh_expires_at: Schema.NullOr(Schema.Int),
 			revoked: Schema.Boolean,
+			// Older boots omit it; a held family is an extension grant whose credential boot keeps.
+			held_by: Schema.optionalKey(Schema.NullOr(Schema.String)),
 		}),
 	),
 });

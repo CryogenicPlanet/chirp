@@ -8,6 +8,7 @@ Start with:
 - [mutate.ts](mutate.ts): the durable mutation protocol.
 - [ext.ts](ext.ts): extension loading and scoped lifecycle.
 - [extension-api.ts](extension-api.ts): the extension authoring API.
+- [boot-grants.ts](boot-grants.ts): the live generation's private calls behind `ctx.agentGrants`. Boot holds each grant's credential; the app names its family, and boot refuses grants from rehearsals and non-live attempts.
 - [health.ts](health.ts): a reserved-route dispatch and kernel KV mutation/read probe with verified rollback.
 
 [server.ts](../server.ts) wires one shared Publication instance. Product routes and domain SQL live in [ext/core](../ext/core/); the kernel consumes their [capability contract](extension-capabilities.ts), without constructing domain services.

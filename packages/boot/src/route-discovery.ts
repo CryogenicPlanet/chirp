@@ -143,13 +143,13 @@ const routes = [
 		"get",
 		["/_boot/approve/{id}", "/approve/{id}"],
 		"public",
-		"Immutable enrollment approval page displaying the user code and passkey controls. A malformed or unknown link, including one copied with a trailing character, returns 404 approval_link_invalid.",
+		"Immutable enrollment approval page displaying the user code and passkey controls. An extension grant's page instead names the extension, agent and label from boot's record, starts with fs unticked and grants 90 days; its optional ?return= same-origin path is where the page goes after the decision. A malformed or unknown link, including one copied with a trailing character, returns 404 approval_link_invalid.",
 	],
 	[
 		"post",
 		["/_boot/enroll/{id}/approve"],
 		"proof",
-		`Approve or deny with {decision,scopes,long_lived}, exact Origin and a fresh enrollment.decide ${headerLabel(assertionHeader)}. No prior session required.`,
+		`Approve or deny with {decision,scopes,long_lived}, exact Origin and a fresh enrollment.decide ${headerLabel(assertionHeader)}. No prior session required. An extension grant accepts only scopes its extension asked for, with long_lived false.`,
 	],
 	[
 		"post",
@@ -235,7 +235,7 @@ const routes = [
 		"get",
 		["/_boot/tokens"],
 		"human",
-		"List complete token-family metadata as {items}; all query parameters are refused. Never returns token secrets.",
+		"List complete token-family metadata as {items}; all query parameters are refused. Never returns token secrets. held_by names the extension a grant acts through; boot holds that family's credential and revocation ends the grant.",
 	],
 	[
 		"post",

@@ -1,4 +1,4 @@
-import { Cause, type Crypto, Effect, Option, Ref, Schema, type Semaphore } from "effect";
+import { Cause, Context, type Crypto, Effect, Option, Ref, Schema, type Semaphore } from "effect";
 import type { SqlClient } from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 import { EventRecord } from "@comms/protocol/events";
@@ -21,6 +21,9 @@ export interface Mutation<A, E, R> {
 		R
 	>;
 }
+
+/** True while this fiber holds the app's writer permit, including its guard and relay outside SQL. */
+export const WriterPermit = Context.Reference<boolean>("comms/server/WriterPermit", { defaultValue: () => false });
 
 /** One writer permit covers the SQL commit and publication. Only confirmed rollback can abort a reservation. */
 export const makeMutate =
@@ -113,7 +116,7 @@ export const makeMutate =
 					}
 					if (!probe) yield* relay;
 					return result.value;
-				}).pipe(Effect.uninterruptible),
+				}).pipe(Effect.uninterruptible, Effect.provideService(WriterPermit, true)),
 			);
 		});
 

@@ -16,6 +16,18 @@ export const canonicalDecision = (input: EnrollmentDecision) =>
 		scopes: ["read", "write", "fs"].filter((scope) => input.scopes.some((value) => value === scope)),
 		long_lived: input.long_lived,
 	});
+/**
+ * A held enrollment's kind names the extension it is held for. Public enrollment refuses ':' in kind, so only
+ * boot's private grant channel creates one, and its collection never returns a secret.
+ */
+export const heldKindPrefix = "extension:";
+export const heldExtension = (kind: string) =>
+	kind.startsWith(heldKindPrefix) ? kind.slice(heldKindPrefix.length) : null;
+/** A grant's one access row lasts 90 days, then the human approves again. It is never refreshed. */
+export const heldAccessSeconds = 7_776_000;
+export const validExtensionName = (name: string) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(name);
+export const canonicalScopes = (scopes: readonly string[]) =>
+	["read", "write", "fs"].filter((scope) => scopes.some((value) => value === scope));
 export const validDecision = (input: EnrollmentDecision) =>
 	/^e_[A-Za-z0-9_-]{43}$/.test(input.id) &&
 	new Set(input.scopes).size === input.scopes.length &&

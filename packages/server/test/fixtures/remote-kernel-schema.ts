@@ -1,4 +1,5 @@
 import { extensionCapabilities } from "../../src/ext/core/capabilities.ts";
+import { BootGrants, unavailable as noGrants } from "../../src/kernel/boot-grants.ts";
 import { layer as publicationLayer } from "../../src/kernel/publication.ts";
 import { layer as topicsLayer } from "../../src/ext/core/topics.ts";
 import { layer as pagesLayer } from "../../src/ext/core/pages.ts";
@@ -75,7 +76,9 @@ await Effect.runPromise(
 				Effect.void.pipe(
 					Effect.provide(
 						Layer.unwrap(
-							Effect.map(extensionCapabilities, (capabilities) => extensionsLayer(directory, capabilities)),
+							Effect.map(extensionCapabilities.pipe(Effect.provideService(BootGrants, noGrants)), (capabilities) =>
+								extensionsLayer(directory, capabilities),
+							),
 						).pipe(
 							Layer.provide(
 								topicsLayer.pipe(

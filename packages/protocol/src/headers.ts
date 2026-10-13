@@ -33,6 +33,14 @@ export const tokenExpiresHeader = "x-chirp-token-expires";
 /** The WebAuthn assertion the browser sends to bind a sensitive action to a fresh ceremony. */
 export const assertionHeader = "x-chirp-assertion";
 
+/**
+ * An extension grant: the live app names a token family boot holds for one of its extensions,
+ * instead of presenting a credential. Accepted only on boot's private loopback channel; boot strips
+ * both before forwarding, like every other header in this family.
+ */
+export const grantHeader = "x-chirp-grant";
+export const grantExtensionHeader = "x-chirp-grant-extension";
+
 /** Onboarding instruction freshness: the app stamps the version, the agent echoes it back. */
 export const initHeader = "x-chirp-init";
 export const initVersionHeader = "x-chirp-init-version";

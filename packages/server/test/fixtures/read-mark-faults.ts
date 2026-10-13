@@ -1,4 +1,5 @@
 import { extensionCapabilities } from "../../src/ext/core/capabilities.ts";
+import { BootGrants, unavailable as noGrants } from "../../src/kernel/boot-grants.ts";
 import { layer as topicsLayer } from "../../src/ext/core/topics.ts";
 import { layer as pagesLayer } from "../../src/ext/core/pages.ts";
 import { layer as publicationLayer } from "../../src/kernel/publication.ts";
@@ -65,7 +66,11 @@ const program = Effect.gen(function* () {
 						healthy: yield* Ref.make(true),
 					});
 					const view = Effect.gen(function* () {
-						const ctx = (yield* extensionCapabilities)("read-mark-fixture", who, false);
+						const ctx = (yield* extensionCapabilities.pipe(Effect.provideService(BootGrants, noGrants)))(
+							"read-mark-fixture",
+							who,
+							false,
+						);
 						yield* markView(ctx, [initial], input.topic);
 					}).pipe(
 						Effect.provide(lifecycle),

@@ -106,8 +106,18 @@ const run = Effect.gen(function* () {
 			access_expires_at: 200,
 			refresh_expires_at: 1200,
 			revoked: false,
+			held_by: null,
 		});
 		assert.equal(result.items[1]?.revoked, true);
+		// A held family names the extension boot keeps its access for; a public enrollment does not.
+		yield* sql`INSERT INTO enrollments(id,device_secret_hash,user_code,agent_name,kind,host,status,family,created_at,expires_at)
+		VALUES(${enrollmentId("x")},'discarded','ABCD12','codex','extension:mcp','machine','collected',${familyId("x")},${now},${now})`;
+		yield* sql`INSERT INTO enrollments(id,device_secret_hash,user_code,agent_name,kind,host,status,family,created_at,expires_at)
+		VALUES(${enrollmentId("y")},'secret','ABCD12','codex','codex','machine','collected',${familyId("y")},${now},${now})`;
+		assert.deepEqual(
+			(yield* auth.listTokenFamilies()).items.map((row) => row.held_by),
+			[null, null, "mcp"],
+		);
 		yield* sql`UPDATE tokens SET last_used_at=2000 WHERE family=${familyId("x")}`;
 		assert.equal((yield* auth.listTokenFamilies()).items[2]?.last_used_at, 2000);
 		assert.deepEqual(Object.keys(result), ["items"]);
