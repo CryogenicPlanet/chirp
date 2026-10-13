@@ -1,6 +1,6 @@
 import { assertionHeader } from "@comms/protocol/headers";
 import { bootRoute } from "./boot-route.ts";
-import { liveChannelAttempt } from "./internal-channel.ts";
+import { liveChannelAttempt, reachesAttempt } from "./internal-channel.ts";
 import { Effect, Ref, Schema } from "effect";
 import { type HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { AuthError, type Auth, type AuthConfig } from "./auth.ts";
@@ -56,8 +56,13 @@ export const grantRoute = (auth: Auth["Service"], config: AuthConfig, child: Sup
 		if (path !== "/_boot/grants" && !path.startsWith("/_boot/grants/")) return null;
 		return yield* authFailure(
 			Effect.gen(function* () {
-				if (namesGrant(request) || (yield* grantChannel(request, child)) === null)
-					return yield* new AuthError({ code: "grant_forbidden" });
+				const channel = namesGrant(request) ? null : yield* grantChannel(request, child);
+				if (channel === null) return yield* new AuthError({ code: "grant_forbidden" });
+				// Reading the body can outlast a cutover, so the attempt must still be the routed live one before acting.
+				const stillLive = Effect.gen(function* () {
+					if (!reachesAttempt(yield* Ref.get(child.traffic.route), channel.epoch))
+						return yield* new AuthError({ code: "grant_forbidden" });
+				});
 				if (request.method !== "POST" || url.search) return yield* new AuthError({ code: "invalid_request" });
 				if (path === "/_boot/grants") {
 					const input = yield* body(
@@ -68,6 +73,7 @@ export const grantRoute = (auth: Auth["Service"], config: AuthConfig, child: Sup
 							scopes: Schema.Array(Scope),
 						}),
 					);
+					yield* stillLive;
 					const created = yield* auth.createHeldEnrollment(input);
 					return HttpServerResponse.jsonUnsafe({
 						...created,
@@ -77,6 +83,7 @@ export const grantRoute = (auth: Auth["Service"], config: AuthConfig, child: Sup
 				const id = /^\/_boot\/grants\/(e_[A-Za-z0-9_-]{43})$/.exec(path)?.[1];
 				if (!id) return yield* new AuthError({ code: "enrollment_invalid" });
 				const input = yield* body(Schema.Struct({ extension: Schema.String }));
+				yield* stillLive;
 				return HttpServerResponse.jsonUnsafe(yield* auth.collectHeldEnrollment(id, input.extension));
 			}).pipe(Effect.map(HttpServerResponse.setHeader("cache-control", "no-store"))),
 		);
