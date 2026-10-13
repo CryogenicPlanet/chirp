@@ -80,11 +80,17 @@ export const installGrants = (api: Api) =>
 		);
 	});
 
-const stored = (ctx: Context, holder: GrantHolder) =>
-	ctx.db`SELECT client_id,subject,request_id,approve_url,code,agent,family,scopes,status,expires_at,created_at,updated_at FROM example_mcp_grants WHERE client_id=${holder.clientId} AND subject=${holder.subject} AND agent=${holder.agent ?? ""}`.pipe(
+/** The connection's row, whichever identity it was requested for. */
+const connectionRow = (ctx: Context, clientId: string) =>
+	ctx.db`SELECT client_id,subject,request_id,approve_url,code,agent,family,scopes,status,expires_at,created_at,updated_at FROM example_mcp_grants WHERE client_id=${clientId}`.pipe(
 		Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Row))),
 		Effect.map((rows) => rows[0]),
 	);
+const holds = (row: Row | undefined, holder: GrantHolder): row is Row =>
+	row !== undefined && row.subject === holder.subject && row.agent === holder.agent;
+/** The holder's row; a row requested for another human or posting name is not theirs. */
+const stored = (ctx: Context, holder: GrantHolder) =>
+	connectionRow(ctx, holder.clientId).pipe(Effect.map((row) => (holds(row, holder) ? row : undefined)));
 
 /** What boot says about a stored request now. A request boot no longer knows is treated as revoked. */
 const collected = (ctx: Context, row: Row) =>
@@ -143,6 +149,11 @@ export const editingState = (
  * Asks boot for a grant acting as `agent`, replacing any earlier one for this connection. The human narrows the
  * scopes on boot's page, where fs starts unticked. The approval link is given on the board origin, where the
  * human holds the passkey session that the consent continuation needs.
+ *
+ * The row is installed only if it still holds the request read before asking boot, so of two concurrent requests
+ * for one connection only one is tracked, and the other caller gets that one back: every link and code the extension
+ * returns is one it tracks. The losing request is never shown; it stays pending at boot and expires unapproved.
+ * When the winner belongs to another identity, the result is `none`.
  */
 export const requestEditing = (
 	ctx: Context,
@@ -151,6 +162,7 @@ export const requestEditing = (
 	label: string,
 ) =>
 	Effect.gen(function* () {
+		const prior = (yield* connectionRow(ctx, holder.clientId))?.request_id ?? null;
 		const created = yield* ctx.agentGrants.request({ agent: holder.agent, label, scopes: ["read", "write", "fs"] });
 		const now = yield* Clock.currentTimeMillis;
 		const row: Row = {
@@ -167,13 +179,17 @@ export const requestEditing = (
 			created_at: now,
 			updated_at: now,
 		};
-		yield* ctx.mutate(
+		// Kernel mutations are serialized, so this read and the replacement are one compare-and-swap.
+		const tracked = yield* ctx.mutate(
 			Effect.gen(function* () {
+				const now = yield* connectionRow(ctx, row.client_id);
+				if ((now?.request_id ?? null) !== prior) return now;
 				yield* ctx.db`DELETE FROM example_mcp_grants WHERE client_id=${row.client_id}`;
 				yield* ctx.db`INSERT INTO example_mcp_grants(client_id,subject,request_id,approve_url,code,agent,family,scopes,status,expires_at,created_at,updated_at) VALUES(${row.client_id},${row.subject},${row.request_id},${row.approve_url},${row.code},${row.agent},${row.family},${row.scopes},${row.status},${row.expires_at},${row.created_at},${row.updated_at})`;
+				return row;
 			}),
 		);
-		return view(row);
+		return holds(tracked, holder) ? view(tracked) : none;
 	});
 
 const Refusal = Schema.Struct({

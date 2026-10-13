@@ -469,7 +469,13 @@ it("lets an existing connection request editing, keeps fs opt-in, and never bloc
 		code: Schema.String,
 		expires_at: Schema.Int,
 	});
-	const requested = decode(Requested, (await tool("request_editing")).ok);
+	// Concurrent requests for one connection all get the single request the extension tracks.
+	const replies = (await Promise.all([tool("request_editing"), tool("request_editing"), tool("request_editing")])).map(
+		(reply) => decode(Requested, reply.ok),
+	);
+	const requested = replies[0];
+	if (!requested) throw new Error("request_editing returned nothing");
+	for (const reply of replies) expect(reply).toEqual(requested);
 	expect(requested.approve_url).toMatch(/^https:\/\/comms\.test\/approve\/e_/);
 	// The user matches this code against the one boot's approval page shows.
 	expect(requested.code).toMatch(/^[0-9A-F]{6}$/);

@@ -350,28 +350,33 @@ export const callEditing = (
 				);
 			// Asks boot afresh: after a revocation (for example to add fs) a new request must be made.
 			const current = yield* editingState(ctx, caller, { refresh: true });
-			if (current.status === "active" || current.status === "pending")
-				return toolResult({
-					status: current.status,
-					...(current.approve_url === null ? {} : { approve_url: current.approve_url }),
-					...(current.code === null ? {} : { code: current.code }),
-					scopes: current.scopes,
-					expires_at: current.expires_at,
-					message:
-						current.status === "active"
-							? `This connection can already edit as ${current.agent ?? caller.agent}. To change what it may do, the user revokes it in the board's token list (held by mcp), then call request_editing again.`
-							: "An approval request is already waiting: give the user approve_url and code.",
-				});
-			const label = yield* clientLabel(ctx, caller.clientId);
-			const created = yield* requestEditing(ctx, origin, { ...caller, agent: caller.agent }, label);
+			// A concurrent request for this connection may win; the one it tracks is what the user is given.
+			const tracked =
+				current.status === "active" || current.status === "pending"
+					? current
+					: yield* requestEditing(
+							ctx,
+							origin,
+							{ ...caller, agent: caller.agent },
+							yield* clientLabel(ctx, caller.clientId),
+						);
+			if (tracked.status !== "active" && tracked.status !== "pending")
+				return toolError(
+					"editing_busy",
+					"Another request for this connection was made at the same moment under another name.",
+					"Call request_editing again.",
+					true,
+				);
 			return toolResult({
-				status: "pending",
-				...(created.approve_url === null ? {} : { approve_url: created.approve_url }),
-				...(created.code === null ? {} : { code: created.code }),
-				scopes: created.scopes,
-				expires_at: created.expires_at,
+				status: tracked.status,
+				...(tracked.approve_url === null ? {} : { approve_url: tracked.approve_url }),
+				...(tracked.code === null ? {} : { code: tracked.code }),
+				scopes: tracked.scopes,
+				expires_at: tracked.expires_at,
 				message:
-					"Give the user approve_url and code. They check the code on that page and approve with their passkey; pages and app source need its fs box ticked. The link lasts ten minutes. Then retry the editing tool.",
+					tracked.status === "active"
+						? `This connection can already edit as ${tracked.agent ?? caller.agent}. To change what it may do, the user revokes it in the board's token list (held by mcp), then call request_editing again.`
+						: "Give the user approve_url and code. They check the code on that page and approve with their passkey; pages and app source need its fs box ticked. The link lasts ten minutes. Then retry the editing tool.",
 			});
 		}
 
