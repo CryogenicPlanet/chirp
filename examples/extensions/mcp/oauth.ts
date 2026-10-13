@@ -223,7 +223,7 @@ const outcome = (editing: Editing, clientName: string, approve: string) =>
 		? `<p>Editing approved: ${escape(clientName)} acts as <strong>${escape(editing.agent ?? "")}</strong> with ${escape(editing.scopes.join(", "))} until ${escape(new Date(editing.expires_at ?? 0).toISOString().slice(0, 10))}.${editing.code ? ` Request code <code>${escape(editing.code)}</code>.` : ""} Revoke it any time from your board's token list.</p>`
 		: editing.status === "pending"
 			? `<p>Editing is still waiting for your approval${editing.code ? ` (code <code>${escape(editing.code)}</code>)` : ""}. <a href="${escape(approve)}">Approve it with your passkey</a>, or continue without editing: the client can ask again later with request_editing.</p>`
-			: `<p>Editing was not approved. ${escape(clientName)} can still read and post; it can ask again later with request_editing.</p>`;
+			: `<p>Editing was ${editing.status === "revoked" ? "revoked" : "not approved"}. ${escape(clientName)} can still read and post; it can ask again later with request_editing.</p>`;
 
 export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) =>
 	Effect.gen(function* () {
@@ -366,7 +366,7 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 						...(checked.state === undefined ? {} : { state: checked.state }),
 					});
 					return new Response(
-						`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Authorize MCP</title></head><body><main><h1>Authorize ${escape(checked.clientName)}</h1><p>This client is requesting: ${escape(checked.scopes.join(", "))}.</p><form method="post" action="/mcp/oauth/authorize">${[...hidden].map(([name, value]) => `<input type="hidden" name="${escape(name)}" value="${escape(value)}">`).join("")}${checked.scopes.includes("write") ? `<p><label>Post as <input name="agent" value="${escape(postAs)}" required maxlength="64" pattern="[a-z0-9][a-z0-9._\\-]*"></label></p><p><label><input type="checkbox" name="editing" value="1" checked> Allow editing</label>: let it act as this name to edit and delete its own posts, manage topics and read threads. Boot asks for your passkey on the next page; pages and app source (fs) are a separate box there, unticked by default. Editing lasts 90 days and can be revoked from your board's token list.</p>` : ""}<button name="decision" value="approve">Authorize</button><button name="decision" value="deny" formnovalidate>Deny</button></form></main></body></html>`,
+						`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Authorize MCP</title></head><body><main><h1>Authorize ${escape(checked.clientName)}</h1><p>This client is requesting: ${escape(checked.scopes.join(", "))}.</p><form method="post" action="/mcp/oauth/authorize">${[...hidden].map(([name, value]) => `<input type="hidden" name="${escape(name)}" value="${escape(value)}">`).join("")}${checked.scopes.includes("write") ? `<p><label>Post as <input name="agent" value="${escape(postAs)}" required maxlength="64" pattern="[a-z0-9][a-z0-9._\\-]*"></label></p><p><label><input type="checkbox" name="editing" value="1" checked> Allow editing</label>: let it act as this name to edit and delete its own posts, manage topics and read threads. Next you get a request code to match on boot's approval page, where you approve with your passkey; pages and app source (fs) are a separate box there, unticked by default. Editing lasts 90 days and can be revoked from your board's token list.</p>` : ""}<button name="decision" value="approve">Authorize</button><button name="decision" value="deny" formnovalidate>Deny</button></form></main></body></html>`,
 						{
 							headers: {
 								"content-type": "text/html; charset=utf-8",
@@ -439,10 +439,12 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 									expires: now + 20 * 60 * 1000,
 								}),
 							);
-							return new Response(null, {
-								status: 303,
-								headers: { location: approveLink(requested.approve_url, token), "cache-control": "no-store" },
-							});
+							// Boot's page asks the human to match the code the extension showed, so show it before sending them.
+							return page(
+								"Approve editing",
+								`<h1>Approve editing for ${escape(checked.clientName)}</h1><p>Your request code is <code>${escape(requested.code ?? "")}</code>. On the next page, check that boot shows the same code, then approve with your passkey. Tick fs there only if ${escape(checked.clientName)} should publish pages and edit app source.</p><p><a href="${escape(approveLink(requested.approve_url, token))}">Continue to approval</a></p><form method="post" action="/mcp/oauth/continue"><input type="hidden" name="consent" value="${escape(token)}"><button>Skip editing and finish connecting</button></form>`,
+								`'self' ${new URL(checked.redirectUri).origin}`,
+							);
 						}
 					}
 					const code = yield* ctx.mutate(issue(ctx, checked.clientId, grant));

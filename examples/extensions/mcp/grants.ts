@@ -141,7 +141,7 @@ export const requestEditing = (ctx: Context, origin: string, clientId: string, a
 			client_id: clientId,
 			request_id: created.id,
 			approve_url: `${origin}${new URL(created.approve_url).pathname}`,
-			code: null, // REBASE: created.user_code
+			code: created.user_code,
 			agent,
 			family: null,
 			scopes: "read write fs",

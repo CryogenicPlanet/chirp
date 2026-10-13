@@ -8,7 +8,7 @@ import { conversation } from "./fixtures/conversation.ts";
 
 type App = Awaited<ReturnType<Awaited<ReturnType<typeof conversation>>["launch"]>>;
 const decode = <A>(schema: Schema.Decoder<A>, value: unknown) => Schema.decodeUnknownSync(schema)(value);
-const json = (text: string) => Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(text);
+const json = (text: string) => Schema.decodeSync(Schema.fromJsonString(Schema.Unknown))(text);
 const ToolReply = Schema.Struct({
 	result: Schema.Struct({
 		content: Schema.Array(Schema.Struct({ type: Schema.String, text: Schema.String })),
@@ -111,6 +111,44 @@ const decide = async (app: App, approveUrl: string, decision: "approve" | "deny"
 	});
 	expect(decided.status, await decided.clone().text()).toBe(200);
 };
+/** The consent step's page: it shows the request code, then links to boot's approval page. */
+const editingStep = async (app: App, response: Response) => {
+	expect(response.status).toBe(200);
+	const html = await response.text();
+	const code = /request code is <code>([0-9A-F]{6})<\/code>/.exec(html)?.[1] ?? "";
+	expect(code).toMatch(/^[0-9A-F]{6}$/);
+	const approval = new URL(/href="([^"]+)"/.exec(html)?.[1]?.replaceAll("&amp;", "&") ?? "");
+	expect(approval.origin + approval.pathname).toMatch(/^https:\/\/comms\.test\/approve\/e_[A-Za-z0-9_-]{43}$/);
+	// Boot's page shows the same code, which is how the human knows the request came from this consent.
+	expect(await (await fetch(`${app.url}${approval.pathname}`)).text()).toContain(code);
+	const back = approval.searchParams.get("return") ?? "";
+	expect(back).toMatch(/^\/mcp\/oauth\/continue\?consent=mcp_consent_/);
+	return { code, approval, back, consent: new URL(back, app.url).searchParams.get("consent") ?? "" };
+};
+/** Revokes an agent's grant family from the board's token list, as the human would. */
+const revoke = async (app: App, cookie: string, agent: string) => {
+	const families = decode(
+		Schema.Struct({
+			items: Schema.Array(
+				Schema.Struct({ family: Schema.String, agent: Schema.String, held_by: Schema.NullOr(Schema.String) }),
+			),
+		}),
+		await (await fetch(`${app.url}/_boot/tokens`, { headers: { cookie } })).json(),
+	).items.filter((item) => item.held_by === "mcp" && item.agent === agent);
+	expect(families).toHaveLength(1);
+	const family = families[0]?.family ?? "";
+	const revoked = await fetch(`${app.url}/_boot/tokens/${family}/revoke`, {
+		method: "POST",
+		headers: {
+			cookie,
+			origin: "https://comms.test",
+			"content-type": "application/json",
+			[assertionHeader]: await app.revocationAssertion(family, cookie),
+		},
+		body: "{}",
+	});
+	expect(revoked.status).toBe(200);
+};
 /** An MCP client on the initialize handshake; each call is its own stateless request. */
 const mcp = (app: App, token: string) => {
 	let id = 0;
@@ -145,24 +183,22 @@ it("connects with editing approved by passkey, then edits, publishes and live-ed
 	expect(consentPage).toContain('name="editing" value="1" checked');
 	expect(consentPage).toContain("unticked by default");
 
-	// Consent with editing goes to boot's approval page, which comes back to the continue route.
-	const consented = await form(app, cookie, "/mcp/oauth/authorize", {
-		...client.query,
-		decision: "approve",
-		agent: "dot",
-		editing: "1",
-	});
-	expect(consented.status).toBe(303);
-	const approval = new URL(consented.headers.get("location") ?? "");
-	expect(approval.origin + approval.pathname).toMatch(/^https:\/\/comms\.test\/approve\/e_[A-Za-z0-9_-]{43}$/);
-	const back = approval.searchParams.get("return") ?? "";
-	expect(back).toMatch(/^\/mcp\/oauth\/continue\?consent=mcp_consent_/);
-	const consent = new URL(back, app.url).searchParams.get("consent") ?? "";
+	// Consent with editing shows the request code, then boot's approval page comes back to the continue route.
+	const { code, approval, back, consent } = await editingStep(
+		app,
+		await form(app, cookie, "/mcp/oauth/authorize", {
+			...client.query,
+			decision: "approve",
+			agent: "dot",
+			editing: "1",
+		}),
+	);
 	expect(await (await fetch(`${app.url}${back}`, { headers: { cookie } })).text()).toContain("still waiting");
 	await decide(app, approval.href, "approve", ["read", "write", "fs"]);
 	const returned = await (await fetch(`${app.url}${back}`, { headers: { cookie } })).text();
 	expect(returned).toContain("Editing approved");
 	expect(returned).toContain("<strong>dot</strong>");
+	expect(returned).toContain(code);
 	const finished = await form(app, cookie, "/mcp/oauth/continue", { consent });
 	expect(finished.status).toBe(302);
 	const access = await exchange(app, client, finished.headers.get("location"));
@@ -328,25 +364,7 @@ it("connects with editing approved by passkey, then edits, publishes and live-ed
 	expect((await tool("reload_status")).ok).toMatchObject({ lock: null });
 
 	// Revoking the family on the board's token list ends editing; posting falls back to the extension's own voice.
-	const families = decode(
-		Schema.Struct({
-			items: Schema.Array(Schema.Struct({ family: Schema.String, held_by: Schema.NullOr(Schema.String) })),
-		}),
-		await (await fetch(`${app.url}/_boot/tokens`, { headers: { cookie } })).json(),
-	).items.filter((item) => item.held_by === "mcp");
-	expect(families).toHaveLength(1);
-	const family = families[0]?.family ?? "";
-	const revoked = await fetch(`${app.url}/_boot/tokens/${family}/revoke`, {
-		method: "POST",
-		headers: {
-			cookie,
-			origin: "https://comms.test",
-			"content-type": "application/json",
-			[assertionHeader]: await app.revocationAssertion(family, cookie),
-		},
-		body: "{}",
-	});
-	expect(revoked.status).toBe(200);
+	await revoke(app, cookie, "dot");
 	expect((await tool("edit_message", { seq: posted.seq, body: "after revocation" })).error).toMatchObject({
 		error: {
 			code: "editing_not_granted",
@@ -437,10 +455,14 @@ it("lets an existing connection request editing, keeps fs opt-in, and never bloc
 	const Requested = Schema.Struct({
 		status: Schema.Literal("pending"),
 		approve_url: Schema.String,
+		code: Schema.String,
 		expires_at: Schema.Int,
 	});
 	const requested = decode(Requested, (await tool("request_editing")).ok);
 	expect(requested.approve_url).toMatch(/^https:\/\/comms\.test\/approve\/e_/);
+	// The user matches this code against the one boot's approval page shows.
+	expect(requested.code).toMatch(/^[0-9A-F]{6}$/);
+	expect(await (await fetch(`${app.url}${new URL(requested.approve_url).pathname}`)).text()).toContain(requested.code);
 	expect((await tool("request_editing")).ok).toMatchObject({ status: "pending", approve_url: requested.approve_url });
 	expect((await tool("edit_message", { seq: earlier, body: "changed" })).error).toMatchObject({
 		error: { code: "editing_not_granted", message: expect.stringContaining(requested.approve_url) },
@@ -476,23 +498,30 @@ it("lets an existing connection request editing, keeps fs opt-in, and never bloc
 
 	// A denied editing approval still finishes connecting: the client reads and posts as before.
 	const denied = await register(app, "Denied Client");
-	const consented = await form(app, cookie, "/mcp/oauth/authorize", {
-		...denied.query,
-		decision: "approve",
-		agent: "denied-bot",
-		editing: "1",
-	});
-	expect(consented.status).toBe(303);
-	const approval = new URL(consented.headers.get("location") ?? "");
-	await decide(app, approval.href, "deny", []);
-	const back = approval.searchParams.get("return") ?? "";
-	expect(await (await fetch(`${app.url}${back}`, { headers: { cookie } })).text()).toContain("not approved");
-	const finished = await form(app, cookie, "/mcp/oauth/continue", {
-		consent: new URL(back, app.url).searchParams.get("consent") ?? "",
-	});
+	const step = await editingStep(
+		app,
+		await form(app, cookie, "/mcp/oauth/authorize", {
+			...denied.query,
+			decision: "approve",
+			agent: "denied-bot",
+			editing: "1",
+		}),
+	);
+	await decide(app, step.approval.href, "deny", []);
+	expect(await (await fetch(`${app.url}${step.back}`, { headers: { cookie } })).text()).toContain("not approved");
+	const finished = await form(app, cookie, "/mcp/oauth/continue", { consent: step.consent });
 	const deniedTool = mcp(app, await exchange(app, denied, finished.headers.get("location"))).tool;
 	expect((await deniedTool("connection_info")).ok).toMatchObject({ editing: { status: "denied" } });
 	expect(
 		(await deniedTool("post_message", { topic: "existing", body: "no editing", idempotencyKey: "d-1" })).ok,
 	).toMatchObject({ agent: "denied-bot", instance: `extension:mcp:${denied.clientId}` });
+
+	// Approval itself creates the family, so a grant revoked before the extension ever collects it reads as revoked.
+	const again = decode(Requested, (await deniedTool("request_editing")).ok);
+	await decide(app, again.approve_url, "approve", ["read", "write"]);
+	await revoke(app, cookie, "denied-bot");
+	expect((await deniedTool("connection_info")).ok).toMatchObject({ editing: { status: "revoked" } });
+	expect((await deniedTool("edit_message", { seq: own, body: "x" })).error).toMatchObject({
+		error: { code: "editing_not_granted", message: expect.stringContaining("revoked") },
+	});
 }, 120000);
