@@ -38,6 +38,7 @@ import {
 import { Auth, AuthError } from "./auth.ts";
 import { authenticate, authErrorResponse, authFailure, authRoute, namesGrant, sessionCookie } from "./auth-http.ts";
 import { grantChannel, grantPathAllowed, grantRoute } from "./grant-http.ts";
+import { reachesAttempt } from "./internal-channel.ts";
 import { editRoute } from "./edit-http.ts";
 import { passkeyManagementRoute } from "./passkey-management-http.ts";
 import { passkeyCodeRoute } from "./passkey-code-http.ts";
@@ -148,7 +149,8 @@ export const proxy = Effect.gen(function* () {
 		.some((part) => part.trim().startsWith(`${sessionCookie}=`));
 	const grant = namesGrant(request);
 	/** Authenticates when required, then serves boot's edit and diagnostic routes or forwards to the live child. */
-	const forward = (authenticated: boolean, managedIngress: boolean) =>
+	/** grantEpoch is the live attempt a grant request was validated against; admission must still reach it. */
+	const forward = (authenticated: boolean, managedIngress: boolean, grantEpoch?: string) =>
 		authFailure(
 			Effect.gen(function* () {
 				let identity = authenticated || grant ? yield* authenticate(auth, request) : null;
@@ -271,6 +273,10 @@ export const proxy = Effect.gen(function* () {
 						if (!mutation) return authErrorResponse("board_busy");
 						destination = mutation.destination;
 					}
+					// A cutover between validation and admission can switch the route to an accepted candidate; a grant
+					// only ever reaches the live generation whose attempt it was validated against.
+					if (grantEpoch === undefined || !reachesAttempt(destination, grantEpoch))
+						return authErrorResponse("board_busy");
 				} else {
 					const requestAdmission = yield* child.traffic.requests.awaitDestination.pipe(Effect.result);
 					if (requestAdmission._tag === "Failure") return expires(unavailable());
@@ -441,12 +447,12 @@ export const proxy = Effect.gen(function* () {
 			// A grant never falls through to another credential path, the secret branch or managed ingress.
 			const publicResponse = yield* publicRoute;
 			if (publicResponse) return publicResponse;
-			if (!(yield* grantChannel(request, child)) || !grantPathAllowed(request.method, url))
-				return authErrorResponse("grant_forbidden");
+			const channel = yield* grantChannel(request, child);
+			if (channel === null || !grantPathAllowed(request.method, url)) return authErrorResponse("grant_forbidden");
 			if ((yield* Ref.get(phase))._tag === "Stopping") return authErrorResponse("boot_unavailable", 503);
 			// The enclosing app request is itself admitted, so nothing past here may wait on a freeze or the operation
 			// gate: admission, page publication and reload each refuse with board_busy instead of queuing.
-			return yield* forward(false, false);
+			return yield* forward(false, false, channel.epoch);
 		}
 		// App bearer credentials cannot invoke boot surfaces or silently replace a supplied board session.
 		if (

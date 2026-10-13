@@ -31,6 +31,10 @@ export const loopback = (address: string) => {
 	return bare === "::1" || /^127(?:\.\d{1,3}){3}$/.test(bare);
 };
 
+/** Admission reached the same live generation a grant request was validated against, not a cutover candidate. */
+export const reachesAttempt = (destination: Destination | null | undefined, epoch: string) =>
+	destination?.epoch === epoch && destination.state === "live";
+
 /**
  * Grants act for a human-approved agent, so they need more than a known secret: the attempt must be the one
  * the public route serves, fully live, and the caller must be on this host. A rehearsal is never recorded in

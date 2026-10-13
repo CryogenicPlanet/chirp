@@ -2,7 +2,7 @@ import { Option } from "effect";
 import { Headers, HttpServerRequest } from "effect/unstable/http";
 import { expect, it } from "vitest";
 import type { Attempt } from "../src/event-http.ts";
-import { channelAttempt, liveChannelAttempt, loopback } from "../src/internal-channel.ts";
+import { channelAttempt, liveChannelAttempt, loopback, reachesAttempt } from "../src/internal-channel.ts";
 import type { Destination } from "../src/traffic.ts";
 
 const host = "127.0.0.1:4100";
@@ -65,6 +65,19 @@ it("keeps the existing channel checks: constant secret, exact host and no proxy 
 	).toBeNull();
 	// The channel itself does not look at the address; grants add that check.
 	expect(channelAttempt(request("a", {}, "10.0.0.2"), [live])).toEqual(live);
+});
+
+it("admits a validated grant only into the same live generation, never a cutover candidate", () => {
+	const live = attempt("a", "live", "live");
+	const accepted = attempt("d", "accepted", "accepted");
+	expect(reachesAttempt(route(live), "live")).toBe(true);
+	// Validated against the old live child, but a cutover switched the route to the accepted candidate first.
+	expect(reachesAttempt({ ...route(accepted), state: "accepted" }, "live")).toBe(false);
+	// Even once that candidate is live, it is not the generation the request was validated against.
+	expect(reachesAttempt({ ...route(accepted), state: "live" }, "live")).toBe(false);
+	expect(reachesAttempt({ ...route(live), state: "frozen" }, "live")).toBe(false);
+	expect(reachesAttempt(null, "live")).toBe(false);
+	expect(reachesAttempt(undefined, "live")).toBe(false);
 });
 
 it("recognizes loopback addresses only", () => {

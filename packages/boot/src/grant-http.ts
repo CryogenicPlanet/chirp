@@ -8,16 +8,19 @@ import { authFailure, body, namesGrant } from "./auth-http.ts";
 import { Scope } from "./enrollment-schema.ts";
 import type { SupervisedChild } from "./supervisor.ts";
 
-/** The live app's private channel: no other credential may ride along, and no proxy may stand in between. */
+/**
+ * The live app's private channel: no other credential may ride along, and no proxy may stand in between.
+ * Returns the validated attempt, so admission can confirm the request still reaches that same live generation.
+ */
 export const grantChannel = (request: HttpServerRequest.HttpServerRequest, child: SupervisedChild) =>
 	Effect.gen(function* () {
 		const attempt = liveChannelAttempt(request, yield* Ref.get(child.attempts), yield* Ref.get(child.traffic.route));
-		return (
-			attempt !== null &&
+		return attempt !== null &&
 			request.headers.authorization === undefined &&
 			request.headers.cookie === undefined &&
 			request.headers[assertionHeader] === undefined
-		);
+			? attempt
+			: null;
 	});
 
 /**
@@ -53,7 +56,7 @@ export const grantRoute = (auth: Auth["Service"], config: AuthConfig, child: Sup
 		if (path !== "/_boot/grants" && !path.startsWith("/_boot/grants/")) return null;
 		return yield* authFailure(
 			Effect.gen(function* () {
-				if (namesGrant(request) || !(yield* grantChannel(request, child)))
+				if (namesGrant(request) || (yield* grantChannel(request, child)) === null)
 					return yield* new AuthError({ code: "grant_forbidden" });
 				if (request.method !== "POST" || url.search) return yield* new AuthError({ code: "invalid_request" });
 				if (path === "/_boot/grants") {
