@@ -185,6 +185,11 @@ const program = Effect.gen(function* () {
 								markRead: () => Effect.die("read only"),
 							},
 							emit: () => Effect.die("read only"),
+							agentGrants: {
+								request: () => Effect.die("read only"),
+								collect: () => Effect.die("read only"),
+								fetch: () => Effect.die("read only"),
+							},
 							events: { query: channel.events, changed: channel.changed },
 							drained: Effect.never,
 							mutate: () => Effect.die("Standup remains read only"),

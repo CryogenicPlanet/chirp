@@ -5,11 +5,14 @@ import type { ExtensionCapabilities, MessageAuthor } from "../../kernel/extensio
 import { markRead } from "./read-marks.ts";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 import { Pages } from "./pages.ts";
-import type { Mutation } from "../../kernel/mutate.ts";
+import { type Mutation, WriterPermit } from "../../kernel/mutate.ts";
+import { headerPrefix } from "@comms/protocol/headers";
+import { isHttpMethod } from "effect/unstable/http/HttpMethod";
 import { Publication } from "../../kernel/publication.ts";
 import { Crypto, Deferred, Effect, FileSystem, Option, Ref, Schema } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import { BootChannel, KernelError } from "../../kernel/boot-channel.ts";
+import { BootGrants } from "../../kernel/boot-grants.ts";
 import { MessageInput } from "@comms/protocol/messages";
 import { makeMessages, topicPathDetail, validTopic } from "./messages.ts";
 import type { Identity } from "../../kernel/identity.ts";
@@ -21,11 +24,25 @@ import { makeTopics } from "./topics.ts";
 const authorName = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const reservedAuthors: ReadonlyArray<string> = ["system", "boot", "rahul"];
 const authorInstance = /^[A-Za-z0-9._-]{1,128}$/;
+// Boot authenticates a grant only by name; nothing the caller supplies may claim another identity or channel.
+const droppedGrantHeaders: ReadonlyArray<string> = [
+	"authorization",
+	"cookie",
+	"host",
+	"forwarded",
+	"x-boot-secret",
+	"content-length",
+	"connection",
+	"transfer-encoding",
+];
+const grantRefusal = (field: string, hint: string) =>
+	new KernelError({ code: "input_invalid", detail: { field, hint } });
 
 /** Bind product operations to the caller; persistence stays in the shared mutation service. */
 export const extensionCapabilities = Effect.gen(function* () {
 	const sql = yield* SqlClient.SqlClient;
 	const boot = yield* BootChannel;
+	const grants = yield* BootGrants;
 	const publication = yield* Publication;
 	const pages = yield* Pages;
 	const fs = yield* FileSystem.FileSystem;
@@ -148,7 +165,50 @@ export const extensionCapabilities = Effect.gen(function* () {
 			});
 		};
 		const topics = makeTopics(sql, read, pages);
+		// Boot decides liveness: it admits grant calls only from the attempt its public route serves.
+		const agentGrants: ExtensionCapabilities["agentGrants"] = {
+			request: (input) =>
+				writable ? grants.request({ extension, ...input }) : Effect.fail(new KernelError({ code: "scope_required" })),
+			collect: (id) => grants.collect(id, extension),
+			fetch: (family, path, init = {}) =>
+				Effect.gen(function* () {
+					// Boot may need the writer this transaction or permit holds, so the call could never finish.
+					if (Option.isSome(yield* Effect.serviceOption(sql.transactionService)) || (yield* WriterPermit))
+						return yield* grantRefusal(
+							"agentGrants.fetch",
+							"Call the board through a grant outside ctx.mutate and ctx.read.",
+						);
+					const method = (init.method ?? "GET").toUpperCase();
+					if (!isHttpMethod(method))
+						return yield* grantRefusal("method", "Use an HTTP method such as GET, POST, PUT, PATCH or DELETE.");
+					if (!writable && !["GET", "HEAD", "OPTIONS"].includes(method))
+						return yield* new KernelError({ code: "scope_required" });
+					if (path.length > 8192 || !/^\/(?!\/)[\x21-\x5b\x5d-\x7e]*$/.test(path))
+						return yield* grantRefusal(
+							"path",
+							"Name a board path starting with a single /, such as /api/messages, without spaces or backslashes.",
+						);
+					const headers = Object.fromEntries(
+						Object.entries(init.headers ?? {})
+							.map(([name, value]): readonly [string, string] => [name.toLowerCase(), value])
+							.filter(
+								([name]) =>
+									!droppedGrantHeaders.includes(name) &&
+									!name.startsWith(headerPrefix) &&
+									!name.startsWith("x-forwarded-"),
+							),
+					);
+					return yield* grants.fetch(family, extension, path, {
+						method,
+						headers,
+						...(init.body === undefined
+							? {}
+							: { body: typeof init.body === "string" ? new TextEncoder().encode(init.body) : init.body }),
+					});
+				}),
+		};
 		return {
+			agentGrants,
 			pages: {
 				serve: (request, options) =>
 					servePage(request, options, pages, read, fs).pipe(Effect.map(HttpServerResponse.toWeb)),

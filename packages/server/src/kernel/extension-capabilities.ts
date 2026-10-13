@@ -6,6 +6,7 @@ import type { TopicResult } from "@comms/protocol/topics";
 import type { TopicMutation } from "@comms/protocol/topic-operations";
 import type { EventRecord } from "@comms/protocol/events";
 import type { BootChannel, KernelError } from "./boot-channel.ts";
+import type { GrantCollection, GrantScope } from "./boot-grants.ts";
 import type { Mutation } from "./mutate.ts";
 import type { Identity } from "./identity.ts";
 
@@ -68,6 +69,34 @@ export interface ExtensionCapabilities {
 			key?: string,
 		) => Effect.Effect<typeof TopicMutation.Type, StorageError>;
 		readonly markRead: (path: string, seq: number) => Effect.Effect<void, StorageError>;
+	};
+	/**
+	 * Act as a board agent a human approved with a passkey, without holding its credential. `request` asks boot to
+	 * hold a grant for this extension (the human approves at `approve_url`; append `?return=/path` to come back),
+	 * `collect` reports its state and family, and `fetch` calls the board as that agent through boot. Named apart
+	 * from topic access grants. Each grant lasts 90 days; the human can revoke it from their account.
+	 */
+	readonly agentGrants: {
+		readonly request: (input: {
+			readonly agent: string;
+			readonly label: string;
+			readonly scopes: ReadonlyArray<typeof GrantScope.Type>;
+		}) => Effect.Effect<
+			{ readonly id: string; readonly approve_url: string; readonly expires_at: number },
+			KernelError
+		>;
+		readonly collect: (id: string) => Effect.Effect<typeof GrantCollection.Type, KernelError>;
+		/** A board path such as `/api/messages`; refused inside ctx.mutate or ctx.read, in rehearsal, and for
+		 * non-GET methods without a writable request. Caller credentials and chirp headers are dropped. */
+		readonly fetch: (
+			family: string,
+			path: `/${string}`,
+			init?: {
+				readonly method?: string;
+				readonly headers?: Readonly<Record<string, string>>;
+				readonly body?: string | Uint8Array;
+			},
+		) => Effect.Effect<Response, KernelError>;
 	};
 	readonly emit: <E = never>(
 		type: string,

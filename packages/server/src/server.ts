@@ -45,6 +45,7 @@ import {
 	HttpServerResponse,
 } from "effect/unstable/http";
 import { BootChannel, KernelError, layer as channelLayer } from "./kernel/boot-channel.ts";
+import { layer as grantsLayer } from "./kernel/boot-grants.ts";
 import { initialize } from "./ext/core/schema.ts";
 import { migrate } from "./kernel/migrations.ts";
 import { type Topics, layer as topicsLayer } from "./ext/core/topics.ts";
@@ -365,6 +366,7 @@ const server = Effect.gen(function* () {
 		Effect.provide(
 			Layer.mergeAll(
 				channelLayer,
+				grantsLayer,
 				lifecycleLayer,
 				migrationWarningsLayer.pipe(Layer.provide(lifecycleLayer)),
 				BunHttpServer.layer({ hostname: "127.0.0.1", port, idleTimeout: 0, gracefulShutdownTimeout: "1500 millis" }),

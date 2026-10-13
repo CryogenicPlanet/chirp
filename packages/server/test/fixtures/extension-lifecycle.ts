@@ -1,5 +1,6 @@
 import { agentHeader, authKindHeader, instanceHeader, requestIdHeader, scopesHeader } from "@comms/protocol/headers";
 import { extensionCapabilities } from "../../src/ext/core/capabilities.ts";
+import { BootGrants, unavailable as noGrants } from "../../src/kernel/boot-grants.ts";
 import { layer as publicationLayer } from "../../src/kernel/publication.ts";
 import { BunRuntime, BunServices, BunHttpPlatform } from "@effect/platform-bun";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
@@ -76,7 +77,11 @@ const run = Effect.gen(function* () {
 		);
 	}).pipe(
 		Effect.provide(
-			Layer.unwrap(Effect.map(extensionCapabilities, (capabilities) => extensionsLayer(directory, capabilities))).pipe(
+			Layer.unwrap(
+				Effect.map(extensionCapabilities.pipe(Effect.provideService(BootGrants, noGrants)), (capabilities) =>
+					extensionsLayer(directory, capabilities),
+				),
+			).pipe(
 				Layer.provide(
 					topicsLayer.pipe(
 						Layer.provideMerge(messagesLayer.pipe(Layer.provideMerge(publicationLayer))),
