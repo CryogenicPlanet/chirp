@@ -1,4 +1,5 @@
 import { agentHeader } from "@comms/protocol/headers";
+import { BunServices } from "@effect/platform-bun";
 import { Console, Effect } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { publicRoute } from "../../src/proxy.ts";
@@ -13,6 +14,7 @@ const response = await Effect.runPromise(
 				}),
 			),
 		),
+		Effect.provide(BunServices.layer),
 	),
 );
 if (!response) throw new Error("Missing recovery manifest");

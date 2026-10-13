@@ -153,9 +153,9 @@ describe("real Bun boot proxy", () => {
 		expect(await (await app.fetch(app.url, { method: "HEAD" })).text()).toBe("");
 	});
 
-	it("reports the image revision in health and status without exposing anything else", async (test) => {
-		const revision = "0123456789abcdef0123456789abcdef01234567";
-		const app = await launch(test, "normal", false, { CHIRP_REVISION: revision });
+	it("reports no revision for a build that was not stamped, whatever the environment says", async (test) => {
+		const revision = null;
+		const app = await launch(test, "normal", false, { CHIRP_REVISION: "0123456789abcdef0123456789abcdef01234567" });
 		await expect.poll(async () => (await app.state()).state).toBe("live");
 		expect(await (await fetch(`${app.url}/health`)).json()).toEqual({ status: "ok", revision });
 		expect(await (await app.fetch(`${app.url}/_boot/status`)).json()).toMatchObject({ revision });
