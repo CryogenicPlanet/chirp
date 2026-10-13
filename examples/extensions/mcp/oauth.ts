@@ -412,10 +412,12 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 						...(agent ? { agent } : {}),
 					};
 					if (agent && form.editing === "1") {
-						// One grant per connection: a live grant is kept and a waiting request is shown again, because
-						// replacing either would leave a grant boot still honours that the extension no longer tracks.
-						const current = yield* editingState(ctx, checked.clientId, { refresh: true }).pipe(
-							Effect.catchTag("KernelError", () => storedEditing(ctx, checked.clientId)),
+						// One grant per connection: this human's live grant under this name is kept and its waiting request
+						// shown again, because replacing either would leave a grant boot honours that nothing tracks.
+						// Another human's or another name's grant is never reused; a new request replaces it.
+						const holder = { clientId: checked.clientId, subject: ctx.identity.agent, agent };
+						const current = yield* editingState(ctx, holder, { refresh: true }).pipe(
+							Effect.catchTag("KernelError", () => storedEditing(ctx, holder)),
 						);
 						// Boot refusing the request must not block the connection: it still reads and posts.
 						const requested =
@@ -423,13 +425,9 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 								? undefined
 								: current.status === "pending"
 									? current
-									: yield* requestEditing(
-											ctx,
-											origin,
-											checked.clientId,
-											agent,
-											suggestedAgent(checked.clientName),
-										).pipe(Effect.catchTag("KernelError", () => Effect.succeed(undefined)));
+									: yield* requestEditing(ctx, origin, holder, suggestedAgent(checked.clientName)).pipe(
+											Effect.catchTag("KernelError", () => Effect.succeed(undefined)),
+										);
 						if (requested?.approve_url) {
 							const token = yield* random(crypto, "mcp_consent_");
 							const now = yield* Clock.currentTimeMillis;
@@ -471,18 +469,19 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 					const token = one(ctx.query.consent);
 					const row = token ? yield* lookup(ctx, yield* digest(crypto, token), "consent") : undefined;
 					const now = yield* Clock.currentTimeMillis;
-					if (!token || !row || row.expires_at <= now)
+					const consent = row ? yield* Schema.decodeEffect(Schema.fromJsonString(Consent))(row.payload) : undefined;
+					if (!token || !row || !consent || row.expires_at <= now || consent.subject !== ctx.identity.agent)
 						return page(
 							"Approval expired",
 							"<h1>This approval link has expired</h1><p>Connect the client again from its settings.</p>",
 							"'none'",
 							400,
 						);
-					const consent = yield* Schema.decodeEffect(Schema.fromJsonString(Consent))(row.payload);
 					const clientName = (yield* client(ctx, row.client_id))?.client_name ?? "This client";
 					// A GET may not record anything, so the decision is collected again when the form is sent.
-					const editing = yield* editingState(ctx, row.client_id, { readOnly: true }).pipe(
-						Effect.catchTag("KernelError", () => storedEditing(ctx, row.client_id)),
+					const holder = { clientId: row.client_id, subject: consent.subject, agent: consent.agent };
+					const editing = yield* editingState(ctx, holder, { readOnly: true }).pipe(
+						Effect.catchTag("KernelError", () => storedEditing(ctx, holder)),
 					);
 					return page(
 						"Finish connecting",
@@ -515,7 +514,7 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 							yield* ctx.db`DELETE FROM example_mcp_oauth WHERE id=${id}`;
 							const { state, ...grant } = consent;
 							return {
-								clientId: row.client_id,
+								holder: { clientId: row.client_id, subject: consent.subject, agent: consent.agent },
 								redirectUri: grant.redirect_uri,
 								state,
 								code: yield* issue(ctx, row.client_id, grant),
@@ -528,7 +527,7 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 							"This approval link expired or was already used. Connect the client again.",
 						);
 					// Record the decision now, so the client's first tool call need not ask boot.
-					yield* editingState(ctx, finished.clientId).pipe(Effect.catchTag("KernelError", () => Effect.void));
+					yield* editingState(ctx, finished.holder).pipe(Effect.catchTag("KernelError", () => Effect.void));
 					return redirect(finished.redirectUri, {
 						code: finished.code,
 						...(finished.state ? { state: finished.state } : {}),

@@ -7,6 +7,7 @@ type Context = ManagedRequestContext;
 const GrantScope = Schema.Literals(["read", "write", "fs"]);
 const Row = Schema.Struct({
 	client_id: Schema.String,
+	subject: Schema.String,
 	request_id: Schema.String,
 	approve_url: Schema.String,
 	code: Schema.NullOr(Schema.String),
@@ -41,6 +42,16 @@ const none: Editing = {
 };
 const scopesOf = (value: string) =>
 	value.split(" ").filter((scope): scope is typeof GrantScope.Type => Schema.is(GrantScope)(scope));
+/**
+ * Whose grant: the MCP connection, the human who approved it and the name it acts as. A grant is used, collected and
+ * reported only for the identity it was requested for, so a client re-authorized by another human or under another
+ * posting name never acts through an earlier approval.
+ */
+export interface GrantHolder {
+	readonly clientId: string;
+	readonly subject: string;
+	readonly agent: string | undefined;
+}
 const view = (row: Row): Editing => ({
 	status: row.status,
 	agent: row.agent,
@@ -51,7 +62,7 @@ const view = (row: Row): Editing => ({
 	family: row.status === "active" ? row.family : null,
 });
 
-/** One grant per MCP connection: requesting again replaces the connection's row. */
+/** One grant per MCP connection, bound to the approving human and posting name; requesting again replaces the row. */
 export const installGrants = (api: Api) =>
 	Effect.gen(function* () {
 		const sql = yield* SqlClient.SqlClient;
@@ -59,18 +70,18 @@ export const installGrants = (api: Api) =>
 			"agent_grants",
 			on(sql, {
 				sqlite: () =>
-					"CREATE TABLE example_mcp_grants(client_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,approve_url TEXT NOT NULL,code TEXT,agent TEXT NOT NULL,family TEXT,scopes TEXT NOT NULL,status TEXT NOT NULL,expires_at INTEGER NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)",
+					"CREATE TABLE example_mcp_grants(client_id TEXT PRIMARY KEY,subject TEXT NOT NULL,request_id TEXT NOT NULL,approve_url TEXT NOT NULL,code TEXT,agent TEXT NOT NULL,family TEXT,scopes TEXT NOT NULL,status TEXT NOT NULL,expires_at INTEGER NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)",
 				pg: () =>
-					"CREATE TABLE example_mcp_grants(client_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,approve_url TEXT NOT NULL,code TEXT,agent TEXT NOT NULL,family TEXT,scopes TEXT NOT NULL,status TEXT NOT NULL,expires_at BIGINT NOT NULL,created_at BIGINT NOT NULL,updated_at BIGINT NOT NULL)",
+					"CREATE TABLE example_mcp_grants(client_id TEXT PRIMARY KEY,subject TEXT NOT NULL,request_id TEXT NOT NULL,approve_url TEXT NOT NULL,code TEXT,agent TEXT NOT NULL,family TEXT,scopes TEXT NOT NULL,status TEXT NOT NULL,expires_at BIGINT NOT NULL,created_at BIGINT NOT NULL,updated_at BIGINT NOT NULL)",
 				mysql: () =>
-					"CREATE TABLE example_mcp_grants(client_id VARCHAR(128) PRIMARY KEY,request_id VARCHAR(64) NOT NULL,approve_url LONGTEXT NOT NULL,code VARCHAR(32),agent VARCHAR(64) NOT NULL,family VARCHAR(64),scopes VARCHAR(32) NOT NULL,status VARCHAR(16) NOT NULL,expires_at BIGINT NOT NULL,created_at BIGINT NOT NULL,updated_at BIGINT NOT NULL) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin",
+					"CREATE TABLE example_mcp_grants(client_id VARCHAR(128) PRIMARY KEY,subject VARCHAR(64) NOT NULL,request_id VARCHAR(64) NOT NULL,approve_url LONGTEXT NOT NULL,code VARCHAR(32),agent VARCHAR(64) NOT NULL,family VARCHAR(64),scopes VARCHAR(32) NOT NULL,status VARCHAR(16) NOT NULL,expires_at BIGINT NOT NULL,created_at BIGINT NOT NULL,updated_at BIGINT NOT NULL) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin",
 			}),
 			{ protect: true },
 		);
 	});
 
-const stored = (ctx: Context, clientId: string) =>
-	ctx.db`SELECT client_id,request_id,approve_url,code,agent,family,scopes,status,expires_at,created_at,updated_at FROM example_mcp_grants WHERE client_id=${clientId}`.pipe(
+const stored = (ctx: Context, holder: GrantHolder) =>
+	ctx.db`SELECT client_id,subject,request_id,approve_url,code,agent,family,scopes,status,expires_at,created_at,updated_at FROM example_mcp_grants WHERE client_id=${holder.clientId} AND subject=${holder.subject} AND agent=${holder.agent ?? ""}`.pipe(
 		Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Row))),
 		Effect.map((rows) => rows[0]),
 	);
@@ -85,7 +96,6 @@ const collected = (ctx: Context, row: Row) =>
 					...row,
 					status: "active",
 					family: result.family,
-					agent: result.agent,
 					scopes: result.scopes.join(" "),
 					expires_at: result.expires_at,
 				};
@@ -96,20 +106,21 @@ const collected = (ctx: Context, row: Row) =>
 		),
 	);
 
-/** The grant as last recorded, without asking boot. */
-export const storedEditing = (ctx: Context, clientId: string) =>
-	stored(ctx, clientId).pipe(Effect.map((row) => (row ? view(row) : none)));
+/** The holder's grant as last recorded, without asking boot. */
+export const storedEditing = (ctx: Context, holder: GrantHolder) =>
+	stored(ctx, holder).pipe(Effect.map((row) => (row && holder.agent !== undefined ? view(row) : none)));
 /**
  * The connection's grant, collected lazily: a pending request is asked about on every call, and an active grant
  * when `refresh` is set or its expiry has passed. A change is recorded unless `readOnly`, as a GET request must be.
  */
 export const editingState = (
 	ctx: Context,
-	clientId: string,
+	holder: GrantHolder,
 	options: { readonly refresh?: boolean; readonly readOnly?: boolean } = {},
 ) =>
 	Effect.gen(function* () {
-		const row = yield* stored(ctx, clientId);
+		// A connection without a posting name holds no grant; any other identity's row reads as none.
+		const row = holder.agent === undefined ? undefined : yield* stored(ctx, holder);
 		if (!row) return none;
 		const now = yield* Clock.currentTimeMillis;
 		if (row.status !== "pending" && !(row.status === "active" && (options.refresh || row.expires_at <= now)))
@@ -123,7 +134,7 @@ export const editingState = (
 				next.expires_at !== row.expires_at)
 		)
 			yield* ctx.mutate(
-				ctx.db`UPDATE example_mcp_grants SET status=${next.status},family=${next.family},agent=${next.agent},scopes=${next.scopes},expires_at=${next.expires_at},updated_at=${now} WHERE client_id=${clientId} AND request_id=${row.request_id}`,
+				ctx.db`UPDATE example_mcp_grants SET status=${next.status},family=${next.family},scopes=${next.scopes},expires_at=${next.expires_at},updated_at=${now} WHERE client_id=${holder.clientId} AND request_id=${row.request_id}`,
 			);
 		return view(next);
 	});
@@ -133,16 +144,22 @@ export const editingState = (
  * scopes on boot's page, where fs starts unticked. The approval link is given on the board origin, where the
  * human holds the passkey session that the consent continuation needs.
  */
-export const requestEditing = (ctx: Context, origin: string, clientId: string, agent: string, label: string) =>
+export const requestEditing = (
+	ctx: Context,
+	origin: string,
+	holder: GrantHolder & { readonly agent: string },
+	label: string,
+) =>
 	Effect.gen(function* () {
-		const created = yield* ctx.agentGrants.request({ agent, label, scopes: ["read", "write", "fs"] });
+		const created = yield* ctx.agentGrants.request({ agent: holder.agent, label, scopes: ["read", "write", "fs"] });
 		const now = yield* Clock.currentTimeMillis;
 		const row: Row = {
-			client_id: clientId,
+			client_id: holder.clientId,
+			subject: holder.subject,
 			request_id: created.id,
 			approve_url: `${origin}${new URL(created.approve_url).pathname}`,
 			code: created.user_code,
-			agent,
+			agent: holder.agent,
 			family: null,
 			scopes: "read write fs",
 			status: "pending",
@@ -152,8 +169,8 @@ export const requestEditing = (ctx: Context, origin: string, clientId: string, a
 		};
 		yield* ctx.mutate(
 			Effect.gen(function* () {
-				yield* ctx.db`DELETE FROM example_mcp_grants WHERE client_id=${clientId}`;
-				yield* ctx.db`INSERT INTO example_mcp_grants(client_id,request_id,approve_url,code,agent,family,scopes,status,expires_at,created_at,updated_at) VALUES(${row.client_id},${row.request_id},${row.approve_url},${row.code},${row.agent},${row.family},${row.scopes},${row.status},${row.expires_at},${row.created_at},${row.updated_at})`;
+				yield* ctx.db`DELETE FROM example_mcp_grants WHERE client_id=${row.client_id}`;
+				yield* ctx.db`INSERT INTO example_mcp_grants(client_id,subject,request_id,approve_url,code,agent,family,scopes,status,expires_at,created_at,updated_at) VALUES(${row.client_id},${row.subject},${row.request_id},${row.approve_url},${row.code},${row.agent},${row.family},${row.scopes},${row.status},${row.expires_at},${row.created_at},${row.updated_at})`;
 			}),
 		);
 		return view(row);

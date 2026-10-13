@@ -174,7 +174,7 @@ export const messageSchema = {
 	required: ["id", "seq", "topic", "agent", "instance", "body"],
 } as const;
 
-export const tools = [
+export const tools = Object.freeze([
 	{
 		name: "connection_info",
 		title: "Describe this chirp connection",
@@ -403,7 +403,7 @@ export const tools = [
 		outputSchema: messageSchema,
 		annotations: { ...changing, idempotentHint: true },
 	},
-] as const;
+] as const);
 
 export interface Connection {
 	readonly mcpUrl: string;
@@ -508,8 +508,8 @@ export const callTool = (
 				return toolError("input_invalid", "topic, body, and an idempotencyKey of 1–156 characters are required");
 			const meta = { ...args.value.meta, mcp_client_id: caller.clientId, mcp_approved_by: caller.subject };
 			// With a live grant the post is the agent's own, so it can be edited and deleted through the grant later.
-			const editing = yield* editingState(ctx, caller.clientId).pipe(
-				Effect.catchTag("KernelError", () => storedEditing(ctx, caller.clientId)),
+			const editing = yield* editingState(ctx, caller).pipe(
+				Effect.catchTag("KernelError", () => storedEditing(ctx, caller)),
 			);
 			// Only a grant that may write, under the name this connection posts as; otherwise post as before.
 			if (
@@ -532,9 +532,7 @@ export const callTool = (
 					return toolResult(reply.json.value);
 				// A revoked or lapsed grant posted nothing; record that and post the way connections without one do.
 				if (!grantEnded(reply)) return boardError(reply);
-				yield* editingState(ctx, caller.clientId, { refresh: true }).pipe(
-					Effect.catchTag("KernelError", () => Effect.void),
-				);
+				yield* editingState(ctx, caller, { refresh: true }).pipe(Effect.catchTag("KernelError", () => Effect.void));
 			}
 			const message = yield* ctx.messages.create(
 				{
@@ -551,8 +549,8 @@ export const callTool = (
 		if (!caller.scopes.includes("read")) return toolError("scope_required", "This connection was not granted read.");
 		if (input.name === "connection_info") {
 			// Asks boot afresh, so a revocation or expiry shows here before the next editing call fails.
-			const editing = yield* editingState(ctx, caller.clientId, { refresh: true }).pipe(
-				Effect.catchTag("KernelError", () => storedEditing(ctx, caller.clientId)),
+			const editing = yield* editingState(ctx, caller, { refresh: true }).pipe(
+				Effect.catchTag("KernelError", () => storedEditing(ctx, caller)),
 			);
 			return toolResult({
 				board: origin,

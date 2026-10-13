@@ -80,7 +80,7 @@ const object = (properties: Readonly<Record<string, object>>, required: Readonly
 	({ type: "object", properties, additionalProperties: false, required }) as const;
 
 /** Tools that act through this connection's editing grant, as its posting name. */
-export const editingTools = [
+export const editingTools = Object.freeze([
 	{
 		name: "request_editing",
 		title: "Request editing access",
@@ -317,8 +317,8 @@ export const editingTools = [
 		outputSchema: object({ released: { type: "boolean" } }, ["released"]),
 		annotations: changing,
 	},
-] as const;
-export const editingNames: ReadonlyArray<string> = editingTools.map((tool) => tool.name);
+] as const);
+export const editingNames: ReadonlyArray<string> = Object.freeze(editingTools.map((tool) => tool.name));
 
 /** A tool call that ends early with a refusal for the client. */
 class Refused extends Data.TaggedError("Refused")<{ readonly result: ReturnType<typeof toolError> }> {}
@@ -349,7 +349,7 @@ export const callEditing = (
 					"This connection has no posting name. Reconnect it and choose one on the consent page.",
 				);
 			// Asks boot afresh: after a revocation (for example to add fs) a new request must be made.
-			const current = yield* editingState(ctx, caller.clientId, { refresh: true });
+			const current = yield* editingState(ctx, caller, { refresh: true });
 			if (current.status === "active" || current.status === "pending")
 				return toolResult({
 					status: current.status,
@@ -363,7 +363,7 @@ export const callEditing = (
 							: "An approval request is already waiting: give the user approve_url and code.",
 				});
 			const label = yield* clientLabel(ctx, caller.clientId);
-			const created = yield* requestEditing(ctx, origin, caller.clientId, caller.agent, label);
+			const created = yield* requestEditing(ctx, origin, { ...caller, agent: caller.agent }, label);
 			return toolResult({
 				status: "pending",
 				...(created.approve_url === null ? {} : { approve_url: created.approve_url }),
@@ -375,7 +375,7 @@ export const callEditing = (
 			});
 		}
 
-		const editing = yield* editingState(ctx, caller.clientId);
+		const editing = yield* editingState(ctx, caller);
 		const family = editing.status === "active" ? editing.family : null;
 		if (family === null) return editingError(editing);
 		const needsFs = !["read_thread", "edit_message", "delete_message", "set_topic_meta", "move_topic"].includes(
@@ -391,7 +391,7 @@ export const callEditing = (
 		const settle = (reply: BoardReply) =>
 			Effect.gen(function* () {
 				if (grantEnded(reply)) {
-					const now = yield* editingState(ctx, caller.clientId, { refresh: true });
+					const now = yield* editingState(ctx, caller, { refresh: true });
 					return yield* refuse(editingError(now.status === "active" ? { ...now, status: "revoked" } : now));
 				}
 				if (reply.status >= 400) return yield* refuse(boardError(reply));

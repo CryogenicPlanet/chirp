@@ -46,7 +46,7 @@ const installed = async (test: TestContext, thread: boolean) => {
 	await app.setup();
 	const cookie = await app.login();
 	await app.ready(cookie);
-	return { app, cookie };
+	return { fixture, app, cookie };
 };
 
 /** Registers a client and returns what its authorization request carries. */
@@ -180,7 +180,7 @@ const mcp = (app: App, token: string) => {
 };
 
 it("connects with editing approved by passkey, then edits, publishes and live-edits as the posting agent", async (test) => {
-	const { app, cookie } = await installed(test, true);
+	const { fixture, app, cookie } = await installed(test, true);
 	const client = await register(app, "Dot Client");
 	const consentPage = await (
 		await fetch(`${app.url}/mcp/oauth/authorize?${new URLSearchParams(client.query)}`, { headers: { cookie } })
@@ -365,6 +365,15 @@ it("connects with editing approved by passkey, then edits, publishes and live-ed
 	expect((await tool("release_lock")).ok).toEqual({ released: true });
 	expect((await tool("reload_status")).ok).toMatchObject({ lock: null });
 
+	// A grant belongs to the human who approved it: under another subject the row is not this connection's grant.
+	await fixture.sql(`UPDATE example_mcp_grants SET subject='another-human' WHERE client_id='${client.clientId}'`);
+	expect((await tool("connection_info")).ok).toMatchObject({ editing: { status: "none" } });
+	expect((await tool("edit_message", { seq: posted.seq, body: "as someone else" })).error).toMatchObject({
+		error: { code: "editing_not_granted" },
+	});
+	await fixture.sql(`UPDATE example_mcp_grants SET subject='rahul' WHERE client_id='${client.clientId}'`);
+	expect((await tool("connection_info")).ok).toMatchObject({ editing: { status: "active", agent: "dot" } });
+
 	// Revoking the family on the board's token list ends editing; posting falls back to the extension's own voice.
 	await revoke(app, cookie, "dot");
 	expect((await tool("edit_message", { seq: posted.seq, body: "after revocation" })).error).toMatchObject({
@@ -497,6 +506,29 @@ it("lets an existing connection request editing, keeps fs opt-in, and never bloc
 		});
 	// Threads need the board's thread extension, which this board lacks.
 	expect((await tool("read_thread", { seq: own })).error).toMatchObject({ error: { code: "not_available" } });
+
+	// Re-authorizing the same client under another posting name never acts through the earlier grant.
+	const renamed = await form(app, cookie, "/mcp/oauth/authorize", {
+		...client.query,
+		decision: "approve",
+		agent: "renamed-bot",
+	});
+	expect(renamed.status).toBe(302);
+	const renamedTool = mcp(app, await exchange(app, client, renamed.headers.get("location"))).tool;
+	expect((await renamedTool("connection_info")).ok).toMatchObject({
+		posting_name: "renamed-bot",
+		editing: { status: "none" },
+	});
+	expect((await renamedTool("edit_message", { seq: own, body: "taken over" })).error).toMatchObject({
+		error: { code: "editing_not_granted" },
+	});
+	expect(
+		(await renamedTool("post_message", { topic: "existing", body: "renamed", idempotencyKey: "r-1" })).ok,
+	).toMatchObject({ agent: "renamed-bot", instance: `extension:mcp:${client.clientId}` });
+	const renamedRequest = decode(Requested, (await renamedTool("request_editing")).ok);
+	expect(renamedRequest.approve_url).not.toBe(requested.approve_url);
+	// One grant per connection: the new identity's request replaces the earlier one, which no token uses any more.
+	expect((await tool("connection_info")).ok).toMatchObject({ editing: { status: "none" } });
 
 	// A denied editing approval still finishes connecting: the client reads and posts as before.
 	const denied = await register(app, "Denied Client");
