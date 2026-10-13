@@ -12,6 +12,7 @@ const Relay = Schema.Struct({
 	headers: Schema.Record(Schema.String, Schema.String),
 	body: Schema.String,
 });
+const Outcome = Schema.Union([Relay, Schema.Struct({ error: Schema.String })]);
 const Approved = Schema.Struct({
 	status: Schema.Literal("approved"),
 	family: Schema.String,
@@ -32,7 +33,7 @@ const Message = Schema.Struct({
 const Lock = Schema.Struct({
 	lock: Schema.NullOr(Schema.Struct({ holder_family: Schema.String, cutover_in_flight: Schema.Int })),
 });
-const json = (text: string) => Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(text);
+const json = (text: string) => Schema.decodeSync(Schema.fromJsonString(Schema.Unknown))(text);
 
 /** A seed with a test extension that drives ctx.agentGrants the way MCP would. */
 async function installed(test: TestContext) {
@@ -66,10 +67,12 @@ async function installed(test: TestContext) {
 	const grant = async (scopes: readonly string[]) => {
 		const requested = await probe("/api/grant-probe/request", { agent: "dot", label: "probe", scopes });
 		expect(requested.status).toBe(200);
-		const { id, approve_url } = Schema.decodeUnknownSync(
-			Schema.Struct({ id: Schema.String, approve_url: Schema.String }),
+		const { id, approve_url, user_code } = Schema.decodeUnknownSync(
+			Schema.Struct({ id: Schema.String, approve_url: Schema.String, user_code: Schema.String }),
 		)(requested.body);
 		expect(approve_url).toBe(`https://comms.test/approve/${id}`);
+		// The extension shows its requester this code; the approval page shows the same one.
+		expect(await (await fetch(`${app.url}/approve/${id}`)).text()).toContain(`<code>${user_code}</code>`);
 		expect((await probe("/api/grant-probe/collect", { id })).body).toMatchObject({ status: "pending" });
 		const params = { id, decision: "approve" as const, scopes, long_lived: false };
 		const approval = await fetch(`${app.url}/_boot/enroll/${id}/approve`, {
@@ -174,10 +177,20 @@ it("lets an extension act as a human-approved agent through boot, through a deta
 	expect(staged.status, staged.body).toBe(200);
 	const before = (await status()).child.generation ?? 0;
 	const started = performance.now();
-	const reload = await via(family, "/api/reload", { method: "POST", body: "{}" });
+	// The request that detaches a reload may not poll for it: the reload is waiting for that request to end.
+	const detached = await probe("/api/grant-probe/batch", {
+		family,
+		calls: [{ path: "/api/reload", method: "POST", body: "{}" }, { path: "/api/generations" }, { path: "/api/lock" }],
+	});
+	expect(performance.now() - started).toBeLessThan(5000);
+	expect(detached.status).toBe(200);
+	const [reload, ...after] = Schema.decodeUnknownSync(Schema.Struct({ results: Schema.Array(Outcome) }))(
+		detached.body,
+	).results;
+	if (!reload || !("status" in reload)) throw new Error(`Reload was not answered: ${JSON.stringify(reload)}`);
 	expect(reload.status, reload.body).toBe(202);
 	expect(json(reload.body)).toMatchObject({ status: "reloading", lock: { holder_family: family } });
-	expect(performance.now() - started).toBeLessThan(5000);
+	expect(after).toEqual([{ error: "reload_detached" }, { error: "reload_detached" }]);
 	// The generation that sent the reload is the one it retires; boot owns the work until the new one is live.
 	await expect
 		.poll(async () => (await status()).child, { timeout: 60000, interval: 250 })
@@ -311,6 +324,7 @@ it("never queues a grant behind the freeze its own admitted request is holding",
 	expect(result.at - sent).toBeLessThan(3000);
 	expect(result.status, result.body).toBe(200);
 	const results = Schema.decodeUnknownSync(Schema.Struct({ results: Schema.Array(Relay) }))(json(result.body)).results;
+	// None of these is a detached reload, so the request keeps its grant calls.
 	expect(results.map((item) => item.status)).toEqual([503, 503, 503, 200, 200]);
 	for (const item of results.slice(0, 3))
 		expect(json(item.body)).toMatchObject({ error: { code: "board_busy", retriable: true } });

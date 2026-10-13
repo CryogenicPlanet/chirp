@@ -78,6 +78,9 @@ const run = Effect.gen(function* () {
 		] as const)
 			yield* fails(auth.createHeldEnrollment(input), "invalid_request");
 		const request = yield* held();
+		// The page and the requester show the same code, tying the approve link to the connection that asked.
+		assert.match(request.user_code, /^[A-F0-9]{6}$/);
+		assert.equal((yield* auth.enrollmentInfo(request.id)).user_code, request.user_code);
 		const info = yield* auth.enrollmentInfo(request.id);
 		assert.equal(info.held, "mcp");
 		assert.equal(info.kind, "extension:mcp");
@@ -98,11 +101,19 @@ const run = Effect.gen(function* () {
 		const narrow = yield* held(["read"]);
 		yield* fails(approve(narrow.id, ["read", "write"]), "invalid_request");
 		yield* approve(request.id);
-		// Collection gets a full window from the decision, not from the request.
-		const window = yield* sql`SELECT expires_at FROM enrollments WHERE id=${request.id}`.pipe(
-			Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ expires_at: Schema.Int })))),
+		// The passkey-bound approval writes the grant: it is listed and revocable before anyone collects it.
+		const issued =
+			(yield* sql`SELECT e.family AS family, e.status AS status FROM enrollments e WHERE e.id=${request.id}`.pipe(
+				Effect.flatMap(
+					Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ family: Schema.String, status: Schema.String }))),
+				),
+			))[0];
+		assert.equal(issued?.status, "collected");
+		assert.deepEqual(yield* sql`SELECT kind FROM tokens WHERE family=${issued?.family ?? ""}`, [{ kind: "access" }]);
+		assert.equal(
+			(yield* auth.listTokenFamilies()).items.find((item) => item.family === issued?.family)?.held_by,
+			"mcp",
 		);
-		assert.ok((window[0]?.expires_at ?? 0) >= now + 600_000);
 		// Concurrent collections agree on one family and write exactly one access row, with no secret field.
 		const results = yield* Effect.all(
 			Array.from({ length: 6 }, () => auth.collectHeldEnrollment(request.id, "mcp")),
@@ -178,6 +189,22 @@ const run = Effect.gen(function* () {
 			family: first.family,
 		});
 		assert.equal((yield* auth.listTokenFamilies()).items.find((item) => item.family === first.family)?.revoked, true);
+		// Revoking between approval and the first collection sticks; collection then reports it.
+		const early = yield* held();
+		yield* approve(early.id);
+		const earlyFamily = (yield* sql`SELECT family FROM enrollments WHERE id=${early.id}`.pipe(
+			Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ family: Schema.String })))),
+		))[0]?.family;
+		assert.ok(earlyFamily);
+		const earlyRevocation = yield* auth.startRevocationAssertion({ family: earlyFamily });
+		yield* auth.revokeFamily(
+			{ family: earlyFamily },
+			{ id: earlyRevocation.id, response: device.assertion(earlyRevocation.options.challenge, ++counter) },
+			"human",
+		);
+		assert.deepEqual(yield* auth.collectHeldEnrollment(early.id, "mcp"), { status: "revoked", family: earlyFamily });
+		yield* fails(auth.authenticateGrant(earlyFamily, "mcp"), "grant_invalid");
+		assert.deepEqual(yield* sql`SELECT kind FROM tokens WHERE family=${earlyFamily}`, [{ kind: "access" }]);
 	} else if (scenario === "lapse") {
 		const denied = yield* held();
 		yield* decide({ id: denied.id, decision: "deny", scopes: [], long_lived: false });
@@ -185,11 +212,13 @@ const run = Effect.gen(function* () {
 		const stale = yield* held();
 		yield* sql`UPDATE enrollments SET expires_at=${now - 1} WHERE id=${stale.id}`;
 		assert.deepEqual(yield* auth.collectHeldEnrollment(stale.id, "mcp"), { status: "expired" });
+		assert.equal((yield* sql`SELECT id FROM tokens`).length, 0);
+		// Approval already issued the grant, so the request's window no longer limits collection.
 		const late = yield* held();
 		yield* approve(late.id);
 		yield* sql`UPDATE enrollments SET expires_at=${now - 1} WHERE id=${late.id}`;
-		assert.deepEqual(yield* auth.collectHeldEnrollment(late.id, "mcp"), { status: "expired" });
-		assert.equal((yield* sql`SELECT id FROM tokens`).length, 0);
+		assert.equal((yield* auth.collectHeldEnrollment(late.id, "mcp")).status, "approved");
+		assert.equal((yield* sql`SELECT id FROM tokens`).length, 1);
 		// After 90 days the grant needs a new approval.
 		const lapsed = yield* held();
 		yield* approve(lapsed.id);

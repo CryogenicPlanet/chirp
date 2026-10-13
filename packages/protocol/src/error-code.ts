@@ -37,6 +37,7 @@ export const KernelErrorCode = Schema.Literals([
 	"placeholder_style",
 	"sql_query_timeout",
 	"read_snapshot_timeout",
+	"reload_detached",
 	"stale_writer",
 	"storage_headroom",
 	"storage_measurement_failed",

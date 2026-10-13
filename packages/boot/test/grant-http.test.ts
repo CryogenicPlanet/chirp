@@ -13,7 +13,12 @@ import { authenticator } from "./fixtures/authenticator.ts";
 
 const ceremony = Schema.Struct({ id: Schema.String, options: Schema.Struct({ challenge: Schema.String }) });
 const Channel = Schema.Struct({ secret: Schema.String, url: Schema.String });
-const Created = Schema.Struct({ id: Schema.String, approve_url: Schema.String, expires_at: Schema.Int });
+const Created = Schema.Struct({
+	id: Schema.String,
+	approve_url: Schema.String,
+	user_code: Schema.String,
+	expires_at: Schema.Int,
+});
 const Approved = Schema.Struct({
 	status: Schema.Literal("approved"),
 	family: Schema.String,
@@ -227,7 +232,13 @@ it("creates, approves and collects a held grant, then forwards it as the approve
 	expect(page).toContain('<input id="write" type="checkbox" checked>');
 	expect(page).toContain("Access lasts 90 days");
 	expect(page).not.toContain("Long-lived");
-	expect(page).not.toContain("<code>");
+	// The requester's code ties this link to the connection that asked for it.
+	expect(created.user_code).toMatch(/^[A-F0-9]{6}$/);
+	expect(page).toContain(`<code>${created.user_code}</code>`);
+	expect(page).toContain("Anything the board's app runs can use this access");
+	expect(page).toContain(
+		"With fs, anything running in the app, including code another fs agent installs, can act as dot",
+	);
 	expect(page).not.toContain("data-return");
 	const returned = await (
 		await fetch(`${app.url}/approve/${created.id}?return=${encodeURIComponent("/mcp/oauth/authorize?state=a&b=<x>")}`)

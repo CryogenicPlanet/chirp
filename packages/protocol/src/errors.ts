@@ -143,6 +143,11 @@ export const policy = {
 		message: "This SQL operation is not supported.",
 		hint: "Use one supported data or schema statement. Transaction control, PRAGMA, attachments, triggers, temporary objects and recovery tables are unavailable. Remove comments and semicolons; bind literal text as parameters.",
 	},
+	reload_detached: {
+		status: 409,
+		message: "This request started a detached reload; it can make no further grant calls.",
+		hint: "Return now: the reload waits for this request to finish. Check GET /api/lock or /api/generations from a later request.",
+	},
 	read_snapshot_timeout: {
 		status: 408,
 		message: "The published read exceeded its cooperative execution budget.",

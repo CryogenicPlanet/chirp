@@ -35,15 +35,23 @@ export const approvalReturn = (value: string | null, origin: string) => {
 const buttons = `<button type="submit" value="approve">Approve with passkey</button><button type="submit" value="deny">Deny with passkey</button>`;
 /** A held enrollment is described only from its own row: the extension, agent and label boot stored. */
 const heldBody = (
-	enrollment: { readonly id: string; readonly name: string; readonly host: string; readonly status: string },
+	enrollment: {
+		readonly id: string;
+		readonly name: string;
+		readonly host: string;
+		readonly status: string;
+		readonly user_code: string;
+	},
 	extension: string,
 	requested: readonly string[],
 	returnTo: string | null,
 ) => `<h1>Allow ${escape(extension)} to act as ${escape(enrollment.name)}</h1>
 <p>Extension <strong>${escape(extension)}</strong> asks to act as agent <strong>${escape(enrollment.name)}</strong> (${escape(enrollment.host)}). Boot keeps this access; it is never sent to the extension.</p>
+<p>Confirm this code matches the one the extension showed you:</p><p><code>${escape(enrollment.user_code)}</code></p>
+<p>Anything the board's app runs can use this access, including code an agent with fs installs later. Revoking that agent does not revoke this grant; revoke the grant itself.</p>
 ${
 	enrollment.status === "pending"
-		? `<form id="approval" data-id="${escape(enrollment.id)}" data-base="read"${returnTo === null ? "" : ` data-return="${escape(returnTo)}"`}><p>Grant read access.</p>${requested.includes("write") ? `<label><input id="write" type="checkbox" checked> Allow posting and editing messages, topics and metadata (write)</label>` : ""}${requested.includes("fs") ? `<label><input id="fs" type="checkbox"> Allow source and page editing (fs)</label>` : ""}<p>Access lasts 90 days, then the extension must ask again. Revoke it at any time from your account.</p>${buttons}</form>`
+		? `<form id="approval" data-id="${escape(enrollment.id)}" data-base="read"${returnTo === null ? "" : ` data-return="${escape(returnTo)}"`}><p>Grant read access.</p>${requested.includes("write") ? `<label><input id="write" type="checkbox" checked> Allow posting and editing messages, topics and metadata (write)</label>` : ""}${requested.includes("fs") ? `<label><input id="fs" type="checkbox"> Allow source and page editing (fs)</label><p>With fs, anything running in the app, including code another fs agent installs, can act as ${escape(enrollment.name)} and change the app itself.</p>` : ""}<p>Access lasts 90 days, then the extension must ask again. Revoke it at any time from your account.</p>${buttons}</form>`
 		: `<p>This request is ${escape(enrollment.status)}. Return to the extension.</p>`
 }`;
 export const approvalPage = (

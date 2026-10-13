@@ -152,7 +152,8 @@ export const makeEnrollment = <E, R>(
 					expires = now + 600_000;
 				yield* sql`INSERT INTO enrollments(id,device_secret_hash,user_code,agent_name,kind,host,status,family,created_at,expires_at,scopes)
    VALUES(${id},${digest},${code},${input.agent},${heldKindPrefix + input.extension},${input.label},'pending',${family},${now},${expires},${scopes})`;
-				return { id, expires_at: expires };
+				// The page shows this code too, so the human can tell this request from one sent by another connection.
+				return { id, user_code: code, expires_at: expires };
 			});
 		const decideEnrollment = (params: EnrollmentDecision, proof: AssertionProof) =>
 			mutex.withPermit(
@@ -181,10 +182,14 @@ export const makeEnrollment = <E, R>(
 							);
 							const access = held !== null ? heldAccessSeconds : params.long_lived ? 604800 : 86400,
 								refresh = held !== null ? null : params.long_lived ? 7776000 : 2592000;
-							yield* sql`UPDATE enrollments SET status=${params.decision === "approve" ? "approved" : "denied"},scopes=${scopes},access_seconds=${access},refresh_seconds=${refresh} WHERE id=${params.id}`;
-							// A held approval guards no device secret: give the extension a full window from the decision.
-							if (held !== null && params.decision === "approve")
-								yield* sql`UPDATE enrollments SET expires_at=${now + 600_000} WHERE id=${params.id}`;
+							// A held approval writes the grant inside the passkey-bound transaction: from that commit the family is
+							// listed, revocable and usable, and collection only reports it. Its one access row hashes a value boot
+							// discards, so no image, this one included, can present it as a bearer.
+							const issued = held !== null && params.decision === "approve";
+							if (issued)
+								yield* sql`INSERT INTO tokens(id,pair_id,family,agent,kind,hash,label,scopes,expires_at,created_at)
+    VALUES(${`t_${yield* random}`},${`p_${yield* random}`},${row.family},${row.agent_name},'access',${yield* hash(yield* random)},${row.host},${scopes},${now + heldAccessSeconds * 1000},${now})`;
+							yield* sql`UPDATE enrollments SET status=${issued ? "collected" : params.decision === "approve" ? "approved" : "denied"},collected_at=${issued ? now : null},scopes=${scopes},access_seconds=${access},refresh_seconds=${refresh} WHERE id=${params.id}`;
 							yield* events.writeBoot({
 								at: now,
 								type: params.decision === "approve" ? "enrollment.approved" : "enrollment.denied",
@@ -259,52 +264,42 @@ export const makeEnrollment = <E, R>(
 					}),
 				),
 			);
-		/** Idempotent and serialized: the first approved collection writes the family's only access row. */
+		/** Only reports: approval already wrote the grant, so collection is idempotent and writes nothing. */
 		const collectHeldEnrollment = (id: string, extension: string) =>
-			mutex.withPermit(
-				sql.withTransaction(
-					Effect.gen(function* () {
-						yield* lockBootWrite(sql);
-						if (!/^e_[A-Za-z0-9_-]{43}$/.test(id) || !validExtensionName(extension))
-							return yield* refuse("enrollment_invalid");
-						const row =
-							(yield* sql`SELECT * FROM enrollments WHERE id=${id} AND kind=${heldKindPrefix + extension}`.pipe(
-								Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(enrollmentRow))),
-							))[0];
-						if (!row) return yield* refuse("enrollment_invalid");
-						const now = yield* Clock.currentTimeMillis;
-						if (row.status === "denied") return { status: "denied" } satisfies HeldCollection;
-						if (row.status === "pending")
-							return (
-								row.expires_at <= now ? { status: "expired" } : { status: "pending", expires_at: row.expires_at }
-							) satisfies HeldCollection;
-						if (row.status === "approved") {
-							if (row.expires_at <= now) return { status: "expired" } satisfies HeldCollection;
-							// Only this image's decision writes a held approval; anything else stays inert.
-							if (row.scopes === null || row.access_seconds !== heldAccessSeconds || row.refresh_seconds !== null)
-								return yield* refuse("enrollment_invalid");
-							yield* sql`INSERT INTO tokens(id,pair_id,family,agent,kind,hash,label,scopes,expires_at,created_at)
-    VALUES(${`t_${yield* random}`},${`p_${yield* random}`},${row.family},${row.agent_name},'access',${yield* hash(yield* random)},${row.host},${row.scopes},${now + heldAccessSeconds * 1000},${now})`;
-							yield* sql`UPDATE enrollments SET status='collected',collected_at=${now} WHERE id=${id}`;
-						} else if (row.status !== "collected") return yield* refuse("enrollment_invalid");
-						const tokens =
-							yield* sql`SELECT id,family,agent,label,scopes,expires_at,revoked_at FROM tokens WHERE family=${row.family} AND kind='access'`.pipe(
-								Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(tokenRow))),
-							);
-						const token = tokens[0];
-						if (!token || tokens.length !== 1) return yield* refuse("enrollment_invalid");
-						if (token.revoked_at !== null) return { status: "revoked", family: token.family } satisfies HeldCollection;
-						if (token.expires_at <= now) return { status: "expired", family: token.family } satisfies HeldCollection;
-						return {
-							status: "approved",
-							family: token.family,
-							agent: token.agent,
-							label: token.label,
-							scopes: token.scopes,
-							expires_at: token.expires_at,
-						} satisfies HeldCollection;
-					}),
-				),
+			sql.withTransaction(
+				Effect.gen(function* () {
+					if (!/^e_[A-Za-z0-9_-]{43}$/.test(id) || !validExtensionName(extension))
+						return yield* refuse("enrollment_invalid");
+					const row = (yield* sql`SELECT * FROM enrollments WHERE id=${id} AND kind=${heldKindPrefix + extension}`.pipe(
+						Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(enrollmentRow))),
+					))[0];
+					if (!row) return yield* refuse("enrollment_invalid");
+					const now = yield* Clock.currentTimeMillis;
+					if (row.status === "denied") return { status: "denied" } satisfies HeldCollection;
+					if (row.status === "pending")
+						return (
+							row.expires_at <= now ? { status: "expired" } : { status: "pending", expires_at: row.expires_at }
+						) satisfies HeldCollection;
+					// This image approves a held row straight to collected. An "approved" one came from an older image's
+					// page, which would have issued refreshable lifetimes; it stays inert.
+					if (row.status !== "collected") return yield* refuse("enrollment_invalid");
+					const tokens =
+						yield* sql`SELECT id,family,agent,label,scopes,expires_at,revoked_at FROM tokens WHERE family=${row.family} AND kind='access'`.pipe(
+							Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(tokenRow))),
+						);
+					const token = tokens[0];
+					if (!token || tokens.length !== 1) return yield* refuse("enrollment_invalid");
+					if (token.revoked_at !== null) return { status: "revoked", family: token.family } satisfies HeldCollection;
+					if (token.expires_at <= now) return { status: "expired", family: token.family } satisfies HeldCollection;
+					return {
+						status: "approved",
+						family: token.family,
+						agent: token.agent,
+						label: token.label,
+						scopes: token.scopes,
+						expires_at: token.expires_at,
+					} satisfies HeldCollection;
+				}),
 			);
 		/** Use evidence is stamped the moment a grant authenticates, as for a bearer token. */
 		const authenticateGrant = (family: string, extension: string) =>

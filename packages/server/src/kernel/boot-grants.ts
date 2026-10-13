@@ -11,7 +11,13 @@ export interface GrantRequest {
 	readonly label: string;
 	readonly scopes: ReadonlyArray<typeof GrantScope.Type>;
 }
-export const GrantCreated = Schema.Struct({ id: Schema.String, approve_url: Schema.String, expires_at: Schema.Int });
+/** user_code is shown on the approval page; the extension shows it to its requester so the human can match them. */
+export const GrantCreated = Schema.Struct({
+	id: Schema.String,
+	approve_url: Schema.String,
+	user_code: Schema.String,
+	expires_at: Schema.Int,
+});
 /** Collection never carries a credential: boot holds the grant and the app only names its family. */
 export const GrantCollection = Schema.Union([
 	Schema.Struct({ status: Schema.Literal("pending"), expires_at: Schema.Int }),
@@ -32,6 +38,8 @@ export interface GrantFetch {
 	readonly method: HttpMethod;
 	readonly headers: Readonly<Record<string, string>>;
 	readonly body?: Uint8Array;
+	/** Milliseconds to wait for the whole response. */
+	readonly deadline: number;
 }
 export interface Grants {
 	readonly request: (input: GrantRequest) => Effect.Effect<typeof GrantCreated.Type, KernelError>;
@@ -95,7 +103,7 @@ const make = Effect.gen(function* () {
 				"grant",
 			),
 		collect: (id, extension) => call(`/_boot/grants/${encodeURIComponent(id)}`, { extension }, GrantCollection, "id"),
-		// Buffered, so one deadline covers the body; boot answers a detached reload with 202 at once.
+		// Buffered, so one deadline covers the body.
 		fetch: (family, extension, path, init) =>
 			Effect.gen(function* () {
 				const outgoing = HttpClientRequest.make(init.method)(`${url}${path}`, {
@@ -123,7 +131,7 @@ const make = Effect.gen(function* () {
 					headers,
 				});
 			}).pipe(
-				Effect.timeout("60 seconds"),
+				Effect.timeout(init.deadline),
 				Effect.mapError(() => new KernelError({ code: "boot_unavailable" })),
 			),
 	} satisfies Grants;

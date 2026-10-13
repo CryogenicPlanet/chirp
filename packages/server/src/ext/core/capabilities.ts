@@ -166,6 +166,9 @@ export const extensionCapabilities = Effect.gen(function* () {
 		};
 		const topics = makeTopics(sql, read, pages);
 		// Boot decides liveness: it admits grant calls only from the attempt its public route serves.
+		// A detached reload drains this request before its cutover, so the context that started one must return
+		// rather than poll: every later grant call here would hold the freeze until its deadline.
+		const reloadDetached = Ref.makeUnsafe(false);
 		const agentGrants: ExtensionCapabilities["agentGrants"] = {
 			request: (input) =>
 				writable ? grants.request({ extension, ...input }) : Effect.fail(new KernelError({ code: "scope_required" })),
@@ -178,6 +181,7 @@ export const extensionCapabilities = Effect.gen(function* () {
 							"agentGrants.fetch",
 							"Call the board through a grant outside ctx.mutate and ctx.read.",
 						);
+					if (yield* Ref.get(reloadDetached)) return yield* new KernelError({ code: "reload_detached" });
 					const method = (init.method ?? "GET").toUpperCase();
 					if (!isHttpMethod(method))
 						return yield* grantRefusal("method", "Use an HTTP method such as GET, POST, PUT, PATCH or DELETE.");
@@ -200,13 +204,19 @@ export const extensionCapabilities = Effect.gen(function* () {
 									!name.startsWith("x-forwarded-"),
 							),
 					);
-					return yield* grants.fetch(family, extension, path, {
+					const target = new URL(path, "http://board.invalid");
+					const reload = method === "POST" && target.pathname === "/api/reload";
+					const response = yield* grants.fetch(family, extension, path, {
 						method,
 						headers,
+						// A grant's check=1 rehearsal runs inline: preparation, dependencies, a database copy and health.
+						deadline: reload && target.searchParams.get("check") === "1" ? 180_000 : 60_000,
 						...(init.body === undefined
 							? {}
 							: { body: typeof init.body === "string" ? new TextEncoder().encode(init.body) : init.body }),
 					});
+					if (reload && response.status === 202) yield* Ref.set(reloadDetached, true);
+					return response;
 				}),
 		};
 		return {

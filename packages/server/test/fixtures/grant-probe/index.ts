@@ -120,9 +120,18 @@ export default function grantProbe(api: Api) {
 			settle(
 				json(request, Batch).pipe(
 					Effect.flatMap(({ family, calls }) =>
-						Effect.forEach(calls, (call) => relay(ctx, { family, ...call })).pipe(
-							Effect.map((results) => ({ results })),
-						),
+						Effect.forEach(calls, (call) =>
+							relay(ctx, { family, ...call }).pipe(
+								Effect.catch((error) =>
+									Effect.succeed({
+										error:
+											typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+												? error.code
+												: "unexpected",
+									}),
+								),
+							),
+						).pipe(Effect.map((results) => ({ results }))),
 					),
 				),
 			),

@@ -82,12 +82,13 @@ export interface ExtensionCapabilities {
 			readonly label: string;
 			readonly scopes: ReadonlyArray<typeof GrantScope.Type>;
 		}) => Effect.Effect<
-			{ readonly id: string; readonly approve_url: string; readonly expires_at: number },
+			{ readonly id: string; readonly approve_url: string; readonly user_code: string; readonly expires_at: number },
 			KernelError
 		>;
 		readonly collect: (id: string) => Effect.Effect<typeof GrantCollection.Type, KernelError>;
-		/** A board path such as `/api/messages`; refused inside ctx.mutate or ctx.read, in rehearsal, and for
-		 * non-GET methods without a writable request. Caller credentials and chirp headers are dropped. */
+		/** A board path such as `/api/messages`; refused inside ctx.mutate or ctx.read, in rehearsal, for non-GET
+		 * methods without a writable request, and after this context started a detached reload. Caller credentials
+		 * and chirp headers are dropped. */
 		readonly fetch: (
 			family: string,
 			path: `/${string}`,
