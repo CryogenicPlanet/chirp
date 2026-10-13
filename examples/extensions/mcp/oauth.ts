@@ -128,16 +128,22 @@ const client = (ctx: Context, clientId: string) =>
 				: Effect.succeed<typeof Client.Type | undefined>(undefined),
 		),
 	);
-/** The name this client last posted under, so reconnecting keeps it instead of reverting to the client's own name. */
-const previousAgent = (ctx: Context, clientId: string) =>
-	ctx.db`SELECT payload FROM example_mcp_oauth WHERE client_id=${clientId} AND kind IN ('access','refresh','used_refresh') ORDER BY created_at DESC LIMIT 1`.pipe(
+/**
+ * The name this client last posted under for the human now approving, so reconnecting keeps it instead of reverting to
+ * the client's own name. Another human's grant for the same client never supplies the name.
+ */
+const previousAgent = (ctx: Context, clientId: string, subject: string) =>
+	ctx.db`SELECT payload FROM example_mcp_oauth WHERE client_id=${clientId} AND kind IN ('access','refresh','used_refresh') ORDER BY created_at DESC LIMIT 50`.pipe(
 		Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ payload: Schema.String })))),
 		Effect.flatMap((rows) =>
-			rows[0]
-				? Schema.decodeEffect(Schema.fromJsonString(Access))(rows[0].payload).pipe(Effect.option)
-				: Effect.succeedNone,
+			Effect.forEach(rows, (row) =>
+				Schema.decodeEffect(Schema.fromJsonString(Access))(row.payload).pipe(Effect.option),
+			),
 		),
-		Effect.map((access) => (Option.isSome(access) ? access.value.agent : undefined)),
+		Effect.map((grants) =>
+			grants.flatMap((grant) => (Option.isSome(grant) && grant.value.subject === subject ? [grant.value] : [])),
+		),
+		Effect.map((own) => own.find((grant) => grant.agent !== undefined)?.agent),
 	);
 const store = (
 	ctx: Context,
@@ -300,7 +306,8 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 						});
 					const checked = yield* authorization(ctx, ctx.query, resource);
 					if (typeof checked === "string") return oauthError("invalid_request", checked);
-					const postAs = (yield* previousAgent(ctx, checked.clientId)) ?? suggestedAgent(checked.clientName);
+					const postAs =
+						(yield* previousAgent(ctx, checked.clientId, ctx.identity.agent)) ?? suggestedAgent(checked.clientName);
 					const hidden = new URLSearchParams({
 						client_id: checked.clientId,
 						redirect_uri: checked.redirectUri,

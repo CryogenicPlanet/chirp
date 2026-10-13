@@ -764,7 +764,7 @@ it("serves MCP 2.0 discovery and delivers signed mention events to a verified we
 }, 60000);
 
 it("offers events only to 2026-07-28 clients and records which handshake each request used", async (test) => {
-	const { app, cookie } = await installed(test);
+	const { fixture, app, cookie } = await installed(test);
 	const { clientId, access } = await connect(app.url, cookie, "Handshake client", "shake-bot");
 	const info = async (response: Response) => {
 		const body: unknown = await response.json();
@@ -846,6 +846,44 @@ it("offers events only to 2026-07-28 clients and records which handshake each re
 		{ headers: { cookie } },
 	);
 	expect(await reconsent.text()).toContain('name="agent" value="shake-bot"');
+
+	// Another human's newer grant for the same client never supplies the name.
+	await fixture.sql(
+		`INSERT INTO example_mcp_oauth(id,kind,client_id,family,payload,expires_at,created_at) VALUES('${"f".repeat(64)}','refresh','${clientId}','other-human','{"resource":"https://comms.test/mcp","scopes":["read","write"],"subject":"someone-else","agent":"intruder"}',${Date.now() + 3600000},${Date.now() + 1000})`,
+	);
+	const scoped = await fetch(reconsent.url, { headers: { cookie } });
+	expect(await scoped.text()).toContain('name="agent" value="shake-bot"');
+
+	// A notification returns 202 before any method runs, and the log still records its protocol.
+	const notified = await fetch(`${app.url}/mcp`, {
+		method: "POST",
+		headers: {
+			authorization: `Bearer ${access}`,
+			accept: "application/json, text/event-stream",
+			"content-type": "application/json",
+			"mcp-protocol-version": "2025-06-18",
+		},
+		body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+	});
+	expect(notified.status).toBe(202);
+	const latest = await (await fetch(`${app.url}/api/mcp/requests`, { headers: { cookie } })).json();
+	expect(latest.items[0]).toMatchObject({ method: "notifications/initialized", protocol: "2025-06-18", status: 202 });
+});
+
+it("records requests whose handler failed", async (test) => {
+	const { app, cookie } = await installed(test, undefined, false, (file, source) =>
+		file === "tools.ts"
+			? source.replace(
+					'if (input.name === "connection_info")',
+					'if (input.name === "connection_info" && caller.agent === "boom-bot") return yield* Effect.fail(new Error("boom"));\n\t\tif (input.name === "connection_info")',
+				)
+			: source,
+	);
+	const { clientId, access } = await connect(app.url, cookie, "Boom client", "boom-bot");
+	const failed = await modern(app.url, access, 1, "tools/call", { name: "connection_info" });
+	expect(failed.status).toBe(500);
+	const { items } = await (await fetch(`${app.url}/api/mcp/requests`, { headers: { cookie } })).json();
+	expect(items[0]).toMatchObject({ client: clientId, method: "tools/call", tool: "connection_info", status: 500 });
 });
 
 it("stops delivering pending mentions when unsubscribe is called during drain", async (test) => {

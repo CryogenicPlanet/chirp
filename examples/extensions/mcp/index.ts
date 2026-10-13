@@ -1,4 +1,4 @@
-import { Clock, Effect, Option, Ref, Schema, Stream } from "effect";
+import { Clock, Effect, Exit, Option, Ref, Schema, Stream } from "effect";
 import type { Api } from "../../../packages/server/src/kernel/extension-api.ts";
 import { installEvents } from "./events.ts";
 import { installOAuth } from "./oauth.ts";
@@ -59,6 +59,7 @@ interface RequestRecord {
 	readonly status: number;
 	readonly error: number | null;
 }
+const named = (value: unknown) => (typeof value === "string" ? value.slice(0, 128) : undefined);
 type Seen = { -readonly [K in "client" | "method" | "protocol" | "tool" | "event"]?: string | undefined };
 const keptRequests = 100;
 const unauthorized = (origin: string) =>
@@ -91,10 +92,14 @@ export default (api: Api) =>
 		const record = (
 			seen: Seen,
 			request: { readonly headers: Readonly<Record<string, string | undefined>> },
-			response: Response,
+			response: Response | undefined,
 		) =>
 			Effect.gen(function* () {
-				const body = yield* Effect.tryPromise((): Promise<unknown> => response.clone().json()).pipe(Effect.option);
+				// A handler that failed through the error channel has no response; the kernel answers it with a 500.
+				const body =
+					response === undefined
+						? Option.none()
+						: yield* Effect.tryPromise((): Promise<unknown> => response.clone().json()).pipe(Effect.option);
 				const code = field(field(Option.getOrUndefined(body), "error"), "code");
 				const entry: RequestRecord = {
 					at: yield* Clock.currentTimeMillis,
@@ -104,7 +109,7 @@ export default (api: Api) =>
 					protocol: seen.protocol ?? null,
 					tool: seen.tool ?? null,
 					event: seen.event ?? null,
-					status: response.status,
+					status: response?.status ?? 500,
 					error: typeof code === "number" ? code : null,
 				};
 				yield* Ref.update(recent, (items) => [...items.slice(1 - keptRequests), entry]);
@@ -166,6 +171,11 @@ export default (api: Api) =>
 					if (parsed._tag === "Failure") return rpcError(null, -32700, "Parse error", undefined, 400);
 					const message = parsed.success;
 					seen.method = message.method;
+					// Recorded before notifications return, so their protocol shows in the request log too.
+					seen.protocol =
+						named(field(field(message.params, "_meta"), "io.modelcontextprotocol/protocolVersion")) ??
+						request.headers["mcp-protocol-version"] ??
+						named(field(message.params, "protocolVersion"));
 					if (message.id === undefined) return new Response(null, { status: 202 });
 					const id = message.id ?? null;
 					const runTool = (params: unknown, handshake: string, modern: boolean) =>
@@ -192,9 +202,6 @@ export default (api: Api) =>
 					const requested = field(meta, "io.modelcontextprotocol/protocolVersion");
 					const capabilities = field(meta, "io.modelcontextprotocol/clientCapabilities");
 					const headerVersion = request.headers["mcp-protocol-version"];
-					const initializeVersion = field(message.params, "protocolVersion");
-					const named = (value: unknown) => (typeof value === "string" ? value.slice(0, 128) : undefined);
-					seen.protocol = named(requested) ?? headerVersion ?? named(initializeVersion);
 					seen.tool = message.method === "tools/call" ? named(field(message.params, "name")) : undefined;
 					seen.event = message.method.startsWith("events/") ? named(field(message.params, "name")) : undefined;
 					if (
@@ -294,7 +301,11 @@ export default (api: Api) =>
 						return result ? rpc(id, result) : rpcError(id, -32602, "Invalid tool call parameters");
 					}
 					return rpcError(id, -32601, `Method not found: ${message.method}`);
-				}).pipe(Effect.tap((response) => record(seen, request, response)));
+				}).pipe(
+					Effect.onExit((exit) =>
+						record(seen, request, Exit.isSuccess(exit) ? exit.value : undefined).pipe(Effect.ignore),
+					),
+				);
 			},
 		});
 	});
