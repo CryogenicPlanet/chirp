@@ -133,7 +133,8 @@ const client = (ctx: Context, clientId: string) =>
  * the client's own name. Another human's grant for the same client never supplies the name.
  */
 const previousAgent = (ctx: Context, clientId: string, subject: string) =>
-	ctx.db`SELECT payload FROM example_mcp_oauth WHERE client_id=${clientId} AND kind IN ('access','refresh','used_refresh') ORDER BY created_at DESC LIMIT 50`.pipe(
+	// Narrow to this human in SQL before the limit, so other humans' grants cannot push theirs out; then check exactly.
+	ctx.db`SELECT payload FROM example_mcp_oauth WHERE client_id=${clientId} AND kind IN ('access','refresh','used_refresh') AND payload LIKE ${`%"subject":${JSON.stringify(subject).replace(/[!%_]/g, (character) => `!${character}`)}%`} ESCAPE '!' ORDER BY created_at DESC LIMIT 50`.pipe(
 		Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ payload: Schema.String })))),
 		Effect.flatMap((rows) =>
 			Effect.forEach(rows, (row) =>
