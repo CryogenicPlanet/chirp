@@ -853,6 +853,16 @@ it("offers events only to 2026-07-28 clients and records which handshake each re
 	);
 	const scoped = await fetch(reconsent.url, { headers: { cookie } });
 	expect(await scoped.text()).toContain('name="agent" value="shake-bot"');
+	// Even more newer grants from another human than the lookup window holds cannot crowd out this human's.
+	await fixture.sql(
+		`INSERT INTO example_mcp_oauth(id,kind,client_id,family,payload,expires_at,created_at) VALUES ${Array.from(
+			{ length: 60 },
+			(_, index) =>
+				`('${index.toString(16).padStart(64, "e")}','used_refresh','${clientId}','other-human','{"resource":"https://comms.test/mcp","scopes":["read","write"],"subject":"someone_else","agent":"intruder"}',${Date.now() + 3600000},${Date.now() + 2000 + index})`,
+		).join(",")}`,
+	);
+	const crowded = await fetch(reconsent.url, { headers: { cookie } });
+	expect(await crowded.text()).toContain('name="agent" value="shake-bot"');
 
 	// A notification returns 202 before any method runs, and the log still records its protocol.
 	const notified = await fetch(`${app.url}/mcp`, {
@@ -870,20 +880,53 @@ it("offers events only to 2026-07-28 clients and records which handshake each re
 	expect(latest.items[0]).toMatchObject({ method: "notifications/initialized", protocol: "2025-06-18", status: 202 });
 });
 
-it("records requests whose handler failed", async (test) => {
+it("records requests whose handler failed with the status the client received", async (test) => {
 	const { app, cookie } = await installed(test, undefined, false, (file, source) =>
 		file === "tools.ts"
-			? source.replace(
-					'if (input.name === "connection_info")',
-					'if (input.name === "connection_info" && caller.agent === "boom-bot") return yield* Effect.fail(new Error("boom"));\n\t\tif (input.name === "connection_info")',
-				)
+			? source
+					.replace(
+						'import { Effect, Option, Schema } from "effect";',
+						'import { Effect, Option, Schema } from "effect";\nimport { ConnectionError, SqlError } from "effect/unstable/sql/SqlError";',
+					)
+					.replace(
+						'if (input.name === "connection_info")',
+						[
+							'if (input.name === "connection_info" && caller.agent === "boom-bot") return yield* Effect.fail(new Error("boom"));',
+							'if (input.name === "connection_info" && caller.agent === "store-bot") return yield* Effect.fail(new SqlError({ reason: new ConnectionError({ cause: new Error("store down") }) }));',
+							'if (input.name === "connection_info" && caller.agent === "bug-bot") return yield* Effect.die(new Error("bug"));',
+							'if (input.name === "connection_info")',
+						].join("\n\t\t"),
+					)
 			: source,
 	);
-	const { clientId, access } = await connect(app.url, cookie, "Boom client", "boom-bot");
-	const failed = await modern(app.url, access, 1, "tools/call", { name: "connection_info" });
-	expect(failed.status).toBe(500);
-	const { items } = await (await fetch(`${app.url}/api/mcp/requests`, { headers: { cookie } })).json();
-	expect(items[0]).toMatchObject({ client: clientId, method: "tools/call", tool: "connection_info", status: 500 });
+	const log = async () => (await (await fetch(`${app.url}/api/mcp/requests`, { headers: { cookie } })).json()).items;
+	// A typed failure is answered by the extension as a JSON-RPC error, and the log records that same response.
+	const boom = await connect(app.url, cookie, "Boom client", "boom-bot");
+	const boomed = await modern(app.url, boom.access, 1, "tools/call", { name: "connection_info" });
+	expect(boomed.status).toBe(500);
+	expect(await boomed.json()).toMatchObject({ error: { code: -32603, data: { retriable: false } } });
+	expect((await log())[0]).toMatchObject({
+		client: boom.clientId,
+		method: "tools/call",
+		tool: "connection_info",
+		status: 500,
+		outcome: "answered",
+		error: -32603,
+	});
+	// A retryable store failure is 503 and says it can be retried.
+	const store = await connect(app.url, cookie, "Store client", "store-bot");
+	const storeFailed = await modern(app.url, store.access, 2, "tools/call", { name: "connection_info" });
+	expect(storeFailed.status).toBe(503);
+	expect(await storeFailed.json()).toMatchObject({ error: { code: -32603, data: { retriable: true } } });
+	expect((await log())[0]).toMatchObject({ client: store.clientId, status: 503, outcome: "answered", error: -32603 });
+	// A defect still reaches the kernel, which answers 500; the log records it as failed with that status.
+	const bug = await connect(app.url, cookie, "Bug client", "bug-bot");
+	expect((await modern(app.url, bug.access, 4, "tools/call", { name: "connection_info" })).status).toBe(500);
+	expect((await log())[0]).toMatchObject({ client: bug.clientId, status: 500, outcome: "failed" });
+	expect(
+		(await modern(app.url, store.access, 3, "tools/call", { name: "search", arguments: { query: "x" } })).status,
+	).toBe(200);
+	expect((await log())[0]).toMatchObject({ client: store.clientId, tool: "search", status: 200, outcome: "answered" });
 });
 
 it("stops delivering pending mentions when unsubscribe is called during drain", async (test) => {
