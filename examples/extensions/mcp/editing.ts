@@ -36,7 +36,6 @@ const FileInput = Schema.Struct({
 });
 const SourceInput = Schema.Struct({ path: Schema.String, max_bytes: Schema.optionalKey(Schema.Int) });
 const LockInput = Schema.Struct({ note: Schema.optionalKey(Schema.String) });
-const ReloadInput = Schema.Struct({ check: Schema.optionalKey(Schema.Boolean) });
 const Empty = Schema.Struct({});
 const Lock = Schema.Struct({
 	holder_family: Schema.String,
@@ -57,11 +56,6 @@ const Generations = Schema.Struct({
 			healthy_at: Schema.NullOr(Schema.Finite),
 		}),
 	),
-});
-const Reloaded = Schema.Struct({
-	status: Schema.String,
-	generation: Schema.optionalKey(Schema.Int),
-	error: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 
 const decode = <A>(schema: Schema.ConstraintDecoder<A>, input: unknown) =>
@@ -289,18 +283,12 @@ export const editingTools = [
 		name: "reload",
 		title: "Reload staged app source",
 		description:
-			"Publish your staged source. It returns at once and the reload finishes after this call: end your turn and call reload_status in a later one. With check true it only rehearses the staged source and reports the result, without publishing.",
-		inputSchema: object({ check: { type: "boolean", default: false } }, []),
-		outputSchema: {
-			type: "object",
-			properties: {
-				status: { type: "string" },
-				generation: { type: "integer" },
-				error: { type: ["string", "null"] },
-				message: { type: "string" },
-			},
-			required: ["status", "message"],
-		},
+			"Publish your staged source. It returns at once and boot rehearses and reloads after this call: end your turn and call reload_status in a later one. A failed reload keeps the current generation serving and reload_status shows the error.",
+		inputSchema: object({}, []),
+		outputSchema: object({ status: { type: "string", enum: ["reloading"] }, message: { type: "string" } }, [
+			"status",
+			"message",
+		]),
 		annotations: changing,
 	},
 	{
@@ -597,27 +585,14 @@ export const callEditing = (
 			return toolResult({ lock: lockView(reply.json) });
 		}
 		if (input.name === "reload") {
-			const args = decode(ReloadInput, input.arguments);
-			if (Option.isNone(args)) return toolError("input_invalid", "check must be a boolean");
-			// One call only: after a detached reload starts, this request must finish before the reload can.
-			const reply = yield* board(args.value.check ? "/api/reload?check=1" : "/api/reload", {
-				method: "POST",
-				body: "{}",
-			});
-			const result = Option.getOrUndefined(Option.flatMap(reply.json, Schema.decodeUnknownOption(Reloaded)));
-			if (reply.status === 202)
-				return toolResult({
-					status: "reloading",
-					message:
-						"The reload started and finishes after this call returns. End this turn; in a later one call reload_status, then release_lock.",
-				});
+			if (Option.isNone(decode(Empty, input.arguments))) return toolError("input_invalid", "Takes no arguments.");
+			// One call and no check=1: boot answers a grant's reload with 202 and finishes after this request drains, and
+			// any further grant call here is refused. A rehearsal-only check runs inline for minutes, past client timeouts.
+			yield* board("/api/reload", { method: "POST", body: "{}" });
 			return toolResult({
-				status: result?.status ?? "unknown",
-				...(result?.generation === undefined ? {} : { generation: result.generation }),
-				...(result?.error === undefined ? {} : { error: result.error === null ? null : cut(result.error, 2000) }),
-				message: args.value.check
-					? "Checked the staged source without publishing it."
-					: "The reload finished; check reload_status.",
+				status: "reloading",
+				message:
+					"The reload started and finishes after this call returns. End this turn; in a later one call reload_status, then release_lock.",
 			});
 		}
 		if (input.name === "reload_status") {

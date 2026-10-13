@@ -304,7 +304,7 @@ it("connects with editing approved by passkey, then edits, publishes and live-ed
 		to: "dot-desk",
 	});
 
-	// Live edit: lock, read, stage, check, reload. The reload returns at once and is observed from later calls.
+	// Live edit: lock, read, stage, reload. The reload returns at once and is observed from later calls.
 	expect((await tool("acquire_lock", { note: "mcp live edit" })).ok).toMatchObject({
 		lock: { agent: "dot", mine: true, note: "mcp live edit", reload_in_flight: false },
 	});
@@ -326,9 +326,6 @@ it("connects with editing approved by passkey, then edits, publishes and live-ed
 	).toMatchObject({
 		error: { code: "stale_base" },
 	});
-	const checked = await tool("reload", { check: true });
-	expect(checked.error).toBeUndefined();
-	expect(checked.ok).toMatchObject({ status: expect.any(String) });
 	const before = decode(
 		Schema.Struct({ live_generation: Schema.Int }),
 		(await tool("reload_status")).ok,
@@ -339,7 +336,7 @@ it("connects with editing approved by passkey, then edits, publishes and live-ed
 		message: expect.stringContaining("reload_status"),
 	});
 	expect(performance.now() - started).toBeLessThan(5000);
-	// The check rehearsal also numbered a generation, so the new one is any later number.
+	// Rehearsals number generations too, so the new one is any later number.
 	const Status = Schema.Struct({
 		live_generation: Schema.Int,
 		latest: Schema.Struct({ n: Schema.Int, status: Schema.String, error: Schema.NullOr(Schema.String) }),
