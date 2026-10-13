@@ -156,6 +156,10 @@ export const proxy = Effect.gen(function* () {
 			Effect.gen(function* () {
 				let identity = authenticated || grant ? yield* authenticate(auth, request) : null;
 				if (observed) yield* observed.attribute(identity, 0);
+				// Boot's own edit, event and diagnostic routes run before admission, so a grant must still come from the
+				// routed live attempt here too; a cutover since validation refuses instead of letting a retiring child act.
+				if (grantEpoch !== undefined && !reachesAttempt(yield* Ref.get(child.traffic.route), grantEpoch))
+					return authErrorResponse("board_busy");
 				if (identity?.kind === "human" && !["GET", "HEAD", "OPTIONS"].includes(request.method))
 					yield* auth.relyingParty(request.headers.origin);
 				const expires = (response: HttpServerResponse.HttpServerResponse) =>
