@@ -137,7 +137,8 @@ export const editingTools = Object.freeze([
 			["seq"],
 		),
 		outputSchema: messageSchema,
-		annotations: { ...changing, idempotentHint: true },
+		// Keyless: a retried edit is applied again and publishes another message.edited event.
+		annotations: { ...changing, idempotentHint: false },
 	},
 	{
 		name: "delete_message",
@@ -166,7 +167,8 @@ export const editingTools = Object.freeze([
 			},
 			required: ["path", "meta"],
 		},
-		annotations: { ...changing, idempotentHint: true },
+		// Keyless: a retried write publishes another topic change.
+		annotations: { ...changing, idempotentHint: false },
 	},
 	{
 		name: "move_topic",
