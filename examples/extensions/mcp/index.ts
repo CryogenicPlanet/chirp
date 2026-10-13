@@ -1,4 +1,4 @@
-import { Effect, Option, Schema, Stream } from "effect";
+import { Clock, Effect, Option, Ref, Schema, Stream } from "effect";
 import type { Api } from "../../../packages/server/src/kernel/extension-api.ts";
 import { installEvents } from "./events.ts";
 import { installOAuth } from "./oauth.ts";
@@ -47,6 +47,20 @@ const rpcError = (id: RpcId, code: number, message: string, data?: unknown, stat
 		},
 		{ status },
 	);
+/** What one MCP request did, kept so an operator can see which handshake and methods a client really uses. */
+interface RequestRecord {
+	readonly at: number;
+	readonly client: string | null;
+	readonly user_agent: string | null;
+	readonly method: string | null;
+	readonly protocol: string | null;
+	readonly tool: string | null;
+	readonly event: string | null;
+	readonly status: number;
+	readonly error: number | null;
+}
+type Seen = { -readonly [K in "client" | "method" | "protocol" | "tool" | "event"]?: string | undefined };
+const keptRequests = 100;
 const unauthorized = (origin: string) =>
 	Response.json(
 		{ error: "invalid_token" },
@@ -73,6 +87,34 @@ export default (api: Api) =>
 			protocolVersions: [modernVersion, ...supportedVersions],
 			events: events.list.events.map((event) => event.name),
 		};
+		const recent = yield* Ref.make<ReadonlyArray<RequestRecord>>([]);
+		const record = (
+			seen: Seen,
+			request: { readonly headers: Readonly<Record<string, string | undefined>> },
+			response: Response,
+		) =>
+			Effect.gen(function* () {
+				const body = yield* Effect.tryPromise((): Promise<unknown> => response.clone().json()).pipe(Effect.option);
+				const code = field(field(Option.getOrUndefined(body), "error"), "code");
+				const entry: RequestRecord = {
+					at: yield* Clock.currentTimeMillis,
+					client: seen.client ?? null,
+					user_agent: request.headers["user-agent"]?.slice(0, 80) ?? null,
+					method: seen.method ?? null,
+					protocol: seen.protocol ?? null,
+					tool: seen.tool ?? null,
+					event: seen.event ?? null,
+					status: response.status,
+					error: typeof code === "number" ? code : null,
+				};
+				yield* Ref.update(recent, (items) => [...items.slice(1 - keptRequests), entry]);
+			});
+		api.route("GET", "/api/mcp/requests", {
+			description:
+				"The last 100 MCP requests, newest first: client, method, protocol version, HTTP status and JSON-RPC error code. Kept in memory only, never tokens or bodies. Requires fs.",
+			scope: "fs",
+			handler: () => Ref.get(recent).pipe(Effect.map((items) => Response.json({ items: items.toReversed() }))),
+		});
 		api.route("GET", "/mcp", {
 			description: "Decline the optional MCP server event stream because this extension is stateless.",
 			access: "application-managed",
@@ -82,8 +124,9 @@ export default (api: Api) =>
 			description:
 				"OAuth-protected stateless MCP with citation-ready search/fetch, topic reads, and idempotent message posting.",
 			access: "application-managed",
-			handler: (request, ctx) =>
-				Effect.gen(function* () {
+			handler: (request, ctx) => {
+				const seen: Seen = {};
+				return Effect.gen(function* () {
 					if (
 						request.headers.origin !== undefined &&
 						request.headers.origin !== origin &&
@@ -92,6 +135,7 @@ export default (api: Api) =>
 						return new Response(null, { status: 403 });
 					const caller = yield* authenticate(ctx, request.headers.authorization);
 					if (!caller) return unauthorized(resourceOrigin);
+					seen.client = caller.clientId;
 					const accept = request.headers.accept ?? "";
 					if (!accept.includes("application/json") || !accept.includes("text/event-stream"))
 						return Response.json(
@@ -121,14 +165,17 @@ export default (api: Api) =>
 					);
 					if (parsed._tag === "Failure") return rpcError(null, -32700, "Parse error", undefined, 400);
 					const message = parsed.success;
+					seen.method = message.method;
 					if (message.id === undefined) return new Response(null, { status: 202 });
 					const id = message.id ?? null;
-					const runTool = (params: unknown) =>
+					const runTool = (params: unknown, handshake: string, modern: boolean) =>
 						Effect.gen(function* () {
 							const call = decode(ToolCall, params ?? {});
 							if (Option.isNone(call)) return undefined;
 							// Board refusals keep their code and recovery hint instead of collapsing into text.
-							const result = yield* callTool(ctx, origin, connection, caller, call.value).pipe(
+							// Only an MCP 2026-07-28 client can subscribe, so an initialize client is not offered events.
+							const current = { ...connection, handshake, events: modern ? connection.events : [] };
+							const result = yield* callTool(ctx, origin, current, caller, call.value).pipe(
 								Effect.catchTag("KernelError", (error) =>
 									Effect.succeed(toolError(error.code, undefined, error.detail?.hint)),
 								),
@@ -145,6 +192,11 @@ export default (api: Api) =>
 					const requested = field(meta, "io.modelcontextprotocol/protocolVersion");
 					const capabilities = field(meta, "io.modelcontextprotocol/clientCapabilities");
 					const headerVersion = request.headers["mcp-protocol-version"];
+					const initializeVersion = field(message.params, "protocolVersion");
+					const named = (value: unknown) => (typeof value === "string" ? value.slice(0, 128) : undefined);
+					seen.protocol = named(requested) ?? headerVersion ?? named(initializeVersion);
+					seen.tool = message.method === "tools/call" ? named(field(message.params, "name")) : undefined;
+					seen.event = message.method.startsWith("events/") ? named(field(message.params, "name")) : undefined;
 					if (
 						message.method !== "initialize" &&
 						(requested !== undefined || capabilities !== undefined || headerVersion === modernVersion)
@@ -191,7 +243,7 @@ export default (api: Api) =>
 							});
 						if (message.method === "tools/list") return complete({ tools, ttlMs: 3600000, cacheScope: "public" });
 						if (message.method === "tools/call") {
-							const result = yield* runTool(message.params);
+							const result = yield* runTool(message.params, modernVersion, true);
 							return result ? complete(result) : rpcError(id, -32602, "Invalid tool call parameters", undefined, 400);
 						}
 						if (message.method === "events/list") return complete(events.list);
@@ -234,10 +286,15 @@ export default (api: Api) =>
 					if (message.method === "ping") return rpc(id, {});
 					if (message.method === "tools/list") return rpc(id, { tools });
 					if (message.method === "tools/call") {
-						const result = yield* runTool(message.params);
+						const result = yield* runTool(
+							message.params,
+							`initialize ${headerVersion ?? "(no version header)"}`,
+							false,
+						);
 						return result ? rpc(id, result) : rpcError(id, -32602, "Invalid tool call parameters");
 					}
 					return rpcError(id, -32601, `Method not found: ${message.method}`);
-				}),
+				}).pipe(Effect.tap((response) => record(seen, request, response)));
+			},
 		});
 	});
