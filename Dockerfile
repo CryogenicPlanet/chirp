@@ -19,6 +19,10 @@ COPY packages/server packages/server
 COPY packages/ui packages/ui
 COPY examples/extensions/mcp examples/extensions/mcp
 RUN bun run build
+# The commit this image is built from, written beside boot's bundle rather than set as ENV, so no runtime variable can
+# change it. Boot reports it as revision in /health, /_boot/status and /.well-known/agent.json; an unset value reads as null.
+ARG CHIRP_REVISION=""
+RUN printf '%s' "$CHIRP_REVISION" > packages/boot/dist/revision
 
 FROM oven/bun:1.4.0@sha256:5ff609364c049b54eb0ff560ec96319729a972078ef2c755d758f0c6ef89c2d6 AS dependencies
 WORKDIR /opt/comms
