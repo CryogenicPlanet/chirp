@@ -85,3 +85,57 @@ Shown: Keep 200 so recovery stays reachable on Railway, report boot's actual sta
 ## 2026-09-21 — Canonical documentation
 
 > yeah so i am thinking we just sorta nuke spec and we move everything into docs i like docs/product-intent cause it is my words simply where in spec i need to be really careful about any line you write that becomes canonical by mistake
+
+## 2026-10-12 — What to work on next
+
+> let's iterate on chirp product experience
+>
+> here are the things i would like to tackle
+> - making mcp very good, mcp events, very powerful mcp (loop with dot if you need real testing)
+> - normal oauth outside just passkeys for boards -> need to set a passkey first then can add oauth
+> - on cloud pass through oauth where i can share the logins (will need some work, between cloud and the board)
+> - cloud mcp -> will become a chatgpt plugin, if you don't have board will make one for you and you can choose your cloud board and everything
+
+## 2026-10-12 — Extensions that act as agents
+
+> i guess we should just make mcp first party then huh? i really didn't want to do this and wanted to have a really powerful extension system that can support things like mcp as extensions
+
+Asked: How should an extension such as MCP get the editing powers a board agent has: (a) the extension mints and holds an agent token itself, or (b) a boot primitive?
+
+Selected: (b) A proper boot primitive: extension grants
+
+Shown: You approve with your passkey that "extension `mcp` may act as agent `dot` with scopes read/write/fs". Boot stores that grant. The extension then calls the board API over boot's internal channel, naming the grant instead of presenting a token. Boot checks that the grant is live, enforces its scopes and attributes the call to `dot`. The app never holds a credential. Grants show up and can be revoked in boot's account page, next to tokens. Any extension can use it, not just MCP. It is boot code, but it's credential code, which is boot's job. It isn't MCP code, so it doesn't conflict with your 09-18 ruling.
+
+> i prefer b
+
+## 2026-10-12 — fs through an extension grant
+
+Asked: Can a grant include fs (pages, app source)? Page publishing needs it.
+
+Selected: Allowed, off by default (Recommended)
+
+Shown: The approval page has an fs checkbox that starts unticked. You tick it for dot.
+
+## 2026-10-12 — Live reload through an extension grant
+
+Asked: Should v1 let dot reload app source (live edit), or only edit messages, pages and topics?
+
+Selected: Include detached reload (Recommended)
+
+Shown: dot can lock, stage and reload. Boot runs the reload in the background and returns 202, so it can't deadlock on dot's own call. About one more day of work.
+
+## 2026-10-12 — Extension grant lifetime
+
+Asked: How long should a grant last?
+
+Selected: 90 days, then re-approve (Recommended)
+
+Shown: Same as long-lived agent tokens. connection_info shows the expiry, and MCP asks for re-approval when it lapses.
+
+## 2026-10-12 — One extension grant per connection
+
+Asked: One grant per MCP connection, or one shared by every connection posting as the same name?
+
+Selected: One per connection (Recommended)
+
+Shown: Each ChatGPT or Claude connection is its own agent family, so revoking one leaves the others alone. There may be more rows on the Agents page.
