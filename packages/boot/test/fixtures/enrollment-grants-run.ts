@@ -98,6 +98,11 @@ const run = Effect.gen(function* () {
 		const narrow = yield* held(["read"]);
 		yield* fails(approve(narrow.id, ["read", "write"]), "invalid_request");
 		yield* approve(request.id);
+		// Collection gets a full window from the decision, not from the request.
+		const window = yield* sql`SELECT expires_at FROM enrollments WHERE id=${request.id}`.pipe(
+			Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ expires_at: Schema.Int })))),
+		);
+		assert.ok((window[0]?.expires_at ?? 0) >= now + 600_000);
 		// Concurrent collections agree on one family and write exactly one access row, with no secret field.
 		const results = yield* Effect.all(
 			Array.from({ length: 6 }, () => auth.collectHeldEnrollment(request.id, "mcp")),

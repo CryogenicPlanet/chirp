@@ -318,11 +318,10 @@ export const boot = Effect.fn("boot")(function* (options: ApplicationSource & { 
 					source: yield* SourceFiles,
 					lock: yield* EditLock,
 					cutover: coordinator,
-					operationBusy: supervisor.operationGate
-						.withPermitsIfAvailable(1)(Effect.void)
-						.pipe(Effect.map(Option.isNone)),
-					// Shutdown takes the operation gate first, so it waits for a detached reload holding it.
-					detach: (effect) => effect.pipe(Effect.forkIn(lifetime), Effect.asVoid),
+					// Starts now and runs uninterruptibly even if boot's scope is already closing, so a detached reload
+					// always releases the operation gate it took; closing the scope then waits for it to finish.
+					detach: (effect) =>
+						effect.pipe(Effect.forkIn(lifetime, { startImmediately: true, uninterruptible: true }), Effect.asVoid),
 					// App filesystem effects reserve first; raw journals stay outside that interval.
 					withPagePublication: (effect, immediate = false) =>
 						Effect.gen(function* () {

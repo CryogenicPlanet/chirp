@@ -182,6 +182,9 @@ export const makeEnrollment = <E, R>(
 							const access = held !== null ? heldAccessSeconds : params.long_lived ? 604800 : 86400,
 								refresh = held !== null ? null : params.long_lived ? 7776000 : 2592000;
 							yield* sql`UPDATE enrollments SET status=${params.decision === "approve" ? "approved" : "denied"},scopes=${scopes},access_seconds=${access},refresh_seconds=${refresh} WHERE id=${params.id}`;
+							// A held approval guards no device secret: give the extension a full window from the decision.
+							if (held !== null && params.decision === "approve")
+								yield* sql`UPDATE enrollments SET expires_at=${now + 600_000} WHERE id=${params.id}`;
 							yield* events.writeBoot({
 								at: now,
 								type: params.decision === "approve" ? "enrollment.approved" : "enrollment.denied",

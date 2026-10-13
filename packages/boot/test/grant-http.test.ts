@@ -451,6 +451,10 @@ it("sends a human back only to a same-origin path", () => {
 		"/\u0000",
 		"javascript:alert(1)",
 		`/${"a".repeat(1024)}`,
+		// Dot segments collapse to a protocol-relative path only after parsing.
+		"/.//evil.test",
+		"/%2e//evil.test",
+		"/a/..//evil.test",
 	])
 		expect(approvalReturn(value, origin)).toBeNull();
 });

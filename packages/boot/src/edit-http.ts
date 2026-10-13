@@ -37,8 +37,6 @@ export interface Editing {
 		E | SourceRejected | EditRejected | ChildError | RecoveryRejected | SqlError | Schema.SchemaError | AuthError,
 		R
 	>;
-	/** Whether a reload, backup, restore or recovery holds boot's operation gate. */
-	readonly operationBusy: Effect.Effect<boolean>;
 	/** Runs work in boot's lifetime rather than the request's. */
 	readonly detach: <R>(effect: Effect.Effect<void, never, R>) => Effect.Effect<void, never, R>;
 }

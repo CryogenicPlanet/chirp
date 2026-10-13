@@ -183,6 +183,8 @@ export const extensionCapabilities = Effect.gen(function* () {
 						return yield* grantRefusal("method", "Use an HTTP method such as GET, POST, PUT, PATCH or DELETE.");
 					if (!writable && !["GET", "HEAD", "OPTIONS"].includes(method))
 						return yield* new KernelError({ code: "scope_required" });
+					if (init.body !== undefined && (method === "GET" || method === "HEAD"))
+						return yield* grantRefusal("body", "Send a body only with a method that accepts one, such as POST or PUT.");
 					if (path.length > 8192 || !/^\/(?!\/)[\x21-\x5b\x5d-\x7e]*$/.test(path))
 						return yield* grantRefusal(
 							"path",

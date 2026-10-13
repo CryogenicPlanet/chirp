@@ -253,12 +253,9 @@ it("lets an extension act as a human-approved agent through boot, through a deta
 	]);
 }, 240000);
 
-it("refuses grant calls with board_busy during a reload freeze while ordinary requests still queue", async (test) => {
+it("never queues a grant behind the freeze its own admitted request is holding", async (test) => {
 	const { app, cookie, status, grant, via } = await installed(test);
-	const family = await grant(["read"]);
-	const read = `/api/grant-probe/fetch?family=${family}&path=${encodeURIComponent("/api/messages?limit=1")}`;
-	expect((await (await fetch(`${app.url}${read}`, { headers: { cookie } })).json()).status).toBe(200);
-
+	const family = await grant(["read", "write", "fs"]);
 	expect((await app.post("/api/lock", {}, cookie)).status).toBe(200);
 	const source = await (await fetch(`${app.url}/api/fs/app/server.ts`, { headers: { cookie } })).text();
 	expect(
@@ -270,44 +267,54 @@ it("refuses grant calls with board_busy during a reload freeze while ordinary re
 			})
 		).status,
 	).toBe(200);
-	// An admitted upload keeps the cutover frozen while it waits to drain.
-	const upload = request(`${app.url}/api/messages`, {
+	// The outer extension request is admitted before the freeze; its body, and so its grant calls, arrive after.
+	const outer = request(`${app.url}/api/grant-probe/batch`, {
 		method: "POST",
 		headers: { cookie, origin: "https://comms.test", "content-type": "application/json" },
 	});
 	test.onTestFinished(() => {
-		upload.destroy();
+		outer.destroy();
 	});
-	const uploaded = new Promise<number>((resolve, reject) => {
-		upload.on("error", reject);
-		upload.on("response", (response) => {
-			response.resume();
-			response.on("end", () => resolve(response.statusCode ?? 0));
-		});
-	});
-	upload.write('{"topic":"freeze","body":"');
+	const answered = new Promise<{ readonly status: number; readonly body: string; readonly at: number }>(
+		(resolve, reject) => {
+			outer.on("error", reject);
+			outer.on("response", (response) => {
+				let body = "";
+				response.on("data", (chunk: Buffer) => {
+					body += chunk.toString();
+				});
+				response.on("end", () => resolve({ status: response.statusCode ?? 0, body, at: performance.now() }));
+			});
+		},
+	);
+	outer.write(`{"family":"${family}",`);
 	await expect.poll(async () => (await status()).traffic.admitted).toBe(1);
 	const reload = app.post("/api/reload", {}, cookie);
 	await expect.poll(async () => (await status()).traffic, { timeout: 10000 }).toMatchObject({ frozen: true });
-
-	// A grant never queues behind the freeze its enclosing request could be holding.
-	const started = performance.now();
-	const busy = Schema.decodeUnknownSync(Relay)(
-		await (await fetch(`${app.url}${read}`, { headers: { cookie } })).json(),
-	);
-	expect(performance.now() - started).toBeLessThan(2000);
-	expect(busy.status).toBe(503);
-	expect(json(busy.body)).toMatchObject({ error: { code: "board_busy", retriable: true } });
 	// An ordinary mutation still waits for the freeze to end, as before.
 	const queued = app.post("/api/messages", { topic: "freeze", body: "queued" }, cookie);
 	let settled = false;
 	void queued.then(() => {
 		settled = true;
 	});
-	await new Promise((resolve) => setTimeout(resolve, 300));
+	const calls = [
+		{ path: "/api/messages", method: "POST", body: JSON.stringify({ topic: "freeze", body: "through a grant" }) },
+		{ path: "/api/fs/pages/freeze.md?baseVersion=null", method: "PUT", body: "# Frozen\n" },
+		{ path: "/api/reload?check=1", method: "POST", body: "{}" },
+		{ path: "/api/lock" },
+		{ path: "/api/messages?limit=1" },
+	];
+	const sent = performance.now();
+	outer.end(`"calls":${JSON.stringify(calls)}}`);
+	const result = await answered;
+	// Every call answers at once; without that, the freeze would wait for this request until its deadline.
+	expect(result.at - sent).toBeLessThan(3000);
+	expect(result.status, result.body).toBe(200);
+	const results = Schema.decodeUnknownSync(Schema.Struct({ results: Schema.Array(Relay) }))(json(result.body)).results;
+	expect(results.map((item) => item.status)).toEqual([503, 503, 503, 200, 200]);
+	for (const item of results.slice(0, 3))
+		expect(json(item.body)).toMatchObject({ error: { code: "board_busy", retriable: true } });
 	expect(settled).toBe(false);
-	upload.end('held"}');
-	expect(await uploaded).toBe(200);
 	expect(await (await reload).json()).toMatchObject({ status: "live" });
 	expect((await queued).status).toBe(200);
 	expect((await via(family, "/api/messages?limit=1")).status).toBe(200);

@@ -444,13 +444,8 @@ export const proxy = Effect.gen(function* () {
 			if (!(yield* grantChannel(request, child)) || !grantPathAllowed(request.method, url))
 				return authErrorResponse("grant_forbidden");
 			if ((yield* Ref.get(phase))._tag === "Stopping") return authErrorResponse("boot_unavailable", 503);
-			// The enclosing app request is itself admitted: queuing behind a freeze or the operation gate would deadlock.
-			if (
-				(yield* child.traffic.state).frozen ||
-				(yield* child.traffic.requests.state).frozen ||
-				(yield* editing.operationBusy)
-			)
-				return authErrorResponse("board_busy");
+			// The enclosing app request is itself admitted, so nothing past here may wait on a freeze or the operation
+			// gate: admission, page publication and reload each refuse with board_busy instead of queuing.
 			return yield* forward(false, false);
 		}
 		// App bearer credentials cannot invoke boot surfaces or silently replace a supplied board session.

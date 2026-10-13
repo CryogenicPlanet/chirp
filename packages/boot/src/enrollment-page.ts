@@ -27,7 +27,10 @@ export const approvalReturn = (value: string | null, origin: string) => {
 	)
 		return null;
 	const target = URL.parse(value, origin);
-	return target?.origin === origin ? `${target.pathname}${target.search}${target.hash}` : null;
+	// Dot segments can collapse "/.//host" into "//host" after the prefix check above.
+	return target?.origin === origin && !target.pathname.startsWith("//")
+		? `${target.pathname}${target.search}${target.hash}`
+		: null;
 };
 const buttons = `<button type="submit" value="approve">Approve with passkey</button><button type="submit" value="deny">Deny with passkey</button>`;
 /** A held enrollment is described only from its own row: the extension, agent and label boot stored. */

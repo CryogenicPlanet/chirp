@@ -16,6 +16,16 @@ const Call = Schema.Struct({
 	body: Schema.optionalKey(Schema.String),
 	headers: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
 });
+const Batch = Schema.Struct({
+	family: Schema.String,
+	calls: Schema.Array(
+		Schema.Struct({
+			path: Schema.String,
+			method: Schema.optionalKey(Schema.String),
+			body: Schema.optionalKey(Schema.String),
+		}),
+	),
+});
 const json = <S extends Schema.Constraint>(request: HttpServerRequest.HttpServerRequest, schema: S) =>
 	request.text.pipe(Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(schema))));
 const rooted = (path: string): path is `/${string}` => path.startsWith("/");
@@ -100,6 +110,21 @@ export default function grantProbe(api: Api) {
 					path: String(ctx.query.path ?? "/"),
 					...(ctx.query.method === undefined ? {} : { method: String(ctx.query.method) }),
 				}),
+			),
+	});
+	// The request body arrives last, so a test can hold this admitted request open across a freeze before the calls.
+	api.route("POST", "/api/grant-probe/batch", {
+		description: "Test probe: several grant calls from one admitted request.",
+		scope: "write",
+		handler: (request, ctx) =>
+			settle(
+				json(request, Batch).pipe(
+					Effect.flatMap(({ family, calls }) =>
+						Effect.forEach(calls, (call) => relay(ctx, { family, ...call })).pipe(
+							Effect.map((results) => ({ results })),
+						),
+					),
+				),
 			),
 	});
 	api.route("POST", "/api/grant-probe/refusals", {
