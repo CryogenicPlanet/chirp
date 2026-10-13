@@ -116,7 +116,7 @@ export const tools = [
 		name: "connection_info",
 		title: "Describe this chirp connection",
 		description:
-			"Who this connection posts as, its scopes, the board and server versions, and which delivery paths exist: cursor reads with query_messages, and mention events over webhooks for MCP 2026-07-28 clients. There is no server event stream.",
+			"Who this connection posts as, its scopes, the board and server versions, the MCP handshake this client used, and which delivery paths exist: cursor reads with query_messages, and mention events over webhooks only when the client connected with MCP 2026-07-28. There is no server event stream.",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false },
 		annotations: { readOnlyHint: true, openWorldHint: false },
 	},
@@ -285,7 +285,10 @@ export interface Connection {
 	readonly mcpUrl: string;
 	readonly server: { readonly name: string; readonly version: string };
 	readonly protocolVersions: ReadonlyArray<string>;
+	/** Events this request's client can subscribe to: empty unless it connected with MCP 2026-07-28. */
 	readonly events: ReadonlyArray<string>;
+	/** The handshake this request arrived on, such as 2026-07-28 or initialize 2025-11-25. */
+	readonly handshake: string;
 }
 
 /** One page read, following the board's redirect from a directory name to its listing. */
@@ -399,11 +402,15 @@ export const callTool = (
 				scopes: caller.scopes,
 				server: connection.server,
 				protocol_versions: connection.protocolVersions,
+				handshake: connection.handshake,
 				tools: tools.map((tool) => tool.name),
 				delivery: {
 					pull: "query_messages: forward reads from a since cursor; poll from the last cursor for new messages",
 					events: connection.events,
-					events_transport: "Signed webhooks via events/subscribe, for MCP 2026-07-28 clients only",
+					events_transport:
+						connection.events.length > 0
+							? "Signed webhooks via events/subscribe"
+							: "None on this connection: the client used the initialize handshake, and events need MCP 2026-07-28 (server/discover).",
 					server_stream: false,
 				},
 			});
