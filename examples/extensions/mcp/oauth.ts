@@ -1,5 +1,5 @@
 import { on } from "@comms/storage/dialect";
-import { Clock, Crypto, Effect, Schema, Stream } from "effect";
+import { Clock, Crypto, Effect, Option, Schema, Stream } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import type { Api, ManagedRequestContext } from "../../../packages/server/src/kernel/extension-api.ts";
 
@@ -127,6 +127,23 @@ const client = (ctx: Context, clientId: string) =>
 				? Schema.decodeEffect(Schema.fromJsonString(Client))(row.payload)
 				: Effect.succeed<typeof Client.Type | undefined>(undefined),
 		),
+	);
+/**
+ * The name this client last posted under for the human now approving, so reconnecting keeps it instead of reverting to
+ * the client's own name. Another human's grant for the same client never supplies the name.
+ */
+const previousAgent = (ctx: Context, clientId: string, subject: string) =>
+	ctx.db`SELECT payload FROM example_mcp_oauth WHERE client_id=${clientId} AND kind IN ('access','refresh','used_refresh') ORDER BY created_at DESC LIMIT 50`.pipe(
+		Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ payload: Schema.String })))),
+		Effect.flatMap((rows) =>
+			Effect.forEach(rows, (row) =>
+				Schema.decodeEffect(Schema.fromJsonString(Access))(row.payload).pipe(Effect.option),
+			),
+		),
+		Effect.map((grants) =>
+			grants.flatMap((grant) => (Option.isSome(grant) && grant.value.subject === subject ? [grant.value] : [])),
+		),
+		Effect.map((own) => own.find((grant) => grant.agent !== undefined)?.agent),
 	);
 const store = (
 	ctx: Context,
@@ -289,6 +306,8 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 						});
 					const checked = yield* authorization(ctx, ctx.query, resource);
 					if (typeof checked === "string") return oauthError("invalid_request", checked);
+					const postAs =
+						(yield* previousAgent(ctx, checked.clientId, ctx.identity.agent)) ?? suggestedAgent(checked.clientName);
 					const hidden = new URLSearchParams({
 						client_id: checked.clientId,
 						redirect_uri: checked.redirectUri,
@@ -300,7 +319,7 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 						...(checked.state === undefined ? {} : { state: checked.state }),
 					});
 					return new Response(
-						`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Authorize MCP</title></head><body><main><h1>Authorize ${escape(checked.clientName)}</h1><p>This client is requesting: ${escape(checked.scopes.join(", "))}.</p><form method="post" action="/mcp/oauth/authorize">${[...hidden].map(([name, value]) => `<input type="hidden" name="${escape(name)}" value="${escape(value)}">`).join("")}${checked.scopes.includes("write") ? `<p><label>Post as <input name="agent" value="${escape(suggestedAgent(checked.clientName))}" required maxlength="64" pattern="[a-z0-9][a-z0-9._\\-]*"></label></p>` : ""}<button name="decision" value="approve">Authorize</button><button name="decision" value="deny" formnovalidate>Deny</button></form></main></body></html>`,
+						`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Authorize MCP</title></head><body><main><h1>Authorize ${escape(checked.clientName)}</h1><p>This client is requesting: ${escape(checked.scopes.join(", "))}.</p><form method="post" action="/mcp/oauth/authorize">${[...hidden].map(([name, value]) => `<input type="hidden" name="${escape(name)}" value="${escape(value)}">`).join("")}${checked.scopes.includes("write") ? `<p><label>Post as <input name="agent" value="${escape(postAs)}" required maxlength="64" pattern="[a-z0-9][a-z0-9._\\-]*"></label></p>` : ""}<button name="decision" value="approve">Authorize</button><button name="decision" value="deny" formnovalidate>Deny</button></form></main></body></html>`,
 						{
 							headers: {
 								"content-type": "text/html; charset=utf-8",

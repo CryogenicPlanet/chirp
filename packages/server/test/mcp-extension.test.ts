@@ -198,7 +198,9 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 		expect(page).toContain(`Authorize ${clientName}`);
 		// A client asking for read alone is still granted write, so consent always asks who it posts as.
 		expect(page).toContain("This client is requesting: read, write.");
-		expect(page).toContain(`name="agent" value="${clientName.toLowerCase().replaceAll(" ", "-")}"`);
+		// A first connection is offered its registered name; a reconnect keeps the name it already posts under.
+		const offered = marker === "writer" ? agent : clientName.toLowerCase().replaceAll(" ", "-");
+		expect(page).toContain(`name="agent" value="${offered}"`);
 		const approvalBody = { ...Object.fromEntries(query), decision: "approve", agent };
 		if (marker === "writer")
 			for (const unnamed of [
@@ -760,6 +762,129 @@ it("serves MCP 2.0 discovery and delivers signed mention events to a verified we
 	await delay(1500);
 	expect(deliveries()).toHaveLength(2);
 }, 60000);
+
+it("offers events only to 2026-07-28 clients and records which handshake each request used", async (test) => {
+	const { fixture, app, cookie } = await installed(test);
+	const { clientId, access } = await connect(app.url, cookie, "Handshake client", "shake-bot");
+	const info = async (response: Response) => {
+		const body: unknown = await response.json();
+		const content = Reflect.get(Object(Reflect.get(Object(body), "result")), "structuredContent");
+		return Schema.decodeUnknownSync(
+			Schema.Struct({
+				handshake: Schema.String,
+				delivery: Schema.Struct({ events: Schema.Array(Schema.String), events_transport: Schema.String }),
+			}),
+		)(content);
+	};
+	const legacy = await info(
+		await fetch(`${app.url}/mcp`, {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${access}`,
+				accept: "application/json, text/event-stream",
+				"content-type": "application/json",
+				"mcp-protocol-version": "2025-06-18",
+			},
+			body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "connection_info" } }),
+		}),
+	);
+	expect(legacy.handshake).toBe("initialize 2025-06-18");
+	expect(legacy.delivery.events).toEqual([]);
+	expect(legacy.delivery.events_transport).toContain("2026-07-28");
+	const current = await info(await modern(app.url, access, 2, "tools/call", { name: "connection_info" }));
+	expect(current).toMatchObject({ handshake: "2026-07-28", delivery: { events: ["mention.created"] } });
+	expect((await modern(app.url, access, 3, "server/discover", {}, { version: "2099-01-01" })).status).toBe(400);
+
+	expect((await fetch(`${app.url}/api/mcp/requests`)).status).toBe(401);
+	const log = await fetch(`${app.url}/api/mcp/requests`, { headers: { cookie } });
+	expect(log.status).toBe(200);
+	const { items } = Schema.decodeUnknownSync(
+		Schema.Struct({
+			items: Schema.Array(
+				Schema.Struct({
+					client: Schema.NullOr(Schema.String),
+					method: Schema.NullOr(Schema.String),
+					protocol: Schema.NullOr(Schema.String),
+					tool: Schema.NullOr(Schema.String),
+					status: Schema.Finite,
+					error: Schema.NullOr(Schema.Finite),
+				}),
+			),
+		}),
+	)(await log.json());
+	expect(items.slice(0, 3)).toEqual([
+		{ client: clientId, method: "server/discover", protocol: "2099-01-01", tool: null, status: 400, error: -32022 },
+		{
+			client: clientId,
+			method: "tools/call",
+			protocol: "2026-07-28",
+			tool: "connection_info",
+			status: 200,
+			error: null,
+		},
+		{
+			client: clientId,
+			method: "tools/call",
+			protocol: "2025-06-18",
+			tool: "connection_info",
+			status: 200,
+			error: null,
+		},
+	]);
+	expect(JSON.stringify(items)).not.toContain(access);
+
+	// Reconnecting keeps the name the client already posts under instead of reverting to its registered name.
+	const reconsent = await fetch(
+		`${app.url}/mcp/oauth/authorize?${new URLSearchParams({
+			response_type: "code",
+			client_id: clientId,
+			redirect_uri: "https://client.test/callback",
+			code_challenge: "a".repeat(43),
+			code_challenge_method: "S256",
+			resource: "https://comms.test/mcp",
+		})}`,
+		{ headers: { cookie } },
+	);
+	expect(await reconsent.text()).toContain('name="agent" value="shake-bot"');
+
+	// Another human's newer grant for the same client never supplies the name.
+	await fixture.sql(
+		`INSERT INTO example_mcp_oauth(id,kind,client_id,family,payload,expires_at,created_at) VALUES('${"f".repeat(64)}','refresh','${clientId}','other-human','{"resource":"https://comms.test/mcp","scopes":["read","write"],"subject":"someone-else","agent":"intruder"}',${Date.now() + 3600000},${Date.now() + 1000})`,
+	);
+	const scoped = await fetch(reconsent.url, { headers: { cookie } });
+	expect(await scoped.text()).toContain('name="agent" value="shake-bot"');
+
+	// A notification returns 202 before any method runs, and the log still records its protocol.
+	const notified = await fetch(`${app.url}/mcp`, {
+		method: "POST",
+		headers: {
+			authorization: `Bearer ${access}`,
+			accept: "application/json, text/event-stream",
+			"content-type": "application/json",
+			"mcp-protocol-version": "2025-06-18",
+		},
+		body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+	});
+	expect(notified.status).toBe(202);
+	const latest = await (await fetch(`${app.url}/api/mcp/requests`, { headers: { cookie } })).json();
+	expect(latest.items[0]).toMatchObject({ method: "notifications/initialized", protocol: "2025-06-18", status: 202 });
+});
+
+it("records requests whose handler failed", async (test) => {
+	const { app, cookie } = await installed(test, undefined, false, (file, source) =>
+		file === "tools.ts"
+			? source.replace(
+					'if (input.name === "connection_info")',
+					'if (input.name === "connection_info" && caller.agent === "boom-bot") return yield* Effect.fail(new Error("boom"));\n\t\tif (input.name === "connection_info")',
+				)
+			: source,
+	);
+	const { clientId, access } = await connect(app.url, cookie, "Boom client", "boom-bot");
+	const failed = await modern(app.url, access, 1, "tools/call", { name: "connection_info" });
+	expect(failed.status).toBe(500);
+	const { items } = await (await fetch(`${app.url}/api/mcp/requests`, { headers: { cookie } })).json();
+	expect(items[0]).toMatchObject({ client: clientId, method: "tools/call", tool: "connection_info", status: 500 });
+});
 
 it("stops delivering pending mentions when unsubscribe is called during drain", async (test) => {
 	const { fixture, app, cookie } = await installed(test, undefined, true);
@@ -1543,7 +1668,8 @@ it("gives MCP clients paged queries, bounded topics, page reads and structured e
 		posting_name: "parity-bot",
 		scopes: ["read", "write"],
 		client_id: clientId,
-		delivery: { server_stream: false, events: ["mention.created"] },
+		handshake: "initialize 2025-11-25",
+		delivery: { server_stream: false, events: [] },
 	});
 
 	// Twenty-five matches are fully retrievable by cursor, with completeness explicit.
