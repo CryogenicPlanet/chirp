@@ -23,6 +23,7 @@ import { applicationCookies, isReservedIngressPath } from "./application-ingress
 import { recoveryRoute } from "./recovery-http.ts";
 import { settingsRoute } from "./settings-http.ts";
 import { recoveryManifest } from "./route-discovery.ts";
+import { buildRevision } from "./build-revision.ts";
 import { restartRoute } from "./restart-http.ts";
 import { databaseRestoreRoute } from "./database-restore-http.ts";
 import { backupRoute } from "./backup-http.ts";
@@ -280,7 +281,7 @@ export const proxy = Effect.gen(function* () {
 				if (path === "/_boot/status" && request.method === "GET") {
 					return expires(
 						HttpServerResponse.jsonUnsafe({
-							mode: "local-development",
+							revision: yield* buildRevision,
 							ingress: ingress ?? { applicationManagedIngress: false, error: null },
 							authenticated: true,
 							child: safeState,
@@ -525,12 +526,14 @@ export const publicRoute = Effect.gen(function* () {
 	if (controlPath === "/_kernel" || controlPath.startsWith("/_kernel/"))
 		return HttpServerResponse.empty({ status: 403 });
 	if (path === "/health" && (request.method === "GET" || request.method === "HEAD")) {
-		return HttpServerResponse.jsonUnsafe({ status: "ok", mode: "local-development" });
+		return HttpServerResponse.jsonUnsafe({ status: "ok", revision: yield* buildRevision });
 	}
 	if (path === "/.well-known/agent.json") {
 		if (request.method !== "GET" && request.method !== "HEAD")
 			return HttpServerResponse.empty({ status: 405, headers: { allow: "GET, HEAD" } });
-		return HttpServerResponse.jsonUnsafe(recoveryManifest(), { headers: { "cache-control": "no-store" } });
+		return HttpServerResponse.jsonUnsafe(recoveryManifest(yield* buildRevision), {
+			headers: { "cache-control": "no-store" },
+		});
 	}
 	if (path === "/_boot" && request.method === "GET") return HttpServerResponse.text(help);
 	return null;

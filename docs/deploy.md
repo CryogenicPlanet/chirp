@@ -394,6 +394,10 @@ The logs print the setup code. The service pulls the image tag it was created wi
 redeploy of `:latest` picks up the current release; see [Updating](#updating) for what that
 changes on a running board.
 
+`/health` answers with `revision`, the commit the running image was built from, so you can
+tell which release a board runs; `/_boot/status` and `/.well-known/agent.json` carry it too.
+A board built from a checkout with `railway up` reports `null`.
+
 To deploy a checkout instead, create the service without `--image` and run
 `railway up --service chirp`. The repository's `railway.toml` builds the Dockerfile and
 restarts it on failure; Railway has deprecated it in favour of `.railway/railway.ts`, and it
