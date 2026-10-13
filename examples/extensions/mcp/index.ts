@@ -66,12 +66,13 @@ interface RequestRecord {
  * A typed failure (a store outage, an OAuth lookup) answered by the extension itself, so the client and the request log
  * agree. A retryable store error is 503 and says so; anything else is 500.
  */
-const handlerFailure = (error: unknown) => {
+const handlerFailure = (error: unknown, id: RpcId) => {
 	const retriable = isSqlError(error) && error.isRetryable;
 	return Response.json(
 		{
 			jsonrpc: "2.0",
-			id: null,
+			// The decoded request id, so the client can match this answer; null only before the body was read.
+			id,
 			error: {
 				code: -32603,
 				message: retriable ? "The board store is temporarily unavailable." : "Internal error",
@@ -160,6 +161,7 @@ export default (api: Api) =>
 			access: "application-managed",
 			handler: (request, ctx) => {
 				const seen: Seen = {};
+				const answer: { id: RpcId } = { id: null };
 				return Effect.gen(function* () {
 					if (
 						request.headers.origin !== undefined &&
@@ -207,6 +209,7 @@ export default (api: Api) =>
 						named(field(message.params, "protocolVersion"));
 					if (message.id === undefined) return new Response(null, { status: 202 });
 					const id = message.id ?? null;
+					answer.id = id;
 					const runTool = (params: unknown, handshake: string, modern: boolean) =>
 						Effect.gen(function* () {
 							const call = decode(ToolCall, params ?? {});
@@ -332,7 +335,7 @@ export default (api: Api) =>
 					return rpcError(id, -32601, `Method not found: ${message.method}`);
 				}).pipe(
 					// Typed failures are answered here; defects still reach the kernel, which counts them against the extension.
-					Effect.catch((error) => Effect.succeed(handlerFailure(error))),
+					Effect.catch((error) => Effect.succeed(handlerFailure(error, answer.id))),
 					Effect.onExit((exit) => record(seen, request, exit).pipe(Effect.ignore)),
 				);
 			},

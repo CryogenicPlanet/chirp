@@ -904,7 +904,7 @@ it("records requests whose handler failed with the status the client received", 
 	const boom = await connect(app.url, cookie, "Boom client", "boom-bot");
 	const boomed = await modern(app.url, boom.access, 1, "tools/call", { name: "connection_info" });
 	expect(boomed.status).toBe(500);
-	expect(await boomed.json()).toMatchObject({ error: { code: -32603, data: { retriable: false } } });
+	expect(await boomed.json()).toMatchObject({ id: 1, error: { code: -32603, data: { retriable: false } } });
 	expect((await log())[0]).toMatchObject({
 		client: boom.clientId,
 		method: "tools/call",
@@ -917,7 +917,7 @@ it("records requests whose handler failed with the status the client received", 
 	const store = await connect(app.url, cookie, "Store client", "store-bot");
 	const storeFailed = await modern(app.url, store.access, 2, "tools/call", { name: "connection_info" });
 	expect(storeFailed.status).toBe(503);
-	expect(await storeFailed.json()).toMatchObject({ error: { code: -32603, data: { retriable: true } } });
+	expect(await storeFailed.json()).toMatchObject({ id: 2, error: { code: -32603, data: { retriable: true } } });
 	expect((await log())[0]).toMatchObject({ client: store.clientId, status: 503, outcome: "answered", error: -32603 });
 	// A defect still reaches the kernel, which answers 500; the log records it as failed with that status.
 	const bug = await connect(app.url, cookie, "Bug client", "bug-bot");
