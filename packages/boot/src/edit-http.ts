@@ -28,13 +28,17 @@ export interface Editing {
 	readonly source: SourceFiles["Service"];
 	readonly lock: EditLock["Service"];
 	readonly cutover: Cutover;
+	/** With `immediate`, a busy operation gate refuses with board_busy instead of queuing. */
 	readonly withPagePublication: <A, E, R>(
 		effect: Effect.Effect<A, E, R>,
+		immediate?: boolean,
 	) => Effect.Effect<
 		A,
-		E | SourceRejected | EditRejected | ChildError | RecoveryRejected | SqlError | Schema.SchemaError,
+		E | SourceRejected | EditRejected | ChildError | RecoveryRejected | SqlError | Schema.SchemaError | AuthError,
 		R
 	>;
+	/** Runs work in boot's lifetime rather than the request's. */
+	readonly detach: <R>(effect: Effect.Effect<void, never, R>) => Effect.Effect<void, never, R>;
 }
 
 export const editRoute = (
@@ -55,6 +59,8 @@ export const editRoute = (
 		)
 			return null;
 		if (!identity.scopes.includes("fs")) return yield* new AuthError({ code: "scope_required" });
+		// A grant's enclosing app request is admitted traffic, so grant edits never wait on the operation gate.
+		const held = identity.held !== undefined;
 		return yield* Effect.gen(function* () {
 			const writable = editing.writable;
 			const repairLock =
@@ -70,7 +76,7 @@ export const editRoute = (
 			}
 			if (!writable && !repairLock && !repairRevert && (request.method !== "GET" || !route.startsWith("/_boot/fs/")))
 				return errorResponse("editing_unavailable", 503);
-			if (writable && route === "/_boot/lock" && ["POST", "DELETE"].includes(request.method))
+			if (writable && !held && route === "/_boot/lock" && ["POST", "DELETE"].includes(request.method))
 				yield* editing.retryRecovery(Effect.asVoid(authenticate(auth, request)));
 			// Failed recovery permits committed-source diagnostics, without lock expiry or staged-overlay mutation.
 			const known = writable
@@ -339,14 +345,26 @@ export const editRoute = (
 				if (url.searchParams.has("baseVersion")) return errorResponse("unsupported_query", 400);
 				if (request.method !== "POST") return errorResponse("method_invalid", 405);
 				yield* body(Schema.Struct({}));
-				return HttpServerResponse.jsonUnsafe(
-					yield* authoritative(
-						editing.cutover.reload(owner(), {
-							check: url.searchParams.get("check") === "1",
-							release: url.searchParams.get("release") === "1",
-						}),
-					),
-				);
+				const check = url.searchParams.get("check") === "1",
+					release = url.searchParams.get("release") === "1";
+				if (held && check)
+					return HttpServerResponse.jsonUnsafe(
+						yield* authoritative(editing.cutover.reloadIfIdle(owner(), { check, release })),
+					);
+				if (held) {
+					// The cutover drains admitted traffic, including the app request that sent this one: detach it.
+					if (!known) return yield* new EditRejected({ code: "lock_required", holder: null, transitions: [] });
+					if (known.holder_family !== identity.id)
+						return yield* new EditRejected({ code: "locked", holder: known, transitions: [] });
+					yield* editing.cutover.detachReload(owner(), { release }, (reload) =>
+						editing.detach(reload.pipe(Effect.provideService(EditAuthority, identity))),
+					);
+					return HttpServerResponse.jsonUnsafe(
+						{ status: "reloading", lock: known },
+						{ status: 202, headers: { "cache-control": "no-store" } },
+					);
+				}
+				return HttpServerResponse.jsonUnsafe(yield* authoritative(editing.cutover.reload(owner(), { check, release })));
 			}
 			const name = yield* Effect.try({
 				try: () => decodeURIComponent(route.slice("/_boot/fs/".length)),
@@ -415,6 +433,7 @@ export const editRoute = (
 									.pipe(Effect.as(HttpServerResponse.jsonUnsafe({ published: true, batch: id }))),
 							(id) => editing.source.discard(id).pipe(Effect.ignore),
 						),
+						held,
 					),
 				);
 			}

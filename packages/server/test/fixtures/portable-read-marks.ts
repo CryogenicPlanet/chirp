@@ -10,6 +10,7 @@ import { Lifecycle, type State } from "../../src/kernel/lifecycle.ts";
 import { layer as publicationLayer } from "../../src/kernel/publication.ts";
 import { Messages, layer as messagesLayer } from "../../src/ext/core/messages.ts";
 import { extensionCapabilities } from "../../src/ext/core/capabilities.ts";
+import { BootGrants, unavailable as noGrants } from "../../src/kernel/boot-grants.ts";
 import { layer as pagesLayer } from "../../src/ext/core/pages.ts";
 import { markView } from "../../src/ext/core/read-view.ts";
 
@@ -73,7 +74,11 @@ const main = Effect.gen(function* () {
 	yield* Effect.gen(function* () {
 		yield* Console.error("read-mark stage: marking");
 		const messages = yield* Messages;
-		const ctx = (yield* extensionCapabilities)("read-mark-parity", who, false);
+		const ctx = (yield* extensionCapabilities.pipe(Effect.provideService(BootGrants, noGrants)))(
+			"read-mark-parity",
+			who,
+			false,
+		);
 		const rows = sql`SELECT instance,topic,seq FROM ${sql("reads")} ORDER BY instance,topic`;
 		const unchangedEvents = Effect.gen(function* () {
 			assert.deepEqual(yield* sql`SELECT * FROM outbox`, []);

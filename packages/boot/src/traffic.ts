@@ -52,6 +52,18 @@ const admission = (route: Ref.Ref<Destination | null>) =>
 					}
 				}),
 			).pipe(Effect.timeout("60 seconds")),
+			/** Admits only while unfrozen, atomically with freeze; null means a freeze holds the gate. A caller whose
+			 * enclosing request is itself admitted must not queue: the freeze would wait for that request until its deadline. */
+			admitNow: Effect.uninterruptible(
+				Effect.gen(function* () {
+					const admitted = yield* Ref.modify(gate, (state): readonly [boolean, Gate] =>
+						state.frozen ? [false, state] : [true, { ...state, admitted: state.admitted + 1 }],
+					);
+					if (!admitted) return null;
+					yield* Effect.addFinalizer(() => Ref.update(gate, (state) => ({ ...state, admitted: state.admitted - 1 })));
+					return { destination: yield* Ref.get(route), revision: (yield* Ref.get(gate)).revision };
+				}),
+			),
 			freeze: Effect.gen(function* () {
 				if ((yield* Ref.get(gate)).frozen) return;
 				const released = yield* Deferred.make<void>();

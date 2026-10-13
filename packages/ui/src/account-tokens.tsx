@@ -101,6 +101,7 @@ export function AccountTokens() {
 						</strong>
 						<p className="my-1 text-muted-foreground">
 							{family.scopes.join(", ")} · {family.revoked ? "Revoked" : "Issued"}
+							{family.held_by ? ` · Held by boot for extension ${family.held_by}` : ""}
 						</p>
 						<small className="wrap-anywhere text-subtle">{family.family}</small>
 					</div>

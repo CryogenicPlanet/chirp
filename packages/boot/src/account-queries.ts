@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect";
 import { SqlClient } from "effect/unstable/sql";
-import { Scope } from "./enrollment-schema.ts";
+import { heldExtension, Scope } from "./enrollment-schema.ts";
 
 const EnrollmentStatus = Schema.Literals(["pending", "approved", "denied", "collected", "expired"]);
 const enrollmentRow = Schema.Struct({
@@ -25,6 +25,7 @@ const familyRow = Schema.Struct({
 	access_expires_at: Schema.NullOr(Schema.Int),
 	refresh_expires_at: Schema.NullOr(Schema.Int),
 	revoked: Schema.Literals([0, 1]),
+	enrollment_kind: Schema.NullOr(Schema.String),
 });
 /** Human account metadata remains readable without an app; each listing is one SQL snapshot. */
 export const makeAccountQueries = Effect.gen(function* () {
@@ -36,14 +37,22 @@ export const makeAccountQueries = Effect.gen(function* () {
 	});
 	const listTokenFamilies = Effect.fn("Auth.listTokenFamilies")(function* () {
 		// Family identity/scopes are immutable across rotation. Aggregate all pairs, including expired use evidence.
-		const rows = yield* sql`SELECT family, MIN(agent) AS agent, MIN(label) AS label, MIN(scopes) AS scopes,
-		MIN(created_at) AS created_at, MAX(last_used_at) AS last_used_at,
-		MAX(CASE WHEN kind = 'access' THEN expires_at END) AS access_expires_at,
-		MAX(CASE WHEN kind = 'refresh' THEN expires_at END) AS refresh_expires_at,
-		MIN(CASE WHEN revoked_at IS NOT NULL THEN 1 ELSE 0 END) AS revoked
-		FROM tokens GROUP BY family ORDER BY family DESC`;
+		// A family has at most one enrollment, so the join never multiplies token rows.
+		const rows =
+			yield* sql`SELECT t.family AS family, MIN(t.agent) AS agent, MIN(t.label) AS label, MIN(t.scopes) AS scopes,
+		MIN(t.created_at) AS created_at, MAX(t.last_used_at) AS last_used_at,
+		MAX(CASE WHEN t.kind = 'access' THEN t.expires_at END) AS access_expires_at,
+		MAX(CASE WHEN t.kind = 'refresh' THEN t.expires_at END) AS refresh_expires_at,
+		MIN(CASE WHEN t.revoked_at IS NOT NULL THEN 1 ELSE 0 END) AS revoked,
+		MIN(e.kind) AS enrollment_kind
+		FROM tokens t LEFT JOIN enrollments e ON e.family = t.family GROUP BY t.family ORDER BY t.family DESC`;
 		const decoded = yield* Schema.decodeUnknownEffect(Schema.Array(familyRow))(rows);
-		const items = decoded.map((row) => ({ ...row, revoked: row.revoked === 1 }));
+		// held_by names the extension a grant acts through; boot holds its credential.
+		const items = decoded.map(({ enrollment_kind, ...row }) => ({
+			...row,
+			revoked: row.revoked === 1,
+			held_by: enrollment_kind === null ? null : heldExtension(enrollment_kind),
+		}));
 		return { items };
 	});
 	return { listEnrollments, listTokenFamilies };

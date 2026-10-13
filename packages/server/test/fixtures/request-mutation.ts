@@ -7,6 +7,7 @@ import { initializeBootSchema } from "../../../boot/src/boot-schema.ts";
 import { AppRecovery, layer as recoveryLayer } from "../../../boot/src/app-recovery.ts";
 import { Events, layer as eventsLayer } from "../../../boot/src/events.ts";
 import { extensionCapabilities } from "../../src/ext/core/capabilities.ts";
+import { BootGrants, unavailable as noGrants } from "../../src/kernel/boot-grants.ts";
 import { layer as pagesLayer } from "../../src/ext/core/pages.ts";
 import { initialize } from "../../src/ext/core/schema.ts";
 import { BootChannel, KernelError } from "../../src/kernel/boot-channel.ts";
@@ -44,7 +45,7 @@ const program = Effect.gen(function* () {
 				return yield* Effect.gen(function* () {
 					const sql = yield* SqlClient.SqlClient;
 					const lifecycle = yield* Lifecycle;
-					const bind = yield* extensionCapabilities;
+					const bind = yield* extensionCapabilities.pipe(Effect.provideService(BootGrants, noGrants));
 					const who = { agent: "rahul", instance: "session", request: "request", kind: "human" as const };
 					const ctx = bind("request-fixture", who);
 					const readOnly = bind("request-fixture", who, false);

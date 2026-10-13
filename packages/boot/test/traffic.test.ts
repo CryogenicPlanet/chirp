@@ -124,3 +124,32 @@ it.effect("captures ingress capability from the destination admitted after a mut
 		}),
 	),
 );
+
+it.effect("admits grant traffic without queuing: a freeze refuses at once and admission counts until scope close", () =>
+	Effect.scoped(
+		Effect.gen(function* () {
+			const gate = yield* traffic;
+			const held = yield* Deferred.make<void>();
+			const admitted = yield* Deferred.make<void>();
+			const request = yield* Effect.scoped(
+				Effect.gen(function* () {
+					expect(yield* gate.admitNow).toMatchObject({ destination: null, revision: 0 });
+					yield* Deferred.succeed(admitted, undefined);
+					yield* Deferred.await(held);
+				}),
+			).pipe(Effect.forkScoped);
+			yield* Deferred.await(admitted);
+			expect(yield* gate.state).toEqual({ frozen: false, admitted: 1, queued: 0 });
+			yield* gate.freeze;
+			// The freeze waits for the admitted request; a grant arriving now never joins the queue.
+			expect(yield* Effect.scoped(gate.admitNow)).toBeNull();
+			expect(yield* gate.state).toEqual({ frozen: true, admitted: 1, queued: 0 });
+			yield* Deferred.succeed(held, undefined);
+			yield* Fiber.join(request);
+			yield* gate.drained;
+			yield* gate.release;
+			expect(yield* Effect.scoped(gate.admitNow)).toMatchObject({ revision: 1 });
+			expect(yield* gate.state).toEqual({ frozen: false, admitted: 0, queued: 0 });
+		}),
+	),
+);

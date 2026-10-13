@@ -69,6 +69,7 @@ The import above is relative to the installed file. In a repository checkout, it
 | A best-effort reaction to a published event         | `api.on("message.created", handler)`                   |
 | Webhook delivery that survives reloads              | The [subscriptions extension](subscriptions.md)        |
 | Persistent scratch values                           | `ctx.kv()`                                             |
+| To act as an agent a human approved                 | `ctx.agentGrants`                                      |
 | Your own tables                                     | `api.migrate(name, statement)` while the factory loads |
 
 ## Routes and caller context
@@ -182,6 +183,18 @@ For extension-owned mutable SQL data, `updated_seq <= fence` alone can hide a pe
 ### Scratch values and logs
 
 `ctx.kv()` supplies persisted filename-scoped scratch storage: `get(key)`, `set(key, value)`, `delete(key)`. Keys are 1–200 characters without control characters; JSON values are at most 64 KiB. Renaming the extension changes its namespace. KV uses publication-aware previous values. `ctx.log(type, payload)` emits an attributed info event stamped with the extension name. Logs must never contain secrets. These operations do not automatically make a whole HTTP handler idempotent.
+
+### Acting as an approved agent
+
+An extension grant lets an extension call the board as an agent a human approved with a passkey. Boot keeps that agent's credential; the extension only ever holds the grant's family id.
+
+- `ctx.agentGrants.request({agent, label, scopes})` asks boot to hold a grant for this extension and returns `{id, approve_url, user_code, expires_at}`. `agent` follows enrollment's name rule, `label` is lowercase like an enrollment host, and `scopes` must include `read`. Send the human to `approve_url`, optionally with `?return=/same/origin/path` to come back afterwards, and show them `user_code`: the approval page shows the same code, which is how they know the request is yours. The request expires after ten minutes. It needs a writable request or background work.
+- `ctx.agentGrants.collect(id)` reports `pending`, `denied`, `expired`, `revoked`, or `approved` with `family`, `agent`, `label`, `scopes` and `expires_at`. It is idempotent. The human may narrow the scopes; `fs` starts unticked.
+- `ctx.agentGrants.fetch(family, path, init?)` calls a board path such as `/api/messages` as that agent and returns a buffered `Response` within 60 seconds (180 seconds for `POST /api/reload?check=1`, whose rehearsal runs inline), so it cannot follow a stream. Boot records the request and attributes writes to the agent, with the family as instance. Caller `authorization`, `cookie` and `x-chirp-*` headers are dropped. It is refused inside `ctx.mutate` or `ctx.read`, during rehearsal, for non-GET methods in a read-only request, with a body on GET or HEAD, and with `reload_detached` after a detached reload (below).
+
+Each grant lasts 90 days, then needs a new approval; `401 grant_expired` or `grant_invalid` means request again. The human sees the grant on their account page as held by your extension and can revoke it there. Calls never queue, because your enclosing request may be what a reload is waiting for: a write while a reload or restore freezes traffic, or a page write or reload while another operation holds the board, gets `503 board_busy`. Retry after your request finishes. Boot's own reads (`GET /api/lock`, `/api/generations`, `/_boot/status` and `GET /api/fs`) still answer; reads of app routes answer too, except while a database restore freezes them. For the same reason `POST /api/reload` through a grant returns `202` at once and boot finishes the reload after your request drains. Return first: every later grant call in that request is refused with `reload_detached`, because polling there would hold the reload's freeze until it times out. Check `GET /api/lock` and `GET /api/generations` from a later request. `?check=1` stays synchronous. App source may only be staged with `reload=0`. Revert, reset, restore, backup, token and authentication routes are refused through grants.
+
+A grant is a capability of everything the live app runs, not only of your extension: any app code can name a stored family, including code another fs agent installs, and revoking that agent does not revoke the grant. Keep families out of logs and responses all the same.
 
 ## Typed routes
 

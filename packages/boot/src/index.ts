@@ -25,7 +25,7 @@ import {
 } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
-import { Auth, layer as authLayer, type AuthConfig } from "./auth.ts";
+import { Auth, AuthError, layer as authLayer, type AuthConfig } from "./auth.ts";
 import { authErrorResponse, validateAuthConfig } from "./auth-http.ts";
 import type { ApplicationSource } from "./application.ts";
 import { initializeBootSchema, BootIdentityUpgradePending } from "./boot-schema.ts";
@@ -318,11 +318,29 @@ export const boot = Effect.fn("boot")(function* (options: ApplicationSource & { 
 					source: yield* SourceFiles,
 					lock: yield* EditLock,
 					cutover: coordinator,
+					// Starts now and runs uninterruptibly even if boot's scope is already closing, so a detached reload
+					// always releases the operation gate it took; closing the scope then waits for it to finish.
+					detach: (effect) =>
+						effect.pipe(Effect.forkIn(lifetime, { startImmediately: true, uninterruptible: true }), Effect.asVoid),
 					// App filesystem effects reserve first; raw journals stay outside that interval.
-					withPagePublication: (effect) =>
+					withPagePublication: (effect, immediate = false) =>
 						Effect.gen(function* () {
+							// A grant's enclosing app request is admitted traffic; it must not wait behind a reload that drains it.
+							const gate = <A, E, R>(operation: Effect.Effect<A, E, R>) =>
+								immediate
+									? supervisor.operationGate
+											.withPermitsIfAvailable(1)(operation)
+											.pipe(
+												Effect.flatMap(
+													Option.match({
+														onNone: () => Effect.fail(new AuthError({ code: "board_busy" })),
+														onSome: Effect.succeed,
+													}),
+												),
+											)
+									: supervisor.operationGate.withPermit(operation);
 							while (true) {
-								const admitted = yield* supervisor.operationGate.withPermit(
+								const admitted = yield* gate(
 									child.channelGate.withPermit(
 										Effect.gen(function* () {
 											if ((yield* recoveryIntents(sql)).count > 0)

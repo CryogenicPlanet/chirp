@@ -13,7 +13,7 @@ import { DatabaseRestoreInput, databaseRestoreParams, GenerationRestoreParams } 
 import { BreakLock } from "./lock-break.ts";
 import { RevokeFamily } from "./refresh-schema.ts";
 import { EnrollmentDecision } from "./enrollment-schema.ts";
-import { approvalClient, approvalPage } from "./enrollment-page.ts";
+import { approvalClient, approvalPage, approvalReturn } from "./enrollment-page.ts";
 
 const challengeInput = Schema.Union([
 	Schema.Struct({ action: Schema.Literal("settings.change"), params: SettingsChange }),
@@ -82,9 +82,14 @@ export const enrollmentRoute = (auth: Auth["Service"], config: AuthConfig, editi
 								error.code === "enrollment_invalid" ? Effect.succeed(null) : Effect.fail(error),
 							),
 						);
-					return info === null
-						? approvalLinkInvalid()
-						: HttpServerResponse.text(approvalPage(info), { contentType: "text/html", headers: pageHeaders });
+					if (info === null) return approvalLinkInvalid();
+					// Only a held request's page may send the human back, and only to a same-origin path.
+					const returnTo =
+						info.held === null ? null : approvalReturn(url.searchParams.get("return"), config.expectedOrigin);
+					return HttpServerResponse.text(approvalPage(info, returnTo), {
+						contentType: "text/html",
+						headers: pageHeaders,
+					});
 				}
 				if (create) {
 					if (url.search) return yield* new AuthError({ code: "invalid_request" });

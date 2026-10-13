@@ -7,8 +7,7 @@ import { ChildError } from "./child-process.ts";
 import { StorageRejected } from "./storage-headroom.ts";
 import { EventStorageRejected } from "./event-storage.ts";
 import { ArtifactRetentionRejected } from "./artifact-retention.ts";
-// oxlint-disable-next-line effecttsgo/node-builtin-import -- Constant-time comparison is not exposed by Effect Crypto.
-import { timingSafeEqual } from "node:crypto";
+import { channelAttempt } from "./internal-channel.ts";
 import { Cause, DateTime, Effect, Option, Ref, Schema, type Semaphore } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import type { DatabaseBackup } from "./database-backup.ts";
@@ -214,21 +213,8 @@ export const eventRoute = (
 		if (!internal && !query) return null;
 		let attempt: Attempt | null = null;
 		if (internal || request.headers["x-boot-secret"] !== undefined) {
-			const supplied = Buffer.from(request.headers["x-boot-secret"] ?? "");
-			attempt =
-				(yield* Ref.get(attempts)).find((item) => {
-					const value = Buffer.from(item.secret);
-					return value.length === supplied.length && timingSafeEqual(value, supplied);
-				}) ?? null;
-			const expected = Buffer.from(attempt?.secret ?? "");
-			if (
-				!attempt ||
-				supplied.length !== expected.length ||
-				!timingSafeEqual(supplied, expected) ||
-				request.headers.host !== attempt.host ||
-				Object.keys(request.headers).some((key) => key.startsWith("x-forwarded-") || key === "forwarded")
-			)
-				return failure("child_forbidden", 403);
+			attempt = channelAttempt(request, yield* Ref.get(attempts));
+			if (!attempt) return failure("child_forbidden", 403);
 			if (attempt.state === "starting" && url.pathname === "/_boot/events/append")
 				return failure("child_not_live", 409);
 		} else if (!identity) return null;

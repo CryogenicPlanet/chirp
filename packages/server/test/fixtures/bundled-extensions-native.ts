@@ -46,6 +46,7 @@ await Effect.runPromise(
 			db: sql,
 			generation: 1,
 			drained: Effect.never,
+			agentGrants: { request: unavailable, collect: unavailable, fetch: unavailable },
 			publicationFence: Ref.get(sequence).pipe(Effect.map((published_through) => ({ published_through }))),
 			read: (read) => sql.withTransaction(Ref.get(sequence).pipe(Effect.flatMap(read))),
 			mutate: (operation) => (Effect.isEffect(operation) ? sql.withTransaction(operation) : unavailable()),
