@@ -1,6 +1,6 @@
 import { createHash, createHmac } from "node:crypto";
 import { once } from "node:events";
-import { cp, readFile, writeFile } from "node:fs/promises";
+import { cp, readdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { join } from "node:path";
@@ -10,6 +10,7 @@ import { expect, it, type TestContext } from "vitest";
 import { conversation } from "./fixtures/conversation.ts";
 import { publicCallbackAddress } from "./fixtures/mcp-callback-addresses.ts";
 
+const json = (text: string) => Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(text);
 const stringField = (value: unknown, name: string) => {
 	if (typeof value !== "object" || value === null) throw new Error(`${name} response is not an object`);
 	const field = Reflect.get(value, name);
@@ -36,7 +37,7 @@ const installed = async (
 	const seed = join(fixture.root, "seed");
 	await cp(join(import.meta.dirname, "../src"), seed, { recursive: true });
 	await cp(join(import.meta.dirname, "../../../examples/extensions/mcp"), join(seed, "ext/mcp"), { recursive: true });
-	for (const file of ["index.ts", "oauth.ts", "tools.ts", "events.ts"]) {
+	for (const file of (await readdir(join(seed, "ext/mcp"))).filter((name) => name.endsWith(".ts"))) {
 		const path = join(seed, `ext/mcp/${file}`);
 		const source = (await readFile(path, "utf8"))
 			.replace("../../../packages/server/src/kernel/extension-api.ts", "../../kernel/extension-api.ts")
@@ -318,6 +319,21 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 		"read_topic",
 		"read_page",
 		"post_message",
+		"request_editing",
+		"read_thread",
+		"edit_message",
+		"delete_message",
+		"set_topic_meta",
+		"move_topic",
+		"write_page",
+		"delete_page",
+		"read_source",
+		"acquire_lock",
+		"stage_source",
+		"delete_source",
+		"reload",
+		"reload_status",
+		"release_lock",
 	]);
 	expect(listedTools.find((tool) => tool.name === "query_messages")?.description).toMatch(/topic\/subtree OR mentions/);
 	expect((await call(reader.access, 20, "ping", undefined, "1900-01-01")).status).toBe(400);
@@ -1798,7 +1814,13 @@ it("gives MCP clients paged queries, bounded topics, page reads and structured e
 	);
 	expect(union.items.map((item) => item.body)).not.toContain("unrelated noise");
 
-	// A refusal from a tool with an outputSchema is text only, so strict clients don't reject it.
+	// Every tool declares an outputSchema, so a refusal is JSON text only and strict clients don't reject it.
+	const refusal = async (name: string, args: Readonly<Record<string, unknown>>) => {
+		const result = await tool(name, args);
+		expect(result).toMatchObject({ isError: true });
+		expect(result.structuredContent).toBeUndefined();
+		return json(result.content[0]?.text ?? "");
+	};
 	const missing = await tool("fetch", { id: "message:999999" });
 	expect(missing).toMatchObject({ isError: true });
 	expect(missing.structuredContent).toBeUndefined();
@@ -1835,27 +1857,22 @@ it("gives MCP clients paged queries, bounded topics, page reads and structured e
 			(await tool("read_page", { path: "parity" })).structuredContent,
 		).text,
 	).toContain("plan.md");
-	expect(await tool("read_page", { path: "parity/missing.md" })).toMatchObject({
-		isError: true,
-		structuredContent: { error: { code: "page_not_found", retriable: false } },
+	expect(await refusal("read_page", { path: "parity/missing.md" })).toMatchObject({
+		error: { code: "page_not_found", retriable: false },
 	});
 	await fixture.sql(
 		"INSERT INTO topic_page_continuations VALUES (999999,'parity/moving','parity/moved','pending-mcp-test',0)",
 	);
-	expect(await tool("read_page", { path: "parity/moving/file.md" })).toMatchObject({
-		isError: true,
-		structuredContent: {
-			error: {
-				code: "pages_move_pending",
-				retriable: true,
-				hint: expect.stringContaining("Idempotency-Key"),
-			},
+	expect(await refusal("read_page", { path: "parity/moving/file.md" })).toMatchObject({
+		error: {
+			code: "pages_move_pending",
+			retriable: true,
+			hint: expect.stringContaining("Idempotency-Key"),
 		},
 	});
 
 	// Kernel refusals keep their code and hint.
-	expect(await tool("read_topic", { path: "parity/nowhere" })).toMatchObject({
-		isError: true,
-		structuredContent: { error: { code: "topic_not_found", hint: expect.stringContaining("topic path") } },
+	expect(await refusal("read_topic", { path: "parity/nowhere" })).toMatchObject({
+		error: { code: "topic_not_found", hint: expect.stringContaining("topic path") },
 	});
 }, 60000);

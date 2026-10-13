@@ -2,6 +2,7 @@ import { on } from "@comms/storage/dialect";
 import { Clock, Crypto, Effect, Option, Schema, Stream } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import type { Api, ManagedRequestContext } from "../../../packages/server/src/kernel/extension-api.ts";
+import { type Editing, editingState, requestEditing, storedEditing } from "./grants.ts";
 
 const ClientInput = Schema.Struct({
 	client_name: Schema.String,
@@ -29,6 +30,8 @@ const Grant = Schema.Struct({
 	subject: Schema.String,
 	agent: Schema.optionalKey(Schema.String),
 });
+/** An approved authorization waiting for the human to come back from boot's editing approval. */
+const Consent = Schema.Struct({ ...Grant.fields, state: Schema.optionalKey(Schema.String) });
 const Access = Schema.Struct({
 	resource: Schema.String,
 	scopes: Schema.Array(Schema.Union([Schema.Literal("read"), Schema.Literal("write")])),
@@ -53,7 +56,7 @@ const escape = (value: string) =>
 // The kernel refuses other names: boot reserves the owner and itself, and system is the extension's own voice.
 const agentName = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const reservedAgents: ReadonlyArray<string> = ["system", "boot", "rahul"];
-const suggestedAgent = (clientName: string) => {
+export const suggestedAgent = (clientName: string) => {
 	const slug = clientName
 		.toLowerCase()
 		.replace(/[^a-z0-9._-]+/g, "-")
@@ -128,6 +131,9 @@ const client = (ctx: Context, clientId: string) =>
 				: Effect.succeed<typeof Client.Type | undefined>(undefined),
 		),
 	);
+/** The label boot shows beside the agent on its approval page: the client's registered name as a slug. */
+export const clientLabel = (ctx: Context, clientId: string) =>
+	client(ctx, clientId).pipe(Effect.map((registered) => suggestedAgent(registered?.client_name ?? "mcp")));
 /**
  * The name this client last posted under for the human now approving, so reconnecting keeps it instead of reverting to
  * the client's own name. Another human's grant for the same client never supplies the name.
@@ -193,11 +199,58 @@ const authorization = (ctx: Context, query: Context["query"], resource: string) 
 		};
 	});
 
+const page = (title: string, body: string, formAction: string, status = 200) =>
+	new Response(
+		`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escape(title)}</title></head><body><main>${body}</main></body></html>`,
+		{
+			status,
+			headers: {
+				"content-type": "text/html; charset=utf-8",
+				"cache-control": "no-store",
+				// Chromium applies form-action to the redirect after submit, so allow where the form leads.
+				"content-security-policy": `default-src 'none'; form-action ${formAction}; base-uri 'none'; frame-ancestors 'none'`,
+			},
+		},
+	);
+const signIn = (url: string) =>
+	new Response(null, {
+		status: 302,
+		headers: { location: `/auth/login?next=${encodeURIComponent(url)}`, "cache-control": "no-store" },
+	});
+/** What the human is told on the way back from boot's approval page. */
+const outcome = (editing: Editing, clientName: string, approve: string) =>
+	editing.status === "active"
+		? `<p>Editing approved: ${escape(clientName)} acts as <strong>${escape(editing.agent ?? "")}</strong> with ${escape(editing.scopes.join(", "))} until ${escape(new Date(editing.expires_at ?? 0).toISOString().slice(0, 10))}.${editing.code ? ` Request code <code>${escape(editing.code)}</code>.` : ""} Revoke it any time from your board's token list.</p>`
+		: editing.status === "pending"
+			? `<p>Editing is still waiting for your approval${editing.code ? ` (code <code>${escape(editing.code)}</code>)` : ""}. <a href="${escape(approve)}">Approve it with your passkey</a>, or continue without editing: the client can ask again later with request_editing.</p>`
+			: `<p>Editing was not approved. ${escape(clientName)} can still read and post; it can ask again later with request_editing.</p>`;
+
 export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) =>
 	Effect.gen(function* () {
 		const sql = yield* SqlClient.SqlClient;
 		const crypto = yield* Crypto.Crypto;
 		const resource = `${resourceOrigin}/mcp`;
+		/** Mints the one-use authorization code for an approved grant; run inside ctx.mutate. */
+		const issue = (ctx: Context, clientId: string, grant: typeof Grant.Type) =>
+			Effect.gen(function* () {
+				const code = yield* random(crypto, "mcp_code_");
+				const now = yield* Clock.currentTimeMillis;
+				yield* store(ctx, {
+					id: yield* digest(crypto, code),
+					kind: "code",
+					clientId,
+					family: "",
+					payload: yield* Schema.encodeEffect(Schema.fromJsonString(Grant))(grant),
+					expires: now + 5 * 60 * 1000,
+				});
+				return code;
+			});
+		const continuation = (token: string) => `/mcp/oauth/continue?consent=${encodeURIComponent(token)}`;
+		const approveLink = (approveUrl: string, token: string) => {
+			const target = new URL(approveUrl);
+			target.searchParams.set("return", continuation(token));
+			return target.href;
+		};
 		yield* api.migrate(
 			"oauth_credentials",
 			on(sql, {
@@ -297,14 +350,7 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 			access: "application-managed",
 			handler: (request, ctx) =>
 				Effect.gen(function* () {
-					if (ctx.identity?.kind !== "human")
-						return new Response(null, {
-							status: 302,
-							headers: {
-								location: `/auth/login?next=${encodeURIComponent(request.url)}`,
-								"cache-control": "no-store",
-							},
-						});
+					if (ctx.identity?.kind !== "human") return signIn(request.url);
 					const checked = yield* authorization(ctx, ctx.query, resource);
 					if (typeof checked === "string") return oauthError("invalid_request", checked);
 					const postAs =
@@ -320,7 +366,7 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 						...(checked.state === undefined ? {} : { state: checked.state }),
 					});
 					return new Response(
-						`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Authorize MCP</title></head><body><main><h1>Authorize ${escape(checked.clientName)}</h1><p>This client is requesting: ${escape(checked.scopes.join(", "))}.</p><form method="post" action="/mcp/oauth/authorize">${[...hidden].map(([name, value]) => `<input type="hidden" name="${escape(name)}" value="${escape(value)}">`).join("")}${checked.scopes.includes("write") ? `<p><label>Post as <input name="agent" value="${escape(postAs)}" required maxlength="64" pattern="[a-z0-9][a-z0-9._\\-]*"></label></p>` : ""}<button name="decision" value="approve">Authorize</button><button name="decision" value="deny" formnovalidate>Deny</button></form></main></body></html>`,
+						`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Authorize MCP</title></head><body><main><h1>Authorize ${escape(checked.clientName)}</h1><p>This client is requesting: ${escape(checked.scopes.join(", "))}.</p><form method="post" action="/mcp/oauth/authorize">${[...hidden].map(([name, value]) => `<input type="hidden" name="${escape(name)}" value="${escape(value)}">`).join("")}${checked.scopes.includes("write") ? `<p><label>Post as <input name="agent" value="${escape(postAs)}" required maxlength="64" pattern="[a-z0-9][a-z0-9._\\-]*"></label></p><p><label><input type="checkbox" name="editing" value="1" checked> Allow editing</label>: let it act as this name to edit and delete its own posts, manage topics and read threads. Boot asks for your passkey on the next page; pages and app source (fs) are a separate box there, unticked by default. Editing lasts 90 days and can be revoked from your board's token list.</p>` : ""}<button name="decision" value="approve">Authorize</button><button name="decision" value="deny" formnovalidate>Deny</button></form></main></body></html>`,
 						{
 							headers: {
 								"content-type": "text/html; charset=utf-8",
@@ -357,29 +403,126 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 							"invalid_request",
 							"Choose a posting name of up to 64 lowercase letters, digits, dots, dashes or underscores, other than system, boot or rahul.",
 						);
-					const code = yield* random(crypto, "mcp_code_");
-					const codeDigest = yield* digest(crypto, code);
-					const now = yield* Clock.currentTimeMillis;
-					yield* ctx.mutate(
-						store(ctx, {
-							id: codeDigest,
-							kind: "code",
-							clientId: checked.clientId,
-							family: "",
-							payload: yield* Schema.encodeEffect(Schema.fromJsonString(Grant))({
-								redirect_uri: checked.redirectUri,
-								code_challenge: checked.challenge,
-								resource,
-								scopes: checked.scopes,
-								subject: ctx.identity.agent,
-								...(agent ? { agent } : {}),
-							}),
-							expires: now + 5 * 60 * 1000,
-						}),
-					);
+					const grant = {
+						redirect_uri: checked.redirectUri,
+						code_challenge: checked.challenge,
+						resource,
+						scopes: checked.scopes,
+						subject: ctx.identity.agent,
+						...(agent ? { agent } : {}),
+					};
+					if (agent && form.editing === "1") {
+						// A live grant under the same name is kept: one grant per connection.
+						const current = yield* editingState(ctx, checked.clientId, { refresh: true }).pipe(
+							Effect.catchTag("KernelError", () => storedEditing(ctx, checked.clientId)),
+						);
+						// Boot refusing the request must not block the connection: it still reads and posts.
+						const requested =
+							current.status === "active" && current.agent === agent
+								? undefined
+								: yield* requestEditing(ctx, origin, checked.clientId, agent, suggestedAgent(checked.clientName)).pipe(
+										Effect.catchTag("KernelError", () => Effect.succeed(undefined)),
+									);
+						if (requested?.approve_url) {
+							const token = yield* random(crypto, "mcp_consent_");
+							const now = yield* Clock.currentTimeMillis;
+							yield* ctx.mutate(
+								store(ctx, {
+									id: yield* digest(crypto, token),
+									kind: "consent",
+									clientId: checked.clientId,
+									family: "",
+									payload: yield* Schema.encodeEffect(Schema.fromJsonString(Consent))({
+										...grant,
+										...(checked.state === undefined ? {} : { state: checked.state }),
+									}),
+									expires: now + 20 * 60 * 1000,
+								}),
+							);
+							return new Response(null, {
+								status: 303,
+								headers: { location: approveLink(requested.approve_url, token), "cache-control": "no-store" },
+							});
+						}
+					}
+					const code = yield* ctx.mutate(issue(ctx, checked.clientId, grant));
 					return redirect(checked.redirectUri, {
 						code,
 						...(checked.state ? { state: checked.state } : {}),
+					});
+				}),
+		});
+		api.route("GET", "/mcp/oauth/continue", {
+			description:
+				"Where boot's editing approval returns the human: shows whether editing was approved, then finishes connecting the MCP client.",
+			access: "application-managed",
+			handler: (request, ctx) =>
+				Effect.gen(function* () {
+					if (ctx.identity?.kind !== "human") return signIn(request.url);
+					const token = one(ctx.query.consent);
+					const row = token ? yield* lookup(ctx, yield* digest(crypto, token), "consent") : undefined;
+					const now = yield* Clock.currentTimeMillis;
+					if (!token || !row || row.expires_at <= now)
+						return page(
+							"Approval expired",
+							"<h1>This approval link has expired</h1><p>Connect the client again from its settings.</p>",
+							"'none'",
+							400,
+						);
+					const consent = yield* Schema.decodeEffect(Schema.fromJsonString(Consent))(row.payload);
+					const clientName = (yield* client(ctx, row.client_id))?.client_name ?? "This client";
+					// A GET may not record anything, so the decision is collected again when the form is sent.
+					const editing = yield* editingState(ctx, row.client_id, { readOnly: true }).pipe(
+						Effect.catchTag("KernelError", () => storedEditing(ctx, row.client_id)),
+					);
+					return page(
+						"Finish connecting",
+						`<h1>Finish connecting ${escape(clientName)}</h1>${outcome(editing, clientName, editing.approve_url ? approveLink(editing.approve_url, token) : "")}<form method="post" action="/mcp/oauth/continue"><input type="hidden" name="consent" value="${escape(token)}"><button>Continue to ${escape(clientName)}</button></form>`,
+						`'self' ${new URL(consent.redirect_uri).origin}`,
+					);
+				}),
+		});
+		api.route("POST", "/mcp/oauth/continue", {
+			description: "Finish connecting an MCP client after boot's editing approval, whatever the human decided there.",
+			access: "application-managed",
+			handler: (request, ctx) =>
+				Effect.gen(function* () {
+					if (ctx.identity?.kind !== "human") return oauthError("access_denied", "Passkey sign-in is required.", 401);
+					if (request.headers["content-type"]?.split(";", 1)[0]?.trim() !== "application/x-www-form-urlencoded")
+						return oauthError("invalid_request", "Content-Type must be application/x-www-form-urlencoded.", 415);
+					const text = yield* boundedText(request);
+					if (text === null) return oauthError("invalid_request", "Request body is too large or timed out.");
+					const token = new URLSearchParams(text).get("consent");
+					if (!token) return oauthError("invalid_request", "The approval continuation is missing.");
+					const id = yield* digest(crypto, token);
+					const subject = ctx.identity.agent;
+					const now = yield* Clock.currentTimeMillis;
+					const finished = yield* ctx.mutate(
+						Effect.gen(function* () {
+							const row = yield* lookup(ctx, id, "consent");
+							if (!row || row.expires_at <= now) return undefined;
+							const consent = yield* Schema.decodeEffect(Schema.fromJsonString(Consent))(row.payload);
+							if (consent.subject !== subject) return undefined;
+							yield* ctx.db`DELETE FROM example_mcp_oauth WHERE id=${id}`;
+							const { state, ...grant } = consent;
+							return {
+								clientId: row.client_id,
+								redirectUri: grant.redirect_uri,
+								state,
+								code: yield* issue(ctx, row.client_id, grant),
+							};
+						}),
+					);
+					if (!finished)
+						return oauthError(
+							"invalid_request",
+							"This approval link expired or was already used. Connect the client again.",
+						);
+					// Record the decision now, so the client's first tool call need not ask boot.
+					yield* editingState(ctx, finished.clientId).pipe(Effect.catchTag("KernelError", () => Effect.void));
+					return redirect(finished.redirectUri, {
+						code: finished.code,
+						...(finished.state ? { state: finished.state } : {}),
 					});
 				}),
 		});

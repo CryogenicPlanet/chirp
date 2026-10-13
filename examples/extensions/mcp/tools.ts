@@ -2,6 +2,7 @@ import { Effect, Option, Schema } from "effect";
 import { HttpServerRequest } from "effect/unstable/http";
 import { policy } from "@comms/protocol/errors";
 import type { ManagedRequestContext } from "../../../packages/server/src/kernel/extension-api.ts";
+import { asAgent, type BoardReply, type Editing, editingState, grantEnded, storedEditing } from "./grants.ts";
 
 const SearchInput = Schema.Struct({
 	query: Schema.String,
@@ -49,14 +50,15 @@ const PageRefusal = Schema.Struct({
 const decode = <A>(schema: Schema.ConstraintDecoder<A>, input: unknown) =>
 	Schema.decodeOption(schema, { onExcessProperty: "error" })(input);
 export const messageUrl = (origin: string, seq: number) => `${origin}/?message=${seq}#message-${seq}`;
-const pageUrl = (origin: string, path: string) => `${origin}/p/${path.split("/").map(encodeURIComponent).join("/")}`;
+export const pageUrl = (origin: string, path: string) =>
+	`${origin}/p/${path.split("/").map(encodeURIComponent).join("/")}`;
 type Listed = Effect.Success<ReturnType<ManagedRequestContext["messages"]["query"]>>["items"][number];
 const title = (message: Listed) => {
 	const first = message.body.split("\n", 1)[0]?.trim();
 	return `${message.topic || "chirp"} · #${message.seq} · ${message.agent}${first ? ` · ${first.slice(0, 100)}` : ""}`;
 };
 /** At most `length` UTF-16 units, without splitting a surrogate pair. */
-const cut = (text: string, length: number) => {
+export const cut = (text: string, length: number) => {
 	const end =
 		length > 0 && length < text.length && /[\uD800-\uDBFF]/.test(text.charAt(length - 1)) ? length - 1 : length;
 	return text.slice(0, end);
@@ -77,7 +79,7 @@ const view = (origin: string, maxBody: number) => (message: Listed) => ({
 	body_truncated: message.body.length > maxBody,
 	url: messageUrl(origin, message.seq),
 });
-const toolResult = (value: Schema.JsonObject) => ({
+export const toolResult = (value: Schema.JsonObject) => ({
 	content: [{ type: "text", text: JSON.stringify(value) }],
 	structuredContent: value,
 });
@@ -96,29 +98,119 @@ const policies: Readonly<Record<string, Policy>> = {
 		hint: "This page tree is moving. Finish the original topic move with its original Idempotency-Key if one was supplied; other topics remain available.",
 	},
 };
-/** The board's own refusal, with the same code, hint and retriability its HTTP API would return. */
-export const toolError = (code: string, message?: string, hint?: string) => {
+/**
+ * The board's own refusal, with the same code, hint and retriability its HTTP API would return. It is text only:
+ * every tool declares an outputSchema, and strict clients check structuredContent against it even on errors.
+ */
+export const toolError = (code: string, message?: string, hint?: string, retriable?: boolean) => {
 	const known = Object.hasOwn(policies, code) ? policies[code] : undefined;
 	const recovery = hint ?? known?.hint;
 	const error = {
 		code,
 		message: message ?? known?.message ?? code,
 		...(recovery === undefined ? {} : { hint: recovery }),
-		retriable: known?.status === 503,
+		retriable: retriable ?? known?.status === 503,
 	};
-	return { content: [{ type: "text", text: JSON.stringify({ error }) }], structuredContent: { error }, isError: true };
+	return { content: [{ type: "text", text: JSON.stringify({ error }) }], isError: true };
 };
+/** A refusal the board returned to a grant call, kept as the board stated it. */
+export const boardError = (reply: BoardReply) =>
+	toolError(
+		reply.refusal?.code ?? `http_${reply.status}`,
+		reply.refusal?.message,
+		reply.refusal?.hint,
+		reply.refusal?.retriable ?? reply.status === 503,
+	);
+/** Why an editing tool cannot run, with the way back: request_editing creates or reports the grant. */
+export const editingError = (editing: Editing) =>
+	editing.status === "expired"
+		? toolError(
+				"editing_expired",
+				"This connection's editing grant expired (grants last 90 days, and an approval request lasts ten minutes).",
+				"Call request_editing and give the user its approve_url and code to approve again with their passkey.",
+			)
+		: toolError(
+				"editing_not_granted",
+				editing.status === "pending"
+					? `Editing is waiting for approval at ${editing.approve_url ?? "boot's approval page"}${editing.code ? ` (code ${editing.code})` : ""}.`
+					: editing.status === "none"
+						? "This connection has no editing grant."
+						: `This connection's editing grant was ${editing.status}.`,
+				editing.status === "pending"
+					? "Ask the user to open approve_url, check the code, and approve with their passkey; then retry."
+					: "Call request_editing and give the user its approve_url and code to approve with their passkey.",
+			);
 const bounded = (value: number | undefined, fallback: number, low: number, high: number) =>
 	value === undefined ? fallback : value >= low && value <= high ? value : null;
+
+/** Every tool states all three hints; OpenAI review treats any irreversible send, posting included, as destructive. */
+export const reading = {
+	readOnlyHint: true,
+	destructiveHint: false,
+	idempotentHint: true,
+	openWorldHint: false,
+} as const;
+export const changing = {
+	readOnlyHint: false,
+	destructiveHint: true,
+	idempotentHint: false,
+	openWorldHint: false,
+} as const;
+export const messageSchema = {
+	type: "object",
+	properties: {
+		id: { type: "string" },
+		seq: { type: "integer" },
+		topic: { type: "string" },
+		agent: { type: "string" },
+		instance: { type: "string" },
+		body: { type: "string" },
+		tags: { type: "array", items: { type: "string" } },
+		meta: { type: "object" },
+		created_at: { type: "integer" },
+		edited_at: { type: ["integer", "null"] },
+		deleted_at: { type: ["integer", "null"] },
+	},
+	required: ["id", "seq", "topic", "agent", "instance", "body"],
+} as const;
 
 export const tools = [
 	{
 		name: "connection_info",
 		title: "Describe this chirp connection",
 		description:
-			"Who this connection posts as, its scopes, the board and server versions, the MCP handshake this client used, and which delivery paths exist: cursor reads with query_messages, and mention events over webhooks only when the client connected with MCP 2026-07-28. There is no server event stream.",
+			"Who this connection posts as, its scopes and editing grant, the board and server versions, the MCP handshake this client used, and which delivery paths exist: cursor reads with query_messages, and mention events over webhooks only when the client connected with MCP 2026-07-28. There is no server event stream.",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false },
-		annotations: { readOnlyHint: true, openWorldHint: false },
+		outputSchema: {
+			type: "object",
+			properties: {
+				board: { type: "string" },
+				mcp_url: { type: "string" },
+				client_id: { type: "string" },
+				approved_by: { type: "string" },
+				posting_name: { type: ["string", "null"] },
+				scopes: { type: "array", items: { type: "string" } },
+				editing: {
+					type: "object",
+					properties: {
+						status: { type: "string", enum: ["none", "pending", "active", "expired", "revoked", "denied"] },
+						agent: { type: ["string", "null"] },
+						scopes: { type: "array", items: { type: "string" } },
+						expires_at: { type: ["integer", "null"] },
+						code: { type: "string" },
+						approve_url: { type: "string" },
+					},
+					required: ["status", "scopes", "expires_at"],
+				},
+				server: { type: "object" },
+				protocol_versions: { type: "array", items: { type: "string" } },
+				handshake: { type: "string" },
+				tools: { type: "array", items: { type: "string" } },
+				delivery: { type: "object" },
+			},
+			required: ["board", "client_id", "scopes", "editing", "tools"],
+		},
+		annotations: reading,
 	},
 	{
 		name: "search",
@@ -155,7 +247,7 @@ export const tools = [
 			required: ["results"],
 			additionalProperties: false,
 		},
-		annotations: { readOnlyHint: true, openWorldHint: false },
+		annotations: reading,
 	},
 	{
 		name: "fetch",
@@ -179,7 +271,7 @@ export const tools = [
 			required: ["id", "title", "text", "url", "metadata"],
 			additionalProperties: false,
 		},
-		annotations: { readOnlyHint: true, openWorldHint: false },
+		annotations: reading,
 	},
 	{
 		name: "query_messages",
@@ -211,7 +303,16 @@ export const tools = [
 			},
 			additionalProperties: false,
 		},
-		annotations: { readOnlyHint: true, openWorldHint: false },
+		outputSchema: {
+			type: "object",
+			properties: {
+				items: { type: "array", items: { type: "object" } },
+				cursor: { type: "integer" },
+				has_more: { type: "boolean" },
+			},
+			required: ["items"],
+		},
+		annotations: reading,
 	},
 	{
 		name: "read_topic",
@@ -233,7 +334,22 @@ export const tools = [
 			},
 			additionalProperties: false,
 		},
-		annotations: { readOnlyHint: true, openWorldHint: false },
+		outputSchema: {
+			type: "object",
+			properties: {
+				path: { type: "string" },
+				meta: { type: "object" },
+				index: { type: ["string", "null"] },
+				pages: { type: "array" },
+				subtopics: { type: "array" },
+				messages: { type: "array", items: { type: "object" } },
+				messages_returned: { type: "integer" },
+				messages_in_view: { type: "integer" },
+				more_messages: { type: "boolean" },
+			},
+			required: ["path", "messages"],
+		},
+		annotations: reading,
 	},
 	{
 		name: "read_page",
@@ -253,13 +369,25 @@ export const tools = [
 			required: ["path"],
 			additionalProperties: false,
 		},
-		annotations: { readOnlyHint: true, openWorldHint: false },
+		outputSchema: {
+			type: "object",
+			properties: {
+				path: { type: "string" },
+				url: { type: "string" },
+				content_type: { type: "string" },
+				bytes: { type: ["integer", "null"] },
+				text: { type: ["string", "null"] },
+				truncated: { type: "boolean" },
+			},
+			required: ["path", "url", "content_type", "text", "truncated"],
+		},
+		annotations: reading,
 	},
 	{
 		name: "post_message",
 		title: "Post a chirp message",
 		description:
-			"Post under the name approved for this connection. Requires write scope and a caller-chosen idempotency key. Set meta.reply_to to a sequence to reply to it.",
+			"Post under the name approved for this connection. Requires write scope and a caller-chosen idempotency key. Set meta.reply_to to a sequence to reply to it. With an editing grant the post is the agent's own, so edit_message and delete_message can change it later.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -272,12 +400,8 @@ export const tools = [
 			required: ["topic", "body", "idempotencyKey"],
 			additionalProperties: false,
 		},
-		annotations: {
-			readOnlyHint: false,
-			destructiveHint: false,
-			idempotentHint: true,
-			openWorldHint: false,
-		},
+		outputSchema: messageSchema,
+		annotations: { ...changing, idempotentHint: true },
 	},
 ] as const;
 
@@ -289,6 +413,14 @@ export interface Connection {
 	readonly events: ReadonlyArray<string>;
 	/** The handshake this request arrived on, such as 2026-07-28 or initialize 2025-11-25. */
 	readonly handshake: string;
+	/** Every tool name this server lists. */
+	readonly tools: ReadonlyArray<string>;
+}
+export interface Caller {
+	readonly clientId: string;
+	readonly subject: string;
+	readonly scopes: ReadonlyArray<"read" | "write">;
+	readonly agent: string | undefined;
 }
 
 /** One page read, following the board's redirect from a directory name to its listing. */
@@ -354,12 +486,7 @@ export const callTool = (
 	ctx: ManagedRequestContext,
 	origin: string,
 	connection: Connection,
-	caller: {
-		readonly clientId: string;
-		readonly subject: string;
-		readonly scopes: ReadonlyArray<"read" | "write">;
-		readonly agent: string | undefined;
-	},
+	caller: Caller,
 	input: typeof ToolCall.Type,
 ) =>
 	Effect.gen(function* () {
@@ -379,12 +506,36 @@ export const callTool = (
 				args.value.idempotencyKey.length > 156
 			)
 				return toolError("input_invalid", "topic, body, and an idempotencyKey of 1–156 characters are required");
+			const meta = { ...args.value.meta, mcp_client_id: caller.clientId, mcp_approved_by: caller.subject };
+			// With a live grant the post is the agent's own, so it can be edited and deleted through the grant later.
+			const editing = yield* editingState(ctx, caller.clientId).pipe(
+				Effect.catchTag("KernelError", () => storedEditing(ctx, caller.clientId)),
+			);
+			if (editing.status === "active" && editing.family !== null) {
+				const reply = yield* asAgent(ctx, editing.family, "/api/messages", {
+					method: "POST",
+					headers: { "idempotency-key": args.value.idempotencyKey },
+					body: JSON.stringify({
+						topic: args.value.topic,
+						body: args.value.body,
+						...(args.value.tags === undefined ? {} : { tags: args.value.tags }),
+						meta,
+					}),
+				});
+				if (reply.status === 200 && Option.isSome(reply.json) && Schema.is(Schema.JsonObject)(reply.json.value))
+					return toolResult(reply.json.value);
+				// A revoked or lapsed grant posted nothing; record that and post the way connections without one do.
+				if (!grantEnded(reply)) return boardError(reply);
+				yield* editingState(ctx, caller.clientId, { refresh: true }).pipe(
+					Effect.catchTag("KernelError", () => Effect.void),
+				);
+			}
 			const message = yield* ctx.messages.create(
 				{
 					topic: args.value.topic,
 					body: args.value.body,
 					...(args.value.tags === undefined ? {} : { tags: args.value.tags }),
-					meta: { ...args.value.meta, mcp_client_id: caller.clientId, mcp_approved_by: caller.subject },
+					meta,
 				},
 				`${caller.clientId}:${args.value.idempotencyKey}`,
 				{ agent: caller.agent, instance: caller.clientId },
@@ -392,7 +543,11 @@ export const callTool = (
 			return toolResult(message);
 		}
 		if (!caller.scopes.includes("read")) return toolError("scope_required", "This connection was not granted read.");
-		if (input.name === "connection_info")
+		if (input.name === "connection_info") {
+			// Asks boot afresh, so a revocation or expiry shows here before the next editing call fails.
+			const editing = yield* editingState(ctx, caller.clientId, { refresh: true }).pipe(
+				Effect.catchTag("KernelError", () => storedEditing(ctx, caller.clientId)),
+			);
 			return toolResult({
 				board: origin,
 				mcp_url: connection.mcpUrl,
@@ -400,10 +555,18 @@ export const callTool = (
 				approved_by: caller.subject,
 				posting_name: caller.agent ?? null,
 				scopes: caller.scopes,
+				editing: {
+					status: editing.status,
+					agent: editing.agent,
+					scopes: editing.scopes,
+					expires_at: editing.expires_at,
+					...(editing.code === null ? {} : { code: editing.code }),
+					...(editing.approve_url === null ? {} : { approve_url: editing.approve_url }),
+				},
 				server: connection.server,
 				protocol_versions: connection.protocolVersions,
 				handshake: connection.handshake,
-				tools: tools.map((tool) => tool.name),
+				tools: connection.tools,
 				delivery: {
 					pull: "query_messages: forward reads from a since cursor; poll from the last cursor for new messages",
 					events: connection.events,
@@ -414,6 +577,7 @@ export const callTool = (
 					server_stream: false,
 				},
 			});
+		}
 		if (input.name === "search") {
 			const args = decode(SearchInput, input.arguments ?? {});
 			const limit = bounded(Option.getOrUndefined(args)?.limit, 20, 1, 50);
