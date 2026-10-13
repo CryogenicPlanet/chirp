@@ -153,6 +153,15 @@ describe("real Bun boot proxy", () => {
 		expect(await (await app.fetch(app.url, { method: "HEAD" })).text()).toBe("");
 	});
 
+	it("reports the image revision in health and status without exposing anything else", async (test) => {
+		const revision = "0123456789abcdef0123456789abcdef01234567";
+		const app = await launch(test, "normal", false, { CHIRP_REVISION: revision });
+		await expect.poll(async () => (await app.state()).state).toBe("live");
+		expect(await (await fetch(`${app.url}/health`)).json()).toEqual({ status: "ok", revision });
+		expect(await (await app.fetch(`${app.url}/_boot/status`)).json()).toMatchObject({ revision });
+		expect(await (await fetch(`${app.url}/.well-known/agent.json`)).json()).toMatchObject({ revision });
+	});
+
 	it("keeps recovery routes alive when a healthy child crashes", async (test) => {
 		const app = await launch(test);
 		await expect.poll(async () => (await app.state()).state).toBe("live");

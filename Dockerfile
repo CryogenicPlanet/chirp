@@ -59,6 +59,10 @@ RUN chmod 0755 /opt/comms/deployment/entrypoint /opt/comms/deployment/child-keep
     && chmod 0440 /etc/sudoers.d/comms \
     && visudo --check
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=8080 DATA_DIR=/data COMMS_ISOLATED=true
+# The commit this image is built from; boot reports it as revision in /health, /_boot/status and /.well-known/agent.json.
+# Declared last so a new commit does not invalidate earlier layers.
+ARG CHIRP_REVISION=""
+ENV CHIRP_REVISION=$CHIRP_REVISION
 USER 0:0
 # No VOLUME instruction: mount /data explicitly (docker run --volume, Railway volume). Railway rejects VOLUME.
 EXPOSE 8080

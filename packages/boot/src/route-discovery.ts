@@ -16,7 +16,12 @@ const routes = [
 		"human",
 		`Change {revision,patch} with exact Origin and a fresh settings.change ${headerLabel(assertionHeader)} bound to that body and session. patch may contain storage. public_paths is retired; configure operator application-managed ingress and explicit live routes instead. Calendar retention is retired: new event_retention changes are refused with invalid_request; only previously accepted exact signed retries remain readable. Repeat the exact proof and body after a lost response to read the first accepted result; it never reapplies over a later change.`,
 	],
-	["get", ["/health"], "public", "Bootloader liveness, independent of the app."],
+	[
+		"get",
+		["/health"],
+		"public",
+		"Bootloader liveness, independent of the app, and revision: the commit this image was built from (null when unstamped).",
+	],
 	["head", ["/health"], "public", "Bootloader liveness without a response body."],
 	[
 		"get",
@@ -40,7 +45,7 @@ const routes = [
 		"get",
 		["/_boot/status"],
 		"fs",
-		"Child state, recovery diagnostics, traffic state, and passkey_origins: whether stored passkeys belong to allowed origins, with the mismatch and recovery steps. Human session or fs-scoped bearer.",
+		"Child state, recovery diagnostics, traffic state, revision (the commit this image was built from, or null), and passkey_origins: whether stored passkeys belong to allowed origins, with the mismatch and recovery steps. Human session or fs-scoped bearer.",
 	],
 	[
 		"get",
@@ -284,7 +289,7 @@ const routes = [
 	],
 ] as const satisfies ReadonlyArray<readonly [string, readonly string[], Access, string]>;
 
-export const recoveryManifest = () => {
+export const recoveryManifest = (revision: string | null) => {
 	const boot: Record<string, Schema.JsonObject> = {};
 	for (const [method, aliases, access, description] of routes) {
 		for (const path of aliases) {
@@ -315,6 +320,7 @@ export const recoveryManifest = () => {
 	}
 	return {
 		name: "chirp",
+		revision,
 		endpoints: boot,
 		components: {
 			securitySchemes: {
