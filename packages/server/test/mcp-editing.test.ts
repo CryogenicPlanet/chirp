@@ -125,16 +125,21 @@ const editingStep = async (app: App, response: Response) => {
 	expect(back).toMatch(/^\/mcp\/oauth\/continue\?consent=mcp_consent_/);
 	return { code, approval, back, consent: new URL(back, app.url).searchParams.get("consent") ?? "" };
 };
-/** Revokes an agent's grant family from the board's token list, as the human would. */
+/** Revokes an agent's live grant family from the board's token list, as the human would. */
 const revoke = async (app: App, cookie: string, agent: string) => {
 	const families = decode(
 		Schema.Struct({
 			items: Schema.Array(
-				Schema.Struct({ family: Schema.String, agent: Schema.String, held_by: Schema.NullOr(Schema.String) }),
+				Schema.Struct({
+					family: Schema.String,
+					agent: Schema.String,
+					held_by: Schema.NullOr(Schema.String),
+					revoked: Schema.Boolean,
+				}),
 			),
 		}),
 		await (await fetch(`${app.url}/_boot/tokens`, { headers: { cookie } })).json(),
-	).items.filter((item) => item.held_by === "mcp" && item.agent === agent);
+	).items.filter((item) => item.held_by === "mcp" && item.agent === agent && !item.revoked);
 	expect(families).toHaveLength(1);
 	const family = families[0]?.family ?? "";
 	const revoked = await fetch(`${app.url}/_boot/tokens/${family}/revoke`, {
@@ -210,7 +215,7 @@ it("connects with editing approved by passkey, then edits, publishes and live-ed
 		posting_name: "dot",
 		editing: { status: "active", agent: "dot", scopes: ["read", "write", "fs"] },
 	});
-	// The family is a capability of the app and never reaches the client.
+	// connection_info describes the grant without its family id (which still shows as the instance of its posts).
 	expect(JSON.stringify(info)).not.toMatch(/"f_[A-Za-z0-9_-]{43}"/);
 
 	// Posts through the grant are the agent's own, so it can edit and delete them.
@@ -516,8 +521,18 @@ it("lets an existing connection request editing, keeps fs opt-in, and never bloc
 		(await deniedTool("post_message", { topic: "existing", body: "no editing", idempotencyKey: "d-1" })).ok,
 	).toMatchObject({ agent: "denied-bot", instance: `extension:mcp:${denied.clientId}` });
 
-	// Approval itself creates the family, so a grant revoked before the extension ever collects it reads as revoked.
+	// A grant the human narrowed to read leaves posting as it was.
+	const narrowed = decode(Requested, (await deniedTool("request_editing")).ok);
+	await decide(app, narrowed.approve_url, "approve", ["read"]);
+	expect((await deniedTool("connection_info")).ok).toMatchObject({ editing: { status: "active", scopes: ["read"] } });
+	expect(
+		(await deniedTool("post_message", { topic: "existing", body: "read-only grant", idempotencyKey: "d-2" })).ok,
+	).toMatchObject({ agent: "denied-bot", instance: `extension:mcp:${denied.clientId}` });
+	// After a revocation, request_editing asks boot afresh instead of reporting the old grant.
+	await revoke(app, cookie, "denied-bot");
 	const again = decode(Requested, (await deniedTool("request_editing")).ok);
+	expect(again.approve_url).not.toBe(narrowed.approve_url);
+	// Approval itself creates the family, so a grant revoked before the extension ever collects it reads as revoked.
 	await decide(app, again.approve_url, "approve", ["read", "write"]);
 	await revoke(app, cookie, "denied-bot");
 	expect((await deniedTool("connection_info")).ok).toMatchObject({ editing: { status: "revoked" } });

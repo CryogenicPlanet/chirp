@@ -511,7 +511,13 @@ export const callTool = (
 			const editing = yield* editingState(ctx, caller.clientId).pipe(
 				Effect.catchTag("KernelError", () => storedEditing(ctx, caller.clientId)),
 			);
-			if (editing.status === "active" && editing.family !== null) {
+			// Only a grant that may write, under the name this connection posts as; otherwise post as before.
+			if (
+				editing.status === "active" &&
+				editing.family !== null &&
+				editing.scopes.includes("write") &&
+				editing.agent === caller.agent
+			) {
 				const reply = yield* asAgent(ctx, editing.family, "/api/messages", {
 					method: "POST",
 					headers: { "idempotency-key": args.value.idempotencyKey },

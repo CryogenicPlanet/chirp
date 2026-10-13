@@ -412,17 +412,24 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 						...(agent ? { agent } : {}),
 					};
 					if (agent && form.editing === "1") {
-						// A live grant under the same name is kept: one grant per connection.
+						// One grant per connection: a live grant is kept and a waiting request is shown again, because
+						// replacing either would leave a grant boot still honours that the extension no longer tracks.
 						const current = yield* editingState(ctx, checked.clientId, { refresh: true }).pipe(
 							Effect.catchTag("KernelError", () => storedEditing(ctx, checked.clientId)),
 						);
 						// Boot refusing the request must not block the connection: it still reads and posts.
 						const requested =
-							current.status === "active" && current.agent === agent
+							current.status === "active"
 								? undefined
-								: yield* requestEditing(ctx, origin, checked.clientId, agent, suggestedAgent(checked.clientName)).pipe(
-										Effect.catchTag("KernelError", () => Effect.succeed(undefined)),
-									);
+								: current.status === "pending"
+									? current
+									: yield* requestEditing(
+											ctx,
+											origin,
+											checked.clientId,
+											agent,
+											suggestedAgent(checked.clientName),
+										).pipe(Effect.catchTag("KernelError", () => Effect.succeed(undefined)));
 						if (requested?.approve_url) {
 							const token = yield* random(crypto, "mcp_consent_");
 							const now = yield* Clock.currentTimeMillis;

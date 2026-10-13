@@ -360,7 +360,8 @@ export const callEditing = (
 					"posting_name_missing",
 					"This connection has no posting name. Reconnect it and choose one on the consent page.",
 				);
-			const current = yield* editingState(ctx, caller.clientId);
+			// Asks boot afresh: after a revocation (for example to add fs) a new request must be made.
+			const current = yield* editingState(ctx, caller.clientId, { refresh: true });
 			if (current.status === "active" || current.status === "pending")
 				return toolResult({
 					status: current.status,
@@ -471,7 +472,12 @@ export const callEditing = (
 			)
 				return toolError("input_invalid", "seq and at least one of a nonempty body, tags or meta are required");
 			const { seq, ...patch } = args.value;
-			const reply = yield* board(`/api/messages/${seq}`, { method: "PATCH", body: JSON.stringify(patch) });
+			// meta is replaced whole, so keep the provenance post_message records.
+			const body =
+				patch.meta === undefined
+					? patch
+					: { ...patch, meta: { ...patch.meta, mcp_client_id: caller.clientId, mcp_approved_by: caller.subject } };
+			const reply = yield* board(`/api/messages/${seq}`, { method: "PATCH", body: JSON.stringify(body) });
 			return toolResult(jsonObject(reply.json));
 		}
 		if (input.name === "delete_message") {
