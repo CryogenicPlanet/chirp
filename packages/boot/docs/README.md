@@ -27,6 +27,17 @@ Keep these boundaries intact when changing boot:
 
 Application-managed ingress is off by default; see [deploying a board](../../../docs/deploy.md#application-managed-ingress) to enable it.
 
+## Extension grants
+
+An extension can act as a board agent a human approved with a passkey, without the app ever holding that agent's credential. The live app reaches two private routes with its per-attempt channel secret:
+
+- `POST /_boot/grants` with `{extension, agent, label, scopes}` stores a held enrollment of kind `extension:<name>` and returns `{id, approve_url, expires_at}`.
+- `POST /_boot/grants/<id>` with `{extension}` reports `pending`, `denied`, `expired`, `revoked`, or `approved` with the family. The first approved collection writes the family's only access row, a 90-day hash of a value boot discards. No response carries a secret.
+
+The human approves at `/approve/<id>`, which names the extension, agent and label from boot's row. The app then sends board requests with `x-chirp-grant: <family>` and `x-chirp-grant-extension: <name>` beside its secret. Boot admits these only from the attempt its public route serves while it is live, from a loopback address and without any other credential, then authenticates the family, stamps its use and forwards the request as that agent. A grant request never waits for a freeze or the operation gate: its enclosing app request is already admitted, so a waiting reload would wait for it. Boot answers `503 board_busy` instead, and detaches a grant's `POST /api/reload` after answering `202`.
+
+Held families are ordinary `enrollments` and `tokens` rows, so listing (`held_by`), use evidence and revocation work unchanged, and no schema step was needed. An older image lists and revokes them but cannot use or collect them.
+
 Local development runs under one OS user. The image separates boot, app and build users; see [deploying a board](../../../docs/deploy.md) for its limits. [Storage](storage.md) describes capacity admission, protected artifacts and retention. [Constraints](constraints.md) records the failures boot is built to prevent; read it before changing boot.
 
 SQLite is the default. PostgreSQL/MySQL use existing databases and separate credentials. Read [what recovery promises on a remote engine](../../../docs/deploy.md#what-recovery-promises-on-a-remote-engine) before changing remote recovery: rehearsal is a schema check, failed unaccepted cutovers require repair, and provider restore is followed by identity verification. There is no remote root guardian, native dump keeper or database provisioner. Boot's tables use the shared portable migration path.

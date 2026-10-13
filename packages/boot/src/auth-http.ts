@@ -1,4 +1,10 @@
-import { assertionHeader, requestIdHeader, tokenExpiresHeader } from "@comms/protocol/headers";
+import {
+	assertionHeader,
+	grantExtensionHeader,
+	grantHeader,
+	requestIdHeader,
+	tokenExpiresHeader,
+} from "@comms/protocol/headers";
 import { humanAgent } from "./human-agent.ts";
 import { bootRoute } from "./boot-route.ts";
 import { requestBytes } from "./request-bytes.ts";
@@ -10,6 +16,7 @@ import { TrafficError } from "./traffic.ts";
 import { Cause, Console, Effect, Option, Schema } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { AuthError, type Auth, type AuthConfig } from "./auth.ts";
+import type { VerifiedIdentity } from "./enrollment.ts";
 import { configuredParties, validRelyingParty } from "./auth-origins.ts";
 import { PasskeyRegistrationResponse } from "./passkey-management-schema.ts";
 import { authClient, authPage } from "./auth-page.ts";
@@ -62,6 +69,10 @@ const policy = {
 		status: 409,
 		hint: "Select a backup with retained restore metadata; inspect the catalog before requesting another proof.",
 	},
+	board_busy: {
+		status: 503,
+		hint: "A reload, backup or restore holds the board. Grant requests never queue behind it; let the enclosing request finish, then retry.",
+	},
 	challenge_invalid: {
 		status: 401,
 		hint: "Obtain a fresh challenge for this exact action; challenges expire and are single-use.",
@@ -79,6 +90,18 @@ const policy = {
 	generation_not_restorable: {
 		status: 409,
 		hint: "Inspect /_boot/generations and choose a generation with its retained snapshot and backup.",
+	},
+	grant_expired: {
+		status: 401,
+		hint: "The extension grant lapsed after 90 days. Request a new grant and ask the human to approve it.",
+	},
+	grant_forbidden: {
+		status: 403,
+		hint: "Extension grants are accepted only from the live app on boot's loopback channel, without other credentials, and never for authentication, token, restore, reset, revert or boot-internal routes.",
+	},
+	grant_invalid: {
+		status: 401,
+		hint: "No live grant matches this family and extension; it may have been revoked. Request a new grant and ask the human to approve it.",
 	},
 	idempotency_conflict: {
 		status: 409,
@@ -286,23 +309,47 @@ export const pageHeaders = Object.freeze({
 	"referrer-policy": "no-referrer",
 });
 
+/** Whether a request names an extension grant. The proxy's grant gate admits these only from the live app. */
+export const namesGrant = (request: HttpServerRequest.HttpServerRequest) =>
+	request.headers[grantHeader] !== undefined || request.headers[grantExtensionHeader] !== undefined;
+
+/** Every re-check of a grant request lands here too, so revocation ends streams, waits and edit authority.
+ * Only the proxy's grant gate may let a grant header this far; it has already proved the private channel. */
 export const authenticate = (auth: Auth["Service"], request: HttpServerRequest.HttpServerRequest) =>
 	Effect.gen(function* () {
+		if (namesGrant(request)) {
+			if (request.headers.authorization !== undefined || request.headers.cookie !== undefined)
+				return yield* new AuthError({ code: "grant_forbidden" });
+			const grant: VerifiedIdentity = yield* auth.authenticateGrant(
+				request.headers[grantHeader] ?? "",
+				request.headers[grantExtensionHeader] ?? "",
+			);
+			return grant;
+		}
 		const authorization = request.headers.authorization;
 		if (authorization !== undefined) {
 			const token = /^Bearer ([A-Za-z0-9_-]{43})$/i.exec(authorization)?.[1];
 			if (!token) return yield* new AuthError({ code: "token_invalid" });
-			return yield* auth.authenticateAccess(token);
+			const agent: VerifiedIdentity = yield* auth.authenticateAccess(token);
+			return agent;
 		}
 		const token = sessionToken(request);
 		if (!token) return yield* new AuthError({ code: "session_invalid" });
 		const session = yield* auth.authenticateSession(token);
-		return { ...session, kind: "human" as const, agent: humanAgent, label: "human", scopes: ["read", "write", "fs"] };
+		const human: VerifiedIdentity = {
+			...session,
+			kind: "human",
+			agent: humanAgent,
+			label: "human",
+			scopes: ["read", "write", "fs"],
+		};
+		return human;
 	});
 
 export const humanSession = (auth: Auth["Service"], request: HttpServerRequest.HttpServerRequest) =>
 	Effect.gen(function* () {
-		if (request.headers.authorization !== undefined) return yield* new AuthError({ code: "session_invalid" });
+		if (request.headers.authorization !== undefined || namesGrant(request))
+			return yield* new AuthError({ code: "session_invalid" });
 		const token = sessionToken(request);
 		if (!token) return yield* new AuthError({ code: "session_invalid" });
 		return yield* auth.authenticateSession(token);

@@ -56,6 +56,9 @@ export function serve(mode: string) {
 					agent: request.headers.get(agentHeader),
 				});
 			if (url.pathname === "/cancelled") return new Response(String(cancelled));
+			// Lets a test act as this live attempt on boot's private channel, as the real app does for grants.
+			if (url.pathname === "/fixture-channel")
+				return Response.json({ secret: process.env.BOOT_SECRET ?? null, url: process.env.BOOT_URL ?? null });
 			if (url.pathname === "/hold-stream")
 				return new Response(
 					new ReadableStream({

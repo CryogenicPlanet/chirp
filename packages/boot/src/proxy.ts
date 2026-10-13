@@ -36,7 +36,8 @@ import {
 	HttpServerResponse,
 } from "effect/unstable/http";
 import { Auth, AuthError } from "./auth.ts";
-import { authenticate, authErrorResponse, authFailure, authRoute, sessionCookie } from "./auth-http.ts";
+import { authenticate, authErrorResponse, authFailure, authRoute, namesGrant, sessionCookie } from "./auth-http.ts";
+import { grantChannel, grantPathAllowed, grantRoute } from "./grant-http.ts";
 import { editRoute } from "./edit-http.ts";
 import { passkeyManagementRoute } from "./passkey-management-http.ts";
 import { passkeyCodeRoute } from "./passkey-code-http.ts";
@@ -73,6 +74,8 @@ GET /_boot/auth/passkeys lists keys; passkey.add and passkey.delete assertions a
 POST /_boot/auth/passkey-code {origin?} with a passkey.code assertion issues a 10-minute one-time code; redeem it at /auth/passkey-code.
 A code bound to a new origin activates that origin when redeemed there. GET/DELETE /_boot/auth/origins lists or removes runtime origins.
 POST /_boot/tokens/:family/revoke requires a human session and fresh token.revoke passkey assertion.
+Extension grants: the live app asks boot to hold access for an agent; the human approves at /approve/<id>, and boot
+answers the app's calls naming that grant. Boot keeps the credential; revoke a grant like any token family.
 POST /api/lock acquires the editor; GET/PUT/DELETE /api/fs/app/<path> reads or stages source.
 Save ${headerLabel(baseVersionHeader)} from GET; PUT ?reload=0&baseVersion=<token> stages raw bytes.
 Use baseVersion=null only for an absent file. POST /api/reload rehearses and cuts over. Failed edits retain the repair lock.
@@ -143,98 +146,12 @@ export const proxy = Effect.gen(function* () {
 	const boardSession = (request.headers.cookie ?? "")
 		.split(";")
 		.some((part) => part.trim().startsWith(`${sessionCookie}=`));
-	const routed = Effect.gen(function* () {
-		// App bearer credentials cannot invoke boot surfaces or silently replace a supplied board session.
-		if (
-			applicationBearer &&
-			(ingress?.applicationManagedIngress !== true || boardSession || isReservedIngressPath(path))
-		)
-			return authErrorResponse("token_invalid");
-		// Recovery help carries a public yes/no on whether stored passkeys match an allowed origin; detail needs auth.
-		if (path === "/_boot" && request.method === "GET") {
-			const ok = yield* auth.passkeyOriginState.pipe(
-				Effect.map((state): boolean | null => state.ok),
-				Effect.orElseSucceed(() => null),
-			);
-			return HttpServerResponse.text(
-				`${help}${
-					ok === null
-						? ""
-						: ok
-							? "\npasskey_origins_ok: true\n"
-							: "\npasskey_origins_ok: false\nSome stored passkeys belong to no address this board serves. The operator can restore the previous origin variables or recover with REOPEN_SETUP=1; details are in the boot log and /_boot/status.\n"
-				}`,
-			);
-		}
-		const publicResponse = yield* publicRoute;
-		if (publicResponse) return publicResponse;
-		if (
-			request.headers["x-boot-secret"] !== undefined ||
-			path.startsWith("/_boot/seq") ||
-			path === "/_boot/events/append"
-		) {
-			const internal = yield* eventRoute(
-				events,
-				child.attempts,
-				null,
-				child.channelGate,
-				child.traffic.route,
-				Effect.succeed(true),
-				captures,
-			);
-			if (internal) return internal;
-		}
-		if ((yield* Ref.get(phase))._tag === "Stopping") return authErrorResponse("boot_unavailable", 503);
-		const recoveryResponse = yield* recoveryRoute(auth);
-		if (recoveryResponse) return recoveryResponse;
-		const settingsResponse = yield* settingsRoute(auth);
-		if (settingsResponse) return settingsResponse;
-		const restarted = yield* restartRoute(auth, restart);
-		if (restarted) return restarted;
-		const authResponse = yield* authRoute(auth, requestId);
-		if (authResponse) return authResponse;
-		const passkeyResponse = yield* passkeyManagementRoute(auth);
-		if (passkeyResponse) return passkeyResponse;
-		const passkeyCodeResponse = yield* passkeyCodeRoute(auth);
-		if (passkeyCodeResponse) return passkeyCodeResponse;
-		const enrollmentResponse = yield* enrollmentRoute(auth, authConfig, editing);
-		if (enrollmentResponse) return enrollmentResponse;
-		if ((yield* Ref.get(phase))._tag !== "Ready" && request.method === "POST" && path === "/_boot/db/backup")
-			return authErrorResponse("boot_unavailable", 503);
-		const backupResponse = yield* backupRoute(auth, backups, captures);
-		if (backupResponse) return backupResponse;
-		const restored = yield* databaseRestoreRoute(restores, auth);
-		if (restored) return restored;
-		const accountResponse = yield* accountRoute(auth);
-		if (accountResponse) return accountResponse;
-		const mintResponse = yield* tokenMintRoute(auth);
-		if (mintResponse) return mintResponse;
-		const tokenResponse = yield* tokenRoute(auth);
-		if (tokenResponse) return tokenResponse;
-		const explicitCredential = (request.headers.authorization !== undefined && !applicationBearer) || boardSession;
-		const isPublic =
-			(request.method === "GET" || request.method === "HEAD") &&
-			[
-				"/onboarding",
-				"/favicon.svg",
-				"/assets/board.js",
-				"/assets/style.css",
-				"/init",
-				"/init.md",
-				"/page-assets/markdown.css",
-				"/page-assets/highlight.css",
-				"/page-assets/mermaid.js",
-				"/page-assets/mermaid-init.js",
-				"/page-assets/tailwind.js",
-			].includes(path);
-		const managedIngress =
-			!explicitCredential &&
-			(!isPublic || applicationBearer) &&
-			ingress?.applicationManagedIngress === true &&
-			!isReservedIngressPath(path);
-		return yield* authFailure(
+	const grant = namesGrant(request);
+	/** Authenticates when required, then serves boot's edit and diagnostic routes or forwards to the live child. */
+	const forward = (authenticated: boolean, managedIngress: boolean) =>
+		authFailure(
 			Effect.gen(function* () {
-				let identity = (!isPublic && !managedIngress) || explicitCredential ? yield* authenticate(auth, request) : null;
+				let identity = authenticated || grant ? yield* authenticate(auth, request) : null;
 				if (observed) yield* observed.attribute(identity, 0);
 				if (identity?.kind === "human" && !["GET", "HEAD", "OPTIONS"].includes(request.method))
 					yield* auth.relyingParty(request.headers.origin);
@@ -344,14 +261,26 @@ export const proxy = Effect.gen(function* () {
 						},
 						{ status: 503 },
 					);
-				const requestAdmission = yield* child.traffic.requests.awaitDestination.pipe(Effect.result);
-				if (requestAdmission._tag === "Failure") return expires(unavailable());
-				if (requestAdmission.success.waited && identity) identity = yield* authenticate(auth, request);
-				destination = requestAdmission.success.destination;
-				if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
-					const admitted = yield* child.traffic.awaitDestination;
+				if (grant) {
+					// Grant requests are admitted without waiting; a freeze that began after the gate still refuses.
+					const admitted = yield* child.traffic.requests.admitNow;
+					if (!admitted) return authErrorResponse("board_busy");
 					destination = admitted.destination;
-					if (admitted.waited && identity) identity = yield* authenticate(auth, request);
+					if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+						const mutation = yield* child.traffic.admitNow;
+						if (!mutation) return authErrorResponse("board_busy");
+						destination = mutation.destination;
+					}
+				} else {
+					const requestAdmission = yield* child.traffic.requests.awaitDestination.pipe(Effect.result);
+					if (requestAdmission._tag === "Failure") return expires(unavailable());
+					if (requestAdmission.success.waited && identity) identity = yield* authenticate(auth, request);
+					destination = requestAdmission.success.destination;
+					if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+						const admitted = yield* child.traffic.awaitDestination;
+						destination = admitted.destination;
+						if (admitted.waited && identity) identity = yield* authenticate(auth, request);
+					}
 				}
 				if (!destination) return expires(unavailable());
 				if (managedIngress && !destination.applicationManagedIngress)
@@ -507,6 +436,114 @@ export const proxy = Effect.gen(function* () {
 				);
 			}),
 		);
+	const routed = Effect.gen(function* () {
+		if (grant) {
+			// A grant never falls through to another credential path, the secret branch or managed ingress.
+			const publicResponse = yield* publicRoute;
+			if (publicResponse) return publicResponse;
+			if (!(yield* grantChannel(request, child)) || !grantPathAllowed(request.method, url))
+				return authErrorResponse("grant_forbidden");
+			if ((yield* Ref.get(phase))._tag === "Stopping") return authErrorResponse("boot_unavailable", 503);
+			// The enclosing app request is itself admitted: queuing behind a freeze or the operation gate would deadlock.
+			if (
+				(yield* child.traffic.state).frozen ||
+				(yield* child.traffic.requests.state).frozen ||
+				(yield* editing.operationBusy)
+			)
+				return authErrorResponse("board_busy");
+			return yield* forward(false, false);
+		}
+		// App bearer credentials cannot invoke boot surfaces or silently replace a supplied board session.
+		if (
+			applicationBearer &&
+			(ingress?.applicationManagedIngress !== true || boardSession || isReservedIngressPath(path))
+		)
+			return authErrorResponse("token_invalid");
+		// Recovery help carries a public yes/no on whether stored passkeys match an allowed origin; detail needs auth.
+		if (path === "/_boot" && request.method === "GET") {
+			const ok = yield* auth.passkeyOriginState.pipe(
+				Effect.map((state): boolean | null => state.ok),
+				Effect.orElseSucceed(() => null),
+			);
+			return HttpServerResponse.text(
+				`${help}${
+					ok === null
+						? ""
+						: ok
+							? "\npasskey_origins_ok: true\n"
+							: "\npasskey_origins_ok: false\nSome stored passkeys belong to no address this board serves. The operator can restore the previous origin variables or recover with REOPEN_SETUP=1; details are in the boot log and /_boot/status.\n"
+				}`,
+			);
+		}
+		const publicResponse = yield* publicRoute;
+		if (publicResponse) return publicResponse;
+		const grantResponse = yield* grantRoute(auth, authConfig, child);
+		if (grantResponse) return grantResponse;
+		if (
+			request.headers["x-boot-secret"] !== undefined ||
+			path.startsWith("/_boot/seq") ||
+			path === "/_boot/events/append"
+		) {
+			const internal = yield* eventRoute(
+				events,
+				child.attempts,
+				null,
+				child.channelGate,
+				child.traffic.route,
+				Effect.succeed(true),
+				captures,
+			);
+			if (internal) return internal;
+		}
+		if ((yield* Ref.get(phase))._tag === "Stopping") return authErrorResponse("boot_unavailable", 503);
+		const recoveryResponse = yield* recoveryRoute(auth);
+		if (recoveryResponse) return recoveryResponse;
+		const settingsResponse = yield* settingsRoute(auth);
+		if (settingsResponse) return settingsResponse;
+		const restarted = yield* restartRoute(auth, restart);
+		if (restarted) return restarted;
+		const authResponse = yield* authRoute(auth, requestId);
+		if (authResponse) return authResponse;
+		const passkeyResponse = yield* passkeyManagementRoute(auth);
+		if (passkeyResponse) return passkeyResponse;
+		const passkeyCodeResponse = yield* passkeyCodeRoute(auth);
+		if (passkeyCodeResponse) return passkeyCodeResponse;
+		const enrollmentResponse = yield* enrollmentRoute(auth, authConfig, editing);
+		if (enrollmentResponse) return enrollmentResponse;
+		if ((yield* Ref.get(phase))._tag !== "Ready" && request.method === "POST" && path === "/_boot/db/backup")
+			return authErrorResponse("boot_unavailable", 503);
+		const backupResponse = yield* backupRoute(auth, backups, captures);
+		if (backupResponse) return backupResponse;
+		const restored = yield* databaseRestoreRoute(restores, auth);
+		if (restored) return restored;
+		const accountResponse = yield* accountRoute(auth);
+		if (accountResponse) return accountResponse;
+		const mintResponse = yield* tokenMintRoute(auth);
+		if (mintResponse) return mintResponse;
+		const tokenResponse = yield* tokenRoute(auth);
+		if (tokenResponse) return tokenResponse;
+		const explicitCredential = (request.headers.authorization !== undefined && !applicationBearer) || boardSession;
+		const isPublic =
+			(request.method === "GET" || request.method === "HEAD") &&
+			[
+				"/onboarding",
+				"/favicon.svg",
+				"/assets/board.js",
+				"/assets/style.css",
+				"/init",
+				"/init.md",
+				"/page-assets/markdown.css",
+				"/page-assets/highlight.css",
+				"/page-assets/mermaid.js",
+				"/page-assets/mermaid-init.js",
+				"/page-assets/tailwind.js",
+			].includes(path);
+		const managedIngress =
+			!explicitCredential &&
+			(!isPublic || applicationBearer) &&
+			ingress?.applicationManagedIngress === true &&
+			!isReservedIngressPath(path);
+		return yield* forward((!isPublic && !managedIngress) || explicitCredential, managedIngress);
 	}).pipe(Effect.tap((response) => (observed ? observed.respond(response) : Effect.void)));
 	return yield* observed ? routed.pipe(Effect.withParentSpan(observed.span)) : routed;
 });
