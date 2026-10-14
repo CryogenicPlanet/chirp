@@ -179,7 +179,7 @@ export const tools = Object.freeze([
 		name: "connection_info",
 		title: "Describe this chirp connection",
 		description:
-			"Who this connection posts as, its scopes and editing grant, the board and server versions, the MCP handshake this client used, and which delivery paths exist: cursor reads with query_messages, and mention events over webhooks only when the client connected with MCP 2026-07-28. There is no server event stream.",
+			"Who this connection posts as, its scopes and editing grant, the board and server versions, the MCP handshake this client used, and which delivery paths exist: cursor reads with query_messages, and topic and mention events over webhooks only when the client connected with MCP 2026-07-28. There is no server event stream.",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false },
 		outputSchema: {
 			type: "object",
@@ -576,7 +576,7 @@ export const callTool = (
 					events: connection.events,
 					events_transport:
 						connection.events.length > 0
-							? "Signed webhooks via events/subscribe"
+							? "Signed webhooks via events/subscribe. message.created watches a topic (arguments topic and recursive); mention.created takes an optional topic. Every event and subscribe result carries a cursor: pass the last one to events/subscribe to resume after a lapse; replay reaches a bounded distance back and returns truncated when cut."
 							: "None on this connection: the client used the initialize handshake, and events need MCP 2026-07-28 (server/discover).",
 					server_stream: false,
 				},

@@ -676,7 +676,10 @@ it("serves MCP 2.0 discovery and delivers signed mention events to a verified we
 	).toMatchObject({ resultType: "complete", structuredContent: { results: [] } });
 	expect((await rpc(await modern(app.url, access, 8, "events/list"))).body.result).toMatchObject({
 		resultType: "complete",
-		events: [{ name: "mention.created", delivery: ["webhook"] }],
+		events: [
+			{ name: "mention.created", delivery: ["webhook"] },
+			{ name: "message.created", delivery: ["webhook"] },
+		],
 	});
 
 	const subscription = (overrides: Record<string, unknown> = {}) => ({
@@ -688,7 +691,7 @@ it("serves MCP 2.0 discovery and delivers signed mention events to a verified we
 	});
 	for (const [overrides, code] of [
 		[{ delivery: { mode: "webhook", url: hook.url, secret: "whsec_short" } }, -32602],
-		[{ arguments: { topic: "plans" } }, -32602],
+		[{ arguments: { channel: "plans" } }, -32602],
 		[{ name: "message.deleted" }, -32011],
 		[{ delivery: { mode: "poll", url: hook.url, secret } }, -32014],
 	] as const)
@@ -704,7 +707,11 @@ it("serves MCP 2.0 discovery and delivers signed mention events to a verified we
 	hook.state.echo = true;
 	const verificationsBefore = hook.received.length;
 	const subscribed = await rpc(await modern(app.url, access, 11, "events/subscribe", subscription()));
-	expect(subscribed.body.result).toMatchObject({ resultType: "complete", cursor: null, truncated: false });
+	expect(subscribed.body.result).toMatchObject({
+		resultType: "complete",
+		cursor: expect.stringMatching(/^[0-9]+$/),
+		truncated: false,
+	});
 	const subscriptionId = subscribed.body.result.id;
 	expect(subscriptionId).toMatch(/^sub_[0-9a-f]{32}$/);
 	expect(Date.parse(subscribed.body.result.refreshBefore)).toBeGreaterThan(Date.now() + 23 * 60 * 60 * 1000);
@@ -739,7 +746,7 @@ it("serves MCP 2.0 discovery and delivers signed mention events to a verified we
 			truncated: false,
 			url: `https://comms.test/?message=${mentioned.seq}#message-${mentioned.seq}`,
 		},
-		cursor: null,
+		cursor: String(mentioned.seq),
 	});
 	expect(first.headers["webhook-id"]).toBe(`evt_${mentioned.seq}`);
 
@@ -808,7 +815,10 @@ it("offers events only to 2026-07-28 clients and records which handshake each re
 	expect(legacy.delivery.events).toEqual([]);
 	expect(legacy.delivery.events_transport).toContain("2026-07-28");
 	const current = await info(await modern(app.url, access, 2, "tools/call", { name: "connection_info" }));
-	expect(current).toMatchObject({ handshake: "2026-07-28", delivery: { events: ["mention.created"] } });
+	expect(current).toMatchObject({
+		handshake: "2026-07-28",
+		delivery: { events: ["mention.created", "message.created"] },
+	});
 	expect((await modern(app.url, access, 3, "server/discover", {}, { version: "2099-01-01" })).status).toBe(400);
 
 	expect((await fetch(`${app.url}/api/mcp/requests`)).status).toBe(401);
@@ -1422,7 +1432,7 @@ it("rejects malformed unsubscribe callback URLs", async (test) => {
 	const filteredUnsub = await rpc(
 		await modern(app.url, access, 3, "events/unsubscribe", {
 			name: "mention.created",
-			arguments: { topic: "plans" },
+			arguments: { channel: "plans" },
 			delivery: { url: validUrl },
 		}),
 	);

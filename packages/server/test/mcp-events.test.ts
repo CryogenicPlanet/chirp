@@ -1,0 +1,497 @@
+import { assertionHeader } from "@comms/protocol/headers";
+import { createHash, createHmac } from "node:crypto";
+import { once } from "node:events";
+import { cp, readdir, readFile, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { Schema } from "effect";
+import { expect, it, type TestContext } from "vitest";
+import { conversation } from "./fixtures/conversation.ts";
+
+type App = Awaited<ReturnType<Awaited<ReturnType<typeof conversation>>["launch"]>>;
+const decode = <A>(schema: Schema.Decoder<A>, value: unknown) => Schema.decodeUnknownSync(schema)(value);
+const secret = `whsec_${Buffer.alloc(32, 21).toString("base64")}`;
+const Posted = Schema.Struct({ seq: Schema.Int, created_at: Schema.Int });
+const Subscribed = Schema.Struct({
+	result: Schema.Struct({
+		id: Schema.String,
+		refreshBefore: Schema.String,
+		cursor: Schema.String,
+		truncated: Schema.Boolean,
+	}),
+});
+const Refused = Schema.Struct({
+	error: Schema.Struct({ code: Schema.Int, message: Schema.String, data: Schema.optionalKey(Schema.Unknown) }),
+});
+const Delivery = Schema.fromJsonString(
+	Schema.Struct({
+		eventId: Schema.String,
+		name: Schema.String,
+		timestamp: Schema.String,
+		data: Schema.Struct({
+			id: Schema.String,
+			topic: Schema.String,
+			author: Schema.String,
+			text: Schema.String,
+			truncated: Schema.Boolean,
+			url: Schema.String,
+		}),
+		cursor: Schema.NullOr(Schema.String),
+	}),
+);
+
+/** A board with the MCP package installed and local callbacks allowed, with an optional source edit to events.ts. */
+const installed = async (test: TestContext, edit = (source: string) => source) => {
+	const fixture = await conversation(test);
+	const seed = join(fixture.root, "seed");
+	await cp(join(import.meta.dirname, "../src"), seed, { recursive: true });
+	await cp(join(import.meta.dirname, "../../../examples/extensions/mcp"), join(seed, "ext/mcp"), { recursive: true });
+	for (const file of (await readdir(join(seed, "ext/mcp"))).filter((name) => name.endsWith(".ts"))) {
+		const path = join(seed, "ext/mcp", file);
+		const source = (await readFile(path, "utf8"))
+			.replace("../../../packages/server/src/kernel/extension-api.ts", "../../kernel/extension-api.ts")
+			.replace("https://your-board.example", "https://comms.test")
+			.replace("const allowLocalCallbacks = false;", "const allowLocalCallbacks = true;");
+		await writeFile(path, file === "events.ts" ? edit(source) : source);
+	}
+	await writeFile(join(fixture.root, "boot.config.json"), JSON.stringify({ applicationManagedIngress: true }));
+	const app = await fixture.launch(join(seed, "server.ts"));
+	await app.setup();
+	const cookie = await app.login();
+	await app.ready(cookie);
+	const post = async (topic: string, body: string) => {
+		const response = await app.post("/api/messages", { topic, body }, cookie);
+		expect(response.status).toBe(200);
+		return decode(Posted, await response.json());
+	};
+	return { fixture, app, cookie, post };
+};
+
+/** The authorization request a registered client makes, approved by the signed-in human under `agent`. */
+const authorize = async (app: App, cookie: string, name: string, agent: string, editing: boolean) => {
+	const registration = await fetch(`${app.url}/mcp/oauth/register`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ client_name: name, redirect_uris: ["https://client.test/callback"] }),
+	});
+	const clientId = decode(Schema.Struct({ client_id: Schema.String }), await registration.json()).client_id;
+	const verifier = createHash("sha256").update(`verifier-${name}`).digest("base64url");
+	const query = {
+		response_type: "code",
+		client_id: clientId,
+		redirect_uri: "https://client.test/callback",
+		code_challenge: createHash("sha256").update(verifier).digest("base64url"),
+		code_challenge_method: "S256",
+		resource: "https://comms.test/mcp",
+		scope: "read write",
+	};
+	const form = (path: string, body: Readonly<Record<string, string>>) =>
+		fetch(`${app.url}${path}`, {
+			method: "POST",
+			redirect: "manual",
+			headers: { cookie, origin: "https://comms.test", "content-type": "application/x-www-form-urlencoded" },
+			body: new URLSearchParams(body),
+		});
+	const approved = await form("/mcp/oauth/authorize", {
+		...query,
+		decision: "approve",
+		agent,
+		...(editing ? { editing: "1" } : {}),
+	});
+	const location = editing
+		? await (async () => {
+				// Editing goes through boot's approval page, then back to the continue route that finishes connecting.
+				const html = await approved.text();
+				const approval = new URL(/href="([^"]+)"/.exec(html)?.[1]?.replaceAll("&amp;", "&") ?? "");
+				const id = approval.pathname.split("/").at(-1) ?? "";
+				const scopes = ["read", "write"];
+				const decided = await fetch(`${app.url}/_boot/enroll/${id}/approve`, {
+					method: "POST",
+					headers: {
+						origin: "https://comms.test",
+						"content-type": "application/json",
+						[assertionHeader]: await app.assertion({ id, decision: "approve", scopes, long_lived: false }),
+					},
+					body: JSON.stringify({ decision: "approve", scopes, long_lived: false }),
+				});
+				expect(decided.status).toBe(200);
+				const consent = new URL(approval.searchParams.get("return") ?? "", app.url).searchParams.get("consent") ?? "";
+				return (await form("/mcp/oauth/continue", { consent })).headers.get("location");
+			})()
+		: approved.headers.get("location");
+	const code = new URL(location ?? "").searchParams.get("code");
+	if (!code) throw new Error("authorization code is missing");
+	const exchanged = await fetch(`${app.url}/mcp/oauth/token`, {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded" },
+		body: new URLSearchParams({
+			grant_type: "authorization_code",
+			client_id: clientId,
+			redirect_uri: "https://client.test/callback",
+			resource: "https://comms.test/mcp",
+			code,
+			code_verifier: verifier,
+		}),
+	});
+	const access = decode(Schema.Struct({ access_token: Schema.String }), await exchanged.json()).access_token;
+	return { clientId, ...client(app, access) };
+};
+
+/** MCP 2.0 requests for one connection: version and capabilities travel in `_meta`, mirrored by the headers. */
+const client = (app: App, token: string) => {
+	let id = 0;
+	const call = async (method: string, params: Readonly<Record<string, unknown>>): Promise<unknown> => {
+		const response = await fetch(`${app.url}/mcp`, {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${token}`,
+				accept: "application/json, text/event-stream",
+				"content-type": "application/json",
+				"mcp-protocol-version": "2026-07-28",
+				"mcp-method": method,
+				...(method === "tools/call" ? { "mcp-name": String(params.name) } : {}),
+			},
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				id: ++id,
+				method,
+				params: {
+					...params,
+					_meta: {
+						"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+						"io.modelcontextprotocol/clientCapabilities": {},
+					},
+				},
+			}),
+		});
+		expect(response.status).toBe(200);
+		return response.json();
+	};
+	const params = (url: string, name: string, args: unknown, cursor: string | null = null) => ({
+		name,
+		...(args === undefined ? {} : { arguments: args }),
+		delivery: { mode: "webhook", url, secret },
+		cursor,
+	});
+	return {
+		call,
+		subscribe: async (url: string, name: string, args: unknown, cursor: string | null = null) =>
+			decode(Subscribed, await call("events/subscribe", params(url, name, args, cursor))).result,
+		refused: async (url: string, name: string, args: unknown, cursor: string | null = null) =>
+			decode(Refused, await call("events/subscribe", params(url, name, args, cursor))).error,
+		unsubscribe: async (url: string, name: string, args: unknown) =>
+			expect(await call("events/unsubscribe", { name, arguments: args, delivery: { mode: "webhook", url } })).toEqual(
+				expect.objectContaining({ result: { resultType: "complete" } }),
+			),
+		post: async (topic: string, body: string, key: string) =>
+			call("tools/call", { name: "post_message", arguments: { topic, body, idempotencyKey: key } }),
+	};
+};
+
+/** A webhook endpoint that echoes verification challenges and records each delivered event with its subscription. */
+const receiver = async (test: TestContext) => {
+	const received: Array<{ readonly headers: Readonly<Record<string, string | string[] | undefined>>; body: string }> =
+		[];
+	const server = createServer((request, response) => {
+		const chunks: Buffer[] = [];
+		request.on("data", (chunk: Buffer) => chunks.push(chunk));
+		request.on("end", () => {
+			const body = Buffer.concat(chunks).toString("utf8");
+			received.push({ headers: request.headers, body });
+			const challenge = Reflect.get(Object(JSON.parse(body)), "challenge");
+			response.writeHead(200, { "content-type": "application/json" });
+			response.end(JSON.stringify(typeof challenge === "string" ? { challenge } : {}));
+		});
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	test.onTestFinished(async () => {
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error("receiver has no address");
+	const events = () =>
+		received
+			.filter((item) => !String(item.headers["webhook-id"]).startsWith("msg_"))
+			.map((item) => ({
+				subscription: String(item.headers["x-mcp-subscription-id"]),
+				signed:
+					item.headers["webhook-signature"] ===
+					`v1,${createHmac("sha256", Buffer.from(secret.slice(6), "base64"))
+						.update(`${String(item.headers["webhook-id"])}.${String(item.headers["webhook-timestamp"])}.${item.body}`)
+						.digest("base64")}`,
+				...Schema.decodeSync(Delivery)(item.body),
+			}));
+	return {
+		url: `http://127.0.0.1:${address.port}/hook`,
+		verifications: () => received.filter((item) => String(item.headers["webhook-id"]).startsWith("msg_verification_")),
+		events,
+		/** Texts delivered to one subscription, in arrival order. */
+		texts: (subscription: string) =>
+			events()
+				.filter((event) => event.subscription === subscription)
+				.map((event) => event.data.text),
+	};
+};
+
+const eventually = async (check: () => boolean) => {
+	for (let attempt = 0; attempt < 200; attempt++) {
+		if (check()) return;
+		await delay(50);
+	}
+	throw new Error("condition was not met within 10 seconds");
+};
+
+it("watches a topic with or without its subtopics and never delivers the connection's own posts", async (test) => {
+	const { app, cookie, post } = await installed(test);
+	const watcher = await authorize(app, cookie, "Watch client", "watch-bot", false);
+	const hook = await receiver(test);
+
+	const listed = await watcher.call("events/list", {});
+	expect(listed).toMatchObject({
+		result: {
+			events: [
+				{ name: "mention.created", inputSchema: { properties: { topic: {}, recursive: { default: true } } } },
+				{ name: "message.created", delivery: ["webhook"], inputSchema: { required: ["topic"] } },
+			],
+		},
+	});
+	const info = await watcher.call("tools/call", { name: "connection_info" });
+	expect(info).toMatchObject({
+		result: { structuredContent: { delivery: { events: ["mention.created", "message.created"] } } },
+	});
+
+	// The topic must exist, and arguments must fit the event; nothing reaches the callback before both hold.
+	expect(await watcher.refused(hook.url, "message.created", { topic: "plans" })).toEqual({
+		code: -32011,
+		message: "NotFound",
+		data: { kind: "topic", topic: "plans" },
+	});
+	await post("plans", "kickoff");
+	await post("plans/backend", "api notes");
+	await post("elsewhere", "noise");
+	for (const args of [undefined, {}, { topic: "" }, { topic: "Plans!" }, { topic: "plans", channel: "x" }])
+		expect(await watcher.refused(hook.url, "message.created", args), JSON.stringify(args)).toMatchObject({
+			code: -32602,
+		});
+	expect(await watcher.refused(hook.url, "message.created", { topic: "plans" }, "not-a-cursor")).toMatchObject({
+		code: -32602,
+	});
+	expect(hook.verifications()).toHaveLength(0);
+
+	const subtree = await watcher.subscribe(hook.url, "message.created", { topic: "plans" });
+	const exact = await watcher.subscribe(hook.url, "message.created", { topic: "plans", recursive: false });
+	expect(subtree.id).not.toBe(exact.id);
+	expect(subtree).toMatchObject({ cursor: expect.stringMatching(/^[0-9]+$/), truncated: false });
+	// Key order is not identity, and one verification covers this client's callback for every subscription.
+	expect((await watcher.subscribe(hook.url, "message.created", { recursive: false, topic: "plans" })).id).toBe(
+		exact.id,
+	);
+	expect(hook.verifications()).toHaveLength(1);
+
+	const top = await post("plans", "top level");
+	await post("plans/backend", "nested");
+	await post("elsewhere", "not watched");
+	await watcher.post("plans", "the connection's own post", "own-1");
+	await post("plans", "last");
+	await eventually(() => hook.texts(subtree.id).includes("last") && hook.texts(exact.id).includes("last"));
+	expect(hook.texts(subtree.id)).toEqual(["top level", "nested", "last"]);
+	expect(hook.texts(exact.id)).toEqual(["top level", "last"]);
+	const first = hook.events().find((event) => event.subscription === exact.id);
+	expect(first).toEqual({
+		subscription: exact.id,
+		signed: true,
+		eventId: `evt_${top.seq}`,
+		name: "message.created",
+		timestamp: new Date(top.created_at).toISOString(),
+		data: {
+			id: `message:${top.seq}`,
+			topic: "plans",
+			author: "rahul",
+			text: "top level",
+			truncated: false,
+			url: `https://comms.test/?message=${top.seq}#message-${top.seq}`,
+		},
+		cursor: String(top.seq),
+	});
+
+	// Unsubscribing one watch leaves the other delivering.
+	await watcher.unsubscribe(hook.url, "message.created", { topic: "plans", recursive: false });
+	await post("plans", "after");
+	await eventually(() => hook.texts(subtree.id).includes("after"));
+	await delay(500);
+	expect(hook.texts(exact.id)).toEqual(["top level", "last"]);
+}, 60000);
+
+it("never delivers posts the connection made through its editing grant", async (test) => {
+	const { app, cookie, post } = await installed(test);
+	await post("plans", "kickoff");
+	const granted = await authorize(app, cookie, "Granted client", "grant-bot", true);
+	const hook = await receiver(test);
+	const watch = await granted.subscribe(hook.url, "message.created", { topic: "plans" });
+	const mentions = await granted.subscribe(hook.url, "mention.created", {});
+	// Posted through the grant, so the message is the agent's own and its instance is the grant family.
+	expect(await granted.post("plans", "my reply, @grant-bot", "grant-1")).toMatchObject({
+		result: { structuredContent: { agent: "grant-bot", instance: expect.stringMatching(/^f_/) } },
+	});
+	await post("plans", "a human reply for @grant-bot");
+	await eventually(() => hook.texts(watch.id).length > 0 && hook.texts(mentions.id).length > 0);
+	await delay(500);
+	expect(hook.texts(watch.id)).toEqual(["a human reply for @grant-bot"]);
+	expect(hook.texts(mentions.id)).toEqual(["a human reply for @grant-bot"]);
+}, 60000);
+
+it("narrows mention events to a topic while the whole-board subscription keeps its id", async (test) => {
+	const { app, cookie, post } = await installed(test);
+	const mentioned = await authorize(app, cookie, "Mention client", "mention-bot", false);
+	const hook = await receiver(test);
+	await post("plans", "setup");
+	expect(await mentioned.refused(hook.url, "mention.created", { topic: "" })).toMatchObject({ code: -32602 });
+	expect(await mentioned.refused(hook.url, "mention.created", { topic: "nowhere" })).toMatchObject({
+		code: -32011,
+		data: { kind: "topic" },
+	});
+
+	const board = await mentioned.subscribe(hook.url, "mention.created", {});
+	// The id every mention subscription had before events took arguments, with or without an empty `arguments`.
+	expect(board.id).toBe(
+		`sub_${createHash("sha256")
+			.update(JSON.stringify([mentioned.clientId, hook.url, "mention.created", {}]))
+			.digest("hex")
+			.slice(0, 32)}`,
+	);
+	expect((await mentioned.subscribe(hook.url, "mention.created", undefined)).id).toBe(board.id);
+	const scoped = await mentioned.subscribe(hook.url, "mention.created", { topic: "plans" });
+	const exact = await mentioned.subscribe(hook.url, "mention.created", { topic: "plans", recursive: false });
+	expect(new Set([board.id, scoped.id, exact.id]).size).toBe(3);
+
+	await post("plans", "@mention-bot in plans");
+	await post("elsewhere", "@mention-bot elsewhere");
+	await post("plans/sub", "@here nested");
+	await post("plans", "no mention here");
+	await post("plans", "@mention-bot last");
+	await eventually(() => [board.id, scoped.id, exact.id].every((id) => hook.texts(id).includes("@mention-bot last")));
+	expect(hook.texts(board.id)).toEqual([
+		"@mention-bot in plans",
+		"@mention-bot elsewhere",
+		"@here nested",
+		"@mention-bot last",
+	]);
+	expect(hook.texts(scoped.id)).toEqual(["@mention-bot in plans", "@here nested", "@mention-bot last"]);
+	expect(hook.texts(exact.id)).toEqual(["@mention-bot in plans", "@mention-bot last"]);
+}, 60000);
+
+it("resumes from a cursor with exactly the missed messages, in order and without duplicates", async (test) => {
+	const { app, cookie, post } = await installed(test);
+	const resumer = await authorize(app, cookie, "Replay client", "replay-bot", false);
+	const hook = await receiver(test);
+	await post("replay", "setup");
+	const started = await resumer.subscribe(hook.url, "message.created", { topic: "replay" });
+	const first = await post("replay", "m1");
+	await eventually(() => hook.texts(started.id).includes("m1"));
+	const cursor = hook.events().at(-1)?.cursor ?? null;
+	expect(cursor).toBe(String(first.seq));
+	// While live, a refresh carrying an older cursor changes nothing and reports the subscription's own position.
+	const refreshed = await resumer.subscribe(hook.url, "message.created", { topic: "replay" }, started.cursor);
+	expect(refreshed.id).toBe(started.id);
+	expect(Number(refreshed.cursor)).toBeGreaterThanOrEqual(first.seq);
+
+	await resumer.unsubscribe(hook.url, "message.created", { topic: "replay" });
+	const missed = [await post("replay", "m2"), await post("replay", "m3"), await post("replay", "m4")];
+	const resumed = await resumer.subscribe(hook.url, "message.created", { topic: "replay" }, cursor);
+	expect(resumed).toEqual({ id: started.id, refreshBefore: expect.any(String), cursor, truncated: false });
+	const live = await post("replay", "m5");
+	await eventually(() => hook.texts(started.id).includes("m5"));
+	await delay(500);
+	const delivered = hook.events().filter((event) => event.subscription === started.id);
+	expect(delivered.map((event) => event.data.text)).toEqual(["m1", "m2", "m3", "m4", "m5"]);
+	expect(delivered.map((event) => event.cursor)).toEqual(
+		[first, ...missed, live].map((message) => String(message.seq)),
+	);
+}, 60000);
+
+it("cuts a replay that reaches past the replay window and reports truncated", async (test) => {
+	const { app, cookie, post } = await installed(test, (source) =>
+		source.replace("const replayWindow = 1000;", "const replayWindow = 3;"),
+	);
+	const resumer = await authorize(app, cookie, "Truncated client", "trunc-bot", false);
+	const hook = await receiver(test);
+	await post("trunc", "setup");
+	const started = await resumer.subscribe(hook.url, "message.created", { topic: "trunc" });
+	await resumer.unsubscribe(hook.url, "message.created", { topic: "trunc" });
+	const missed: Array<{ readonly text: string; readonly seq: number }> = [];
+	for (let n = 1; n <= 6; n++) missed.push({ text: `t${n}`, seq: (await post("trunc", `t${n}`)).seq });
+	const resumed = await resumer.subscribe(hook.url, "message.created", { topic: "trunc" }, started.cursor);
+	expect(resumed.truncated).toBe(true);
+	expect(Number(resumed.cursor)).toBeGreaterThan(Number(started.cursor));
+	// Delivery starts at the returned cursor, so the oldest missed messages are skipped and the newest arrive.
+	const kept = missed.filter((message) => message.seq > Number(resumed.cursor)).map((message) => message.text);
+	expect(kept.length).toBeGreaterThan(0);
+	expect(kept).not.toContain("t1");
+	await post("trunc", "after");
+	await eventually(() => hook.texts(started.id).includes("after"));
+	expect(hook.texts(started.id)).toEqual([...kept, "after"]);
+
+	// A cursor beyond the board's head, as after a restore, starts from the head rather than refusing or stalling.
+	await resumer.unsubscribe(hook.url, "message.created", { topic: "trunc" });
+	const ahead = await resumer.subscribe(hook.url, "message.created", { topic: "trunc" }, "999999999");
+	expect(ahead.truncated).toBe(false);
+	expect(Number(ahead.cursor)).toBeLessThan(999999999);
+	await post("trunc", "after the head");
+	await eventually(() => hook.texts(started.id).includes("after the head"));
+}, 60000);
+
+it("keeps delivering mention subscriptions created before events took arguments", async (test) => {
+	// The previous package had no topic columns, so its table and rows are what the live board holds.
+	const ladder = /\t\t\/\/ Topic watches came later[\s\S]*?(?=\t\tconst rows = \(ctx: Store)/;
+	const { fixture, app, cookie, post } = await installed(test, (source) => source.replace(ladder, ""));
+	const columns = async () =>
+		decode(
+			Schema.Array(Schema.Struct({ name: Schema.String })),
+			await fixture.sql("SELECT name FROM pragma_table_info('example_mcp_events')"),
+		).map((column) => column.name);
+	expect(await columns()).not.toContain("event_name");
+	const legacy = await authorize(app, cookie, "Legacy client", "legacy-bot", false);
+	const hook = await receiver(test);
+	const start = await post("legacy", "setup");
+	const id = `sub_${createHash("sha256")
+		.update(JSON.stringify([legacy.clientId, hook.url, "mention.created", {}]))
+		.digest("hex")
+		.slice(0, 32)}`;
+	await fixture.sql(
+		`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,previous_secret_until,refresh_before,verified_at,position,attempts,next_attempt,last_error) VALUES('${id}','${legacy.clientId}','legacy-bot','extension:mcp:${legacy.clientId}','${hook.url}','${secret}',NULL,NULL,${Date.now() + 3600000},${Date.now()},${start.seq},0,0,NULL)`,
+	);
+
+	const headers = { cookie, origin: "https://comms.test" };
+	expect((await app.post("/api/lock", {}, cookie)).status).toBe(200);
+	const current = await fetch(`${app.url}/api/fs/app/ext/mcp/events.ts`, { headers });
+	const upgraded = (
+		await readFile(join(import.meta.dirname, "../../../examples/extensions/mcp/events.ts"), "utf8")
+	).replace("../../../packages/server/src/kernel/extension-api.ts", "../../kernel/extension-api.ts");
+	const staged = await fetch(
+		`${app.url}/api/fs/app/ext/mcp/events.ts?reload=0&baseVersion=${current.headers.get("x-chirp-base-version")}`,
+		{
+			method: "PUT",
+			headers,
+			body: upgraded.replace("const allowLocalCallbacks = false;", "const allowLocalCallbacks = true;"),
+		},
+	);
+	expect(staged.status).toBe(200);
+	expect(await (await app.post("/api/reload?release=1", {}, cookie)).json()).toMatchObject({ status: "live" });
+	expect(await columns()).toEqual(expect.arrayContaining(["event_name", "topic", "subtopics"]));
+	expect(await fixture.sql(`SELECT event_name,topic,subtopics FROM example_mcp_events WHERE id='${id}'`)).toEqual([
+		{ event_name: "mention.created", topic: null, subtopics: 1 },
+	]);
+
+	const mention = await post("legacy", "still there, @legacy-bot?");
+	await eventually(() => hook.texts(id).length > 0);
+	expect(hook.events()).toMatchObject([
+		{ subscription: id, signed: true, name: "mention.created", eventId: `evt_${mention.seq}` },
+	]);
+	// The client's next refresh finds the same subscription rather than creating another.
+	expect((await legacy.subscribe(hook.url, "mention.created", {})).id).toBe(id);
+	expect(hook.verifications()).toHaveLength(0);
+	expect(await fixture.sql(`SELECT COUNT(*) AS count FROM example_mcp_events`)).toEqual([{ count: 1 }]);
+}, 60000);
