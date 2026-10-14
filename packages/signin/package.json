@@ -1,0 +1,17 @@
+{
+	"name": "@comms/signin",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"check": "tsc --noEmit",
+		"keygen": "bun scripts/keygen.ts",
+		"start": "bun src/main.ts",
+		"test": "vitest run --root ../.. packages/signin/test"
+	},
+	"dependencies": {
+		"@effect/platform-bun": "4.0.0-rc.113",
+		"effect": "4.0.0-rc.113",
+		"jose": "6.2.12"
+	}
+}
