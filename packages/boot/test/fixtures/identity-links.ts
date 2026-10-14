@@ -13,7 +13,7 @@ import { layer as lockLayer } from "../../src/edit-lock.ts";
 import { layer as eventsLayer } from "../../src/events.ts";
 import type { OidcConfig } from "../../src/oidc-client.ts";
 import { authenticator } from "./authenticator.ts";
-import { fakeIssuer, sign, signingKey, type Grant } from "./oidc-issuer.ts";
+import { fakeIssuer, sign, signingKey, type FakeIssuer, type Grant } from "./oidc-issuer.ts";
 
 const filename = process.argv[2],
 	scenario = process.argv[3];
@@ -82,9 +82,11 @@ const run = Effect.gen(function* () {
 			readonly session?: string;
 			readonly next?: string;
 			readonly party?: RelyingParty;
+			readonly via?: FakeIssuer;
 		} = {},
 	) =>
 		Effect.gen(function* () {
+			const via = options.via ?? issuer;
 			const started = yield* auth.startOidc(
 				{
 					intent: options.intent ?? "login",
@@ -94,13 +96,13 @@ const run = Effect.gen(function* () {
 				options.party ?? primary,
 				options.session ?? null,
 			);
-			const issued = issuer.issue(started.authorizationUrl, grant);
+			const issued = via.issue(started.authorizationUrl, grant);
 			return {
 				issued,
 				callback: {
 					state: issued.state,
 					code: issued.code,
-					iss: issuer.issuer,
+					iss: via.issuer,
 					binding: started.binding,
 					refused: false,
 				},
@@ -112,9 +114,9 @@ const run = Effect.gen(function* () {
 			assert.equal(result._tag, "session");
 			return result;
 		});
-	const pendingLink = (auth: Boot, session: string, grant: Grant) =>
+	const pendingLink = (auth: Boot, session: string, grant: Grant, via: FakeIssuer = issuer) =>
 		Effect.gen(function* () {
-			const { callback } = yield* begin(auth, grant, { intent: "link", session });
+			const { callback } = yield* begin(auth, grant, { intent: "link", session, via });
 			const result = yield* auth.finishOidc(callback);
 			assert.equal(result._tag, "pending");
 			const id = new URL(result.next, primary.expectedOrigin).searchParams.get("link");
@@ -567,10 +569,22 @@ const run = Effect.gen(function* () {
 		yield* refused(moved.startOidc({ intent: "login", provider: "github" }, primary, null), "identity_not_linked");
 		yield* refused(moved.finishOidc(stale.callback), "oidc_invalid");
 		yield* refused(confirm(moved, owner.id, orphan), "oidc_invalid");
+		// A token from the new issuer for a subject linked under the old one gets all the way to the callback and is
+		// refused there, because identities match by issuer and subject. Another GitHub account linked under the new
+		// issuer is what lets a GitHub sign-in start at all.
+		const newcomer: Grant = { subject: "github:42", provider: "github", label: "newcomer" };
+		yield* confirm(moved, owner.id, yield* pendingLink(moved, owner.id, newcomer, elsewhere));
+		const foreign = yield* begin(moved, octocat, { via: elsewhere });
+		yield* refused(moved.finishOidc(foreign.callback), "identity_not_linked");
+		// The account linked under the new issuer does sign in through it.
+		assert.equal(
+			(yield* moved.finishOidc((yield* begin(moved, newcomer, { via: elsewhere })).callback))._tag,
+			"session",
+		);
 		const github = listed.identities.find((identity) => identity.provider === "github");
 		assert.ok(github);
 		yield* unlink(moved, owner.id, github.id);
-		assert.equal((yield* moved.listIdentities(owner.id)).identities.length, 1);
+		assert.equal((yield* moved.listIdentities(owner.id)).identities.length, 2);
 		// With OIDC off nothing starts or finishes, there is no client document, and links stay removable.
 		const off = yield* build(null);
 		yield* refused(off.startOidc({ intent: "login", provider: "github" }, primary, null), "oidc_disabled");
@@ -578,7 +592,7 @@ const run = Effect.gen(function* () {
 		assert.equal(yield* off.oidcClientDocument, null);
 		const offList = yield* off.listIdentities(owner.id);
 		assert.deepEqual(offList.providers, []);
-		assert.equal(offList.identities.length, 1);
+		assert.equal(offList.identities.length, 2);
 		assert.deepEqual(yield* off.linkedProviders, []);
 	} else throw new Error(`Unknown scenario ${scenario}`);
 });

@@ -206,6 +206,27 @@ it("links, signs in with and unlinks a GitHub identity through a loopback issuer
 	);
 	expect(linked.status).toBe(200);
 	expect(await linked.json()).toMatchObject({ provider: "github", label: "octocat", active: true });
+	// A refused link says so and leads back to the account page, not to sign-in, which the human no longer needs.
+	const relinked = await (await roundTrip({ intent: "link", provider: "github" }, owner)).follow();
+	expect(relinked.status).toBe(409);
+	expect(relinked.headers.get("referrer-policy")).toBe("no-referrer");
+	expect(relinked.headers.get("content-security-policy")).toContain("default-src 'none'");
+	const relinkedPage = await relinked.text();
+	for (const text of ["<h1>Linking refused</h1>", "already linked", 'href="/@rahul"'])
+		expect(relinkedPage).toContain(text);
+	expect(relinkedPage).not.toContain("/auth/login");
+	const declining = await roundTrip({ intent: "link", provider: "google" }, owner, {
+		subject: "google:1",
+		provider: "google",
+	});
+	const declined = await fetch(
+		`${board.url}/auth/oidc/callback?${new URLSearchParams({ error: "access_denied", state: declining.issued.state, iss: issuer.issuer })}`,
+		{ headers: { accept: "text/html" }, redirect: "manual" },
+	);
+	expect(declined.status).toBe(401);
+	expect(await declined.text()).toContain("Linking was canceled or refused at the sign-in service.");
+	// That refusal spent the state, so replaying the round trip names nothing and gets the plain sign-in refusal.
+	expect(await (await declining.follow()).text()).toContain("Sign in with your passkey");
 	expect((await request("/_boot/auth/logout", {}, { cookie: owner })).status).toBe(204);
 
 	// Sign in: the login page now offers GitHub, and the callback opens an ordinary session for the requested page.

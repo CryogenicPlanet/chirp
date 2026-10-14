@@ -174,6 +174,8 @@ it("returns to a safe requested page after sign-in or standalone setup", async (
 it("offers only linked providers, and starts their sign-in with JSON before navigating itself", async () => {
 	expect(authPage("login", ["github"])).toContain('data-provider="github">Continue with GitHub');
 	expect(authPage("login", ["github"])).not.toContain("google");
+	expect(authPage("login", ["github"])).toContain("Use your passkey, or the GitHub account you linked, to sign in");
+	expect(authPage("login")).toContain("Use your passkey to sign in to your board.");
 	expect(authPage("login")).not.toContain("data-provider");
 	expect(authPage("setup", ["github"])).not.toContain("data-provider");
 	const run = async (response: Response) => {
@@ -224,6 +226,8 @@ it("offers only linked providers, and starts their sign-in with JSON before navi
 	const stalled = await run(Response.json({ error: { code: "oidc_unavailable" } }, { status: 503 }));
 	expect(stalled.assigned).toBe("");
 	expect(stalled.status).toContain("Sign in with your passkey");
+	const unlinked = await run(Response.json({ error: { code: "identity_not_linked" } }, { status: 403 }));
+	expect(unlinked.status).toBe("That account is no longer linked to this board. Sign in with your passkey.");
 	const elsewhere = await run(Response.json({ authorization_url: "javascript:alert(1)" }));
 	expect(elsewhere.assigned).toBe("");
 });

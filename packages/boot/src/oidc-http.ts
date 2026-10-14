@@ -59,12 +59,6 @@ export const oidcRoute = (auth: Auth["Service"], requestId: string) =>
 				),
 			);
 		if (callback) {
-			const page = (code: AuthError["code"]) =>
-				HttpServerResponse.text(oidcErrorPage(code, url.searchParams.has("error")), {
-					status: refusalStatus(code),
-					contentType: "text/html",
-					headers: oidcPageHeaders,
-				}).pipe(clearBinding);
 			const single = (name: string) => {
 				const values = url.searchParams.getAll(name);
 				return values.length === 1 ? values[0] : undefined;
@@ -72,6 +66,15 @@ export const oidcRoute = (auth: Auth["Service"], requestId: string) =>
 			const state = single("state");
 			const code = single("code");
 			const iss = single("iss");
+			// Read before the callback spends the state, so a refusal can say whether it was a sign-in or a link.
+			const linking =
+				state !== undefined && (yield* auth.oidcIntent(state).pipe(Effect.orElseSucceed(() => null))) === "link";
+			const page = (refusal: AuthError["code"]) =>
+				HttpServerResponse.text(oidcErrorPage(refusal, { canceled: url.searchParams.has("error"), linking }), {
+					status: refusalStatus(refusal),
+					contentType: "text/html",
+					headers: oidcPageHeaders,
+				}).pipe(clearBinding);
 			return yield* authFailure(
 				Effect.gen(function* () {
 					// A credential beside the callback, or no single state, finishes nothing. Anything else naming a live

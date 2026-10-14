@@ -37,6 +37,11 @@ export function AccountIdentities() {
 		window.history.replaceState(null, "", url.pathname + url.search + url.hash);
 	};
 	const pending = identities?.pending;
+	// One account per provider here: a provider that already signs in is not offered again.
+	const linkable =
+		identities?.providers.filter(
+			(provider) => !identities.identities.some((identity) => identity.active && identity.provider === provider),
+		) ?? [];
 	return (
 		<section className="mt-8 text-[13px]" aria-labelledby="account-identities-heading">
 			<SectionHeading title={<span id="account-identities-heading">GitHub and Google sign-in</span>} />
@@ -91,9 +96,9 @@ export function AccountIdentities() {
 					</CardContent>
 				</Card>
 			)}
-			{identities && identities.providers.length > 0 && (
+			{linkable.length > 0 && (
 				<div className="mt-4 flex flex-wrap gap-2">
-					{identities.providers.map((provider) => (
+					{linkable.map((provider) => (
 						<Button
 							key={provider}
 							variant="outline"

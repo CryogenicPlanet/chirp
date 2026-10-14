@@ -14,7 +14,9 @@ export const authPage = (mode: "setup" | "login" | "code", providers: ReadonlyAr
 			? "Enter the setup code from the bootloader logs. Your password manager will save a passkey for this board."
 			: mode === "code"
 				? "Enter the one-time code shown in your board's account page. Your password manager will save a passkey for this address, and you will be signed in."
-				: "Use your passkey to sign in to your board.";
+				: providers.length > 0
+					? `Use your passkey, or the ${providers.map((provider) => providerNames[provider]).join(" or ")} account you linked, to sign in to your board.`
+					: "Use your passkey to sign in to your board.";
 	return `<!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${mode === "setup" ? "Set up" : mode === "code" ? "Add a passkey to" : "Sign in to"} chirp</title>
@@ -56,7 +58,7 @@ export const authClient = `(() => {
    const result = await response.json().catch(() => null);
    const target = result && typeof result.authorization_url === "string" ? result.authorization_url : "";
    if (!response.ok || !(target.startsWith("https://") || target.startsWith("http://"))) {
-    const messages = {oidc_unavailable:"The sign-in service is unavailable right now. Sign in with your passkey.", oidc_disabled:"GitHub and Google sign-in is off for this board. Sign in with your passkey.", origin_invalid:"This address is not an allowed origin for this board.", setup_required:"Create your first passkey at /setup.", passkey_origin_mismatch:"No passkey on this board belongs to an address it serves, so linked accounts cannot sign in either. Ask the operator to restore the previous address settings or reopen setup."};
+    const messages = {oidc_unavailable:"The sign-in service is unavailable right now. Sign in with your passkey.", oidc_disabled:"GitHub and Google sign-in is off for this board. Sign in with your passkey.", origin_invalid:"This address is not an allowed origin for this board.", setup_required:"Create your first passkey at /setup.", identity_not_linked:"That account is no longer linked to this board. Sign in with your passkey.", passkey_origin_mismatch:"No passkey on this board belongs to an address it serves, so linked accounts cannot sign in either. Ask the operator to restore the previous address settings or reopen setup."};
     const code = result?.error?.code;
     throw new Error((typeof code === "string" && Object.hasOwn(messages, code) ? messages[code] : null) || "Sign-in was refused (HTTP " + response.status + "). Sign in with your passkey.");
    }

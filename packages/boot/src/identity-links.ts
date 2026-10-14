@@ -216,6 +216,20 @@ export const makeIdentityLinks = <E, R, S extends { readonly id: string }, SE, S
 				return { authorizationUrl, binding };
 			});
 
+		/** Whether a callback's state is a sign-in's or a link's, so its refusal page can say which; null for neither. */
+		const oidcIntent = (state: string) =>
+			Effect.map(
+				sql`SELECT ceremony FROM auth_challenges WHERE id=${state}`.pipe(
+					decodeRows(Schema.Struct({ ceremony: Schema.String })),
+				),
+				(rows) =>
+					rows[0]?.ceremony === "oidc.link"
+						? ("link" as const)
+						: rows[0]?.ceremony === "oidc.login"
+							? ("login" as const)
+							: null,
+			);
+
 		/** The callback, in the order that keeps the issuer off every lock: check the browser binding, state and issuer;
 		 * redeem and verify over the network; then take the state row exactly once and act in one boot write. */
 		const finishOidc = (input: {
@@ -402,6 +416,7 @@ export const makeIdentityLinks = <E, R, S extends { readonly id: string }, SE, S
 		return {
 			oidcClientDocument,
 			startOidc,
+			oidcIntent,
 			finishOidc,
 			listIdentities,
 			linkIdentity,
