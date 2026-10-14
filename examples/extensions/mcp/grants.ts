@@ -176,7 +176,18 @@ export const editingState = (
 		)
 			yield* ctx.mutate(
 				Effect.gen(function* () {
-					yield* ctx.db`UPDATE example_mcp_grants SET status=${next.status},family=${next.family},families=${next.families},scopes=${next.scopes},expires_at=${next.expires_at},updated_at=${now} WHERE client_id=${holder.clientId} AND request_id=${row.request_id}`;
+					const current = yield* connectionRow(ctx, holder.clientId);
+					if (current !== undefined && current.request_id === row.request_id) {
+						yield* ctx.db`UPDATE example_mcp_grants SET status=${next.status},family=${next.family},families=${next.families},scopes=${next.scopes},expires_at=${next.expires_at},updated_at=${now} WHERE client_id=${holder.clientId} AND request_id=${row.request_id}`;
+						yield* remember(ctx, holder.clientId, row.agent, retained(next.families, next.family));
+						return;
+					}
+					if (current !== undefined && current.agent === row.agent) {
+						const families = retained(current.families, current.family, next.families, next.family);
+						yield* ctx.db`UPDATE example_mcp_grants SET families=${families},updated_at=${now} WHERE client_id=${holder.clientId} AND request_id=${current.request_id}`;
+						yield* remember(ctx, holder.clientId, current.agent, families);
+						return;
+					}
 					yield* remember(ctx, holder.clientId, row.agent, retained(next.families, next.family));
 				}),
 			);

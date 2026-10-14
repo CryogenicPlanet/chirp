@@ -793,12 +793,14 @@ export const installEvents = (api: Api, origin: string) =>
 				});
 				let position = row.position;
 				let attempts = row.attempts;
-				for (const message of page.items.filter((item) => matches(row.topic, row.subtopics === 1, families, item))) {
+				for (const message of page.items) {
 					const at = yield* Clock.currentTimeMillis;
 					const current = yield* live(ctx, row.id, position, at);
 					// Stop if unsubscribe, expiry, grant loss, agent change, or another drain moved the cursor.
 					if (!current || !(yield* granted(ctx, current.client_id, at)) || current.agent !== row.agent)
 						return { wake: Infinity, backlog: false };
+					const latest = familiesOf(current.grant_family, ...held);
+					if (!matches(row.topic, row.subtopics === 1, latest, message)) continue;
 					const outcome = message.deleted_at === null ? yield* deliver(current, message) : "rejected";
 					// Suppressed means this generation is no longer live; its scope is about to close.
 					if (outcome === "suppressed") return { wake: now + 1000, backlog: false };
