@@ -914,6 +914,36 @@ it("leaves idle cursors alone between board requests and backs off only a subscr
 	expect(again.next_attempt - failed.next_attempt).toBeGreaterThanOrEqual(4_000);
 }, 120000);
 
+it("records drain backoff at the checkpointed position after partial progress", async (test) => {
+	const { fixture, app, cookie, post } = await installed(test, (source) =>
+		source.replace(
+			"return { wake: now + 60_000, backlog: page.items.length === 16 };",
+			'if (position !== row.position) return yield* Effect.die("after progress");\n\t\t\t\treturn { wake: now + 60_000, backlog: page.items.length === 16 };',
+		),
+	);
+	const client = await authorize(app, cookie, "Backoff client", "back-bot", false);
+	const hook = await receiver(test);
+	await post("back", "setup");
+	const mentions = await client.subscribe(hook.url, "mention.created", {});
+	await post("back", "@back-bot first");
+	await post("back", "@back-bot second");
+	const failed = await until(async () => {
+		const [row] = decode(
+			Schema.Array(
+				Schema.Struct({
+					position: Schema.Finite,
+					next_attempt: Schema.Finite,
+					last_error: Schema.NullOr(Schema.String),
+				}),
+			),
+			await fixture.sql(`SELECT position,next_attempt,last_error FROM example_mcp_events WHERE id='${mentions.id}'`),
+		);
+		return row?.last_error === "drain_failed" && row.position > Number(mentions.cursor) ? row : undefined;
+	});
+	expect(failed.next_attempt).toBeGreaterThan(Date.now());
+	await eventually(() => hook.texts(mentions.id).includes("@back-bot first"));
+}, 120000);
+
 it("never delivers again a message that an edit made match after delivery had read it", async (test) => {
 	const { app, cookie, post } = await installed(test);
 	const editor = await authorize(app, cookie, "Edit client", "edit-bot", false);

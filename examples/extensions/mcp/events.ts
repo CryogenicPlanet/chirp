@@ -862,7 +862,17 @@ export const installEvents = (api: Api, origin: string) =>
 						const wake = (yield* Clock.currentTimeMillis) + Math.min(60_000, 2_000 * 2 ** (failed - 1));
 						yield* ctx
 							.mutate(
-								ctx.db`UPDATE example_mcp_events SET next_attempt=${wake},last_error='drain_failed' WHERE id=${row.id} AND position=${row.position} AND agent=${row.agent}`,
+								Effect.gen(function* () {
+									const current =
+										yield* ctx.db`SELECT position FROM example_mcp_events WHERE id=${row.id} AND agent=${row.agent}`.pipe(
+											Effect.flatMap(
+												Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ position: Schema.Finite }))),
+											),
+										);
+									const from = current[0]?.position;
+									if (from === undefined) return;
+									yield* ctx.db`UPDATE example_mcp_events SET next_attempt=${wake},last_error='drain_failed' WHERE id=${row.id} AND position=${from} AND agent=${row.agent}`;
+								}),
 							)
 							.pipe(Effect.ignore);
 						return { wake, backlog: false };

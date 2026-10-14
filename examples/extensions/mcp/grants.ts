@@ -211,7 +211,7 @@ export const requestEditing = (
 			code: created.user_code,
 			agent: holder.agent,
 			family: null,
-			families: prior?.agent === holder.agent ? retained(prior.families, prior.family) : null,
+			families: null,
 			scopes: "read write fs",
 			status: "pending",
 			expires_at: created.expires_at,
@@ -221,12 +221,14 @@ export const requestEditing = (
 		// Kernel mutations are serialized, so this read and the replacement are one compare-and-swap.
 		const tracked = yield* ctx.mutate(
 			Effect.gen(function* () {
-				const now = yield* connectionRow(ctx, row.client_id);
-				if ((now?.request_id ?? null) !== (prior?.request_id ?? null)) return now;
-				if (prior) yield* remember(ctx, prior.client_id, prior.agent, retained(prior.families, prior.family));
-				yield* ctx.db`DELETE FROM example_mcp_grants WHERE client_id=${row.client_id}`;
-				yield* ctx.db`INSERT INTO example_mcp_grants(client_id,subject,request_id,approve_url,code,agent,family,families,scopes,status,expires_at,created_at,updated_at) VALUES(${row.client_id},${row.subject},${row.request_id},${row.approve_url},${row.code},${row.agent},${row.family},${row.families},${row.scopes},${row.status},${row.expires_at},${row.created_at},${row.updated_at})`;
-				return row;
+				const current = yield* connectionRow(ctx, row.client_id);
+				if ((current?.request_id ?? null) !== (prior?.request_id ?? null)) return current;
+				if (current) yield* remember(ctx, current.client_id, current.agent, retained(current.families, current.family));
+				const families = current?.agent === holder.agent ? retained(current.families, current.family) : null;
+				const next = { ...row, families };
+				yield* ctx.db`DELETE FROM example_mcp_grants WHERE client_id=${next.client_id}`;
+				yield* ctx.db`INSERT INTO example_mcp_grants(client_id,subject,request_id,approve_url,code,agent,family,families,scopes,status,expires_at,created_at,updated_at) VALUES(${next.client_id},${next.subject},${next.request_id},${next.approve_url},${next.code},${next.agent},${next.family},${next.families},${next.scopes},${next.status},${next.expires_at},${next.created_at},${next.updated_at})`;
+				return next;
 			}),
 		);
 		return holds(tracked, holder) ? view(tracked) : none;
