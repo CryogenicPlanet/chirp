@@ -41,8 +41,16 @@ const Delivery = Schema.fromJsonString(
 	}),
 );
 
-/** A board with the MCP package installed and local callbacks allowed, with an optional source edit to events.ts. */
-const installed = async (test: TestContext, edit = (source: string) => source) => {
+/** A board with the MCP package installed and local callbacks allowed, with optional source edits. */
+const installed = async (
+	test: TestContext,
+	edit: ((source: string) => string) | { events?: (source: string) => string; grants?: (source: string) => string } = (
+		source,
+	) => source,
+) => {
+	const eventsEdit = typeof edit === "function" ? edit : (edit.events ?? ((source: string) => source));
+	const grantsEdit =
+		typeof edit === "function" ? (source: string) => source : (edit.grants ?? ((source: string) => source));
 	const fixture = await conversation(test);
 	const seed = join(fixture.root, "seed");
 	await cp(join(import.meta.dirname, "../src"), seed, { recursive: true });
@@ -53,7 +61,10 @@ const installed = async (test: TestContext, edit = (source: string) => source) =
 			.replace("../../../packages/server/src/kernel/extension-api.ts", "../../kernel/extension-api.ts")
 			.replace("https://your-board.example", "https://comms.test")
 			.replace("const allowLocalCallbacks = false;", "const allowLocalCallbacks = true;");
-		await writeFile(path, file === "events.ts" ? edit(source) : source);
+		await writeFile(
+			path,
+			file === "events.ts" ? eventsEdit(source) : file === "grants.ts" ? grantsEdit(source) : source,
+		);
 	}
 	await writeFile(join(fixture.root, "boot.config.json"), JSON.stringify({ applicationManagedIngress: true }));
 	const app = await fixture.launch(join(seed, "server.ts"));
@@ -602,6 +613,106 @@ it("does not echo a replaced grant's posts across a multi-page drain", async (te
 		...Array.from({ length: 17 }, (_, n) => `@here other ${n + 1}`),
 		"@here after multi-page replacement",
 	]);
+}, 120000);
+
+it("merges a collected family onto the grant row when collect loses to replacement", async (test) => {
+	const { fixture, app, cookie, post } = await installed(test, {
+		grants: (source) =>
+			source.replace(
+				"const next = yield* collected(ctx, row);",
+				'const next = yield* collected(ctx, row);\n\t\tyield* Effect.sleep("400 millis");',
+			),
+	});
+	const granted = await authorize(app, cookie, "CAS lose client", "cas-bot", true);
+	const hook = await receiver(test);
+	await post("plans", "setup");
+	const first = decode(
+		Schema.Struct({ result: Schema.Struct({ structuredContent: Schema.Struct({ instance: Schema.String }) }) }),
+		await granted.post("plans", "@here from the first cas family", "cas-1"),
+	).result.structuredContent.instance;
+	await revokeGrant(app, cookie, "cas-bot");
+	const requested = decode(
+		Schema.Struct({
+			result: Schema.Struct({
+				structuredContent: Schema.Struct({ status: Schema.String, approve_url: Schema.String }),
+			}),
+		}),
+		await granted.edit("request_editing"),
+	).result.structuredContent;
+	await approveEditing(app, requested.approve_url);
+	const second = decode(
+		Schema.Struct({
+			items: Schema.Array(
+				Schema.Struct({
+					family: Schema.String,
+					agent: Schema.String,
+					held_by: Schema.NullOr(Schema.String),
+					revoked: Schema.Boolean,
+				}),
+			),
+		}),
+		await (await fetch(`${app.url}/_boot/tokens`, { headers: { cookie } })).json(),
+	).items.find((item) => item.held_by === "mcp" && item.agent === "cas-bot" && !item.revoked)?.family;
+	expect(second).toMatch(/^f_/);
+	expect(second).not.toBe(first);
+	const collecting = granted.edit("connection_info");
+	await delay(200);
+	// request_editing reports a live/pending grant instead of replacing it; mark the row revoked so
+	// the tool asks boot for a new request while collect is still in its post-collect sleep.
+	await fixture.sql(`UPDATE example_mcp_grants SET status='revoked' WHERE client_id='${granted.clientId}'`);
+	expect(await granted.edit("request_editing")).toMatchObject({
+		result: { structuredContent: { status: "pending" } },
+	});
+	await collecting;
+	const [grant] = decode(
+		Schema.Array(Schema.Struct({ families: Schema.NullOr(Schema.String) })),
+		await fixture.sql(`SELECT families FROM example_mcp_grants WHERE client_id='${granted.clientId}'`),
+	);
+	expect(grant?.families?.split(" ").sort()).toEqual([first, second].sort());
+	const mentions = await granted.subscribe(hook.url, "mention.created", {});
+	const [row] = decode(
+		Schema.Array(Schema.Struct({ grant_family: Schema.NullOr(Schema.String) })),
+		await fixture.sql(`SELECT grant_family FROM example_mcp_events WHERE id='${mentions.id}'`),
+	);
+	expect(row?.grant_family?.split(" ")).toContain(second);
+}, 120000);
+
+it("does not deliver a family collected after drain has already built its exclude set", async (test) => {
+	const { fixture, app, cookie, post } = await installed(test, (source) =>
+		source.replace(
+			"const page = yield* ctx.messages.query({\n\t\t\t\t\tsince: row.position,",
+			'yield* Effect.sleep("500 millis");\n\t\t\t\tconst page = yield* ctx.messages.query({\n\t\t\t\t\tsince: row.position,',
+		),
+	);
+	const granted = await authorize(app, cookie, "Stale drain client", "stale-bot", true);
+	const other = await authorize(app, cookie, "Stale other client", "stale-other", false);
+	const hook = await receiver(test);
+	await post("plans", "setup");
+	const mentions = await granted.subscribe(hook.url, "mention.created", {});
+	await post("plans", "@stale-bot ready");
+	await eventually(() => hook.texts(mentions.id).includes("@stale-bot ready"));
+	await fixture.sql(`UPDATE example_mcp_events SET next_attempt=${Date.now() + 3_600_000} WHERE id='${mentions.id}'`);
+	await revokeGrant(app, cookie, "stale-bot");
+	const requested = decode(
+		Schema.Struct({
+			result: Schema.Struct({
+				structuredContent: Schema.Struct({ status: Schema.String, approve_url: Schema.String }),
+			}),
+		}),
+		await granted.edit("request_editing"),
+	).result.structuredContent;
+	await approveEditing(app, requested.approve_url);
+	await fixture.sql(`UPDATE example_mcp_events SET next_attempt=0 WHERE id='${mentions.id}'`);
+	await other.post("plans", "@here other during drain", "stale-other");
+	await delay(50);
+	expect(await granted.edit("connection_info")).toMatchObject({
+		result: { structuredContent: { editing: { status: "active" } } },
+	});
+	expect(await granted.post("plans", "@here from the collected family", "stale-own")).toMatchObject({
+		result: { structuredContent: { instance: expect.stringMatching(/^f_/) } },
+	});
+	await eventually(() => hook.texts(mentions.id).includes("@here other during drain"));
+	expect(hook.texts(mentions.id)).toEqual(["@stale-bot ready", "@here other during drain"]);
 }, 120000);
 
 it("does not let own-family posts fill the replay window past an older deliverable", async (test) => {
