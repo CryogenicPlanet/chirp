@@ -3,8 +3,14 @@ import { Effect, Schema } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { BoardError } from "./board-api.ts";
 
-const failure = Schema.Struct({ error: Schema.Struct({ code: Schema.String }) });
-const explanation = (code: string) => {
+const failure = Schema.Struct({
+	error: Schema.Struct({
+		code: Schema.String,
+		message: Schema.optionalKey(Schema.String),
+		hint: Schema.optionalKey(Schema.String),
+	}),
+});
+const known = (code: string) => {
 	if (code === "setup_code_invalid")
 		return "That setup code is incorrect. Check the latest code in your deployment logs.";
 	if (code === "setup_closed") return "A passkey is already registered. Sign in to continue.";
@@ -20,19 +26,33 @@ const explanation = (code: string) => {
 		return "The passkey confirmation expired or was used. Refresh the account list before trying again.";
 	if (code === "idempotency_conflict")
 		return "This token request conflicts with an earlier attempt. Check the token list before creating another.";
-	return `Account request refused (${code}). Refresh the account list to check its current state.`;
+	return undefined;
 };
 export const accountRequest = (request: HttpClientRequest.HttpClientRequest, timeoutMs = 15000) =>
 	Effect.gen(function* () {
 		const client = yield* HttpClient.HttpClient;
 		const response = yield* client.execute(request);
 		if (response.status < 200 || response.status >= 300) {
-			const message = yield* response.json.pipe(
+			const refusal = yield* response.json.pipe(
 				Effect.flatMap(Schema.decodeUnknownEffect(failure)),
-				Effect.map((value) => explanation(value.error.code)),
-				Effect.orElseSucceed(() => "The account request failed. Refresh to check its current state."),
+				Effect.map((value) => value.error),
+				Effect.orElseSucceed(() => null),
 			);
-			return yield* new BoardError({ status: response.status, message });
+			if (refusal === null)
+				return yield* new BoardError({
+					status: response.status,
+					message: "The account request failed. Refresh to check its current state.",
+				});
+			const explained = known(refusal.code);
+			const detail = [refusal.message, refusal.hint].filter((part) => part !== undefined).join(" ");
+			return yield* new BoardError({
+				status: response.status,
+				message:
+					explained ??
+					`Account request refused (${refusal.code}). Refresh the account list to check its current state.`,
+				code: refusal.code,
+				...(explained === undefined && detail !== "" ? { detail } : {}),
+			});
 		}
 		return yield* response.json;
 	}).pipe(
