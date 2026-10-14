@@ -1568,6 +1568,40 @@ it("hands a metadata-document reconnect the earlier connection's subscription, w
 	expect(hook.texts(taken.id)).not.toContain("from the earlier connection");
 }, 120000);
 
+it("consolidates migrated metadata-document subscriptions when they refresh", async (test) => {
+	const { fixture, app, cookie, post } = await installed(test);
+	const documents = await metadataHost(test, ["/client.json"]);
+	const hook = await receiver(test);
+	const stored = async () =>
+		decode(
+			Subscriptions,
+			await fixture.sql(`SELECT id,client_id,position FROM example_mcp_events WHERE url='${hook.url}' ORDER BY id`),
+		);
+	const kickoff = await post("plans", "setup");
+	const first = await authorize(app, cookie, "Metadata first", "meta-bot", false, documents("/client.json"));
+	const second = await authorize(app, cookie, "Metadata second", "meta-bot", false, documents("/client.json"));
+	const earlier = await first.subscribe(hook.url, "mention.created", {});
+	const secondId = await connectionId(second);
+	const laterId = `sub_${createHash("sha256")
+		.update(JSON.stringify([secondId, hook.url, "mention.created", {}]))
+		.digest("hex")
+		.slice(0, 32)}`;
+	await fixture.sql(
+		`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,previous_secret_until,refresh_before,verified_at,position,attempts,next_attempt,last_error,event_name,topic,subtopics,grant_family,client_url,subject) VALUES('${laterId}','${secondId}','meta-bot','extension:mcp:${secondId}','${hook.url}','${secret}',NULL,NULL,${Date.now() + 3600000},${Date.now()},${kickoff.seq},0,0,NULL,'mention.created',NULL,1,NULL,NULL,NULL)`,
+	);
+	await fixture.sql(`UPDATE example_mcp_events SET client_url=NULL,subject=NULL WHERE id='${earlier.id}'`);
+	// Each refresh writes the document and human onto its own migrated row; the first still finds no annotated peer.
+	await first.subscribe(hook.url, "mention.created", {});
+	expect((await stored()).map((row) => row.id).toSorted()).toEqual([earlier.id, laterId].toSorted());
+	const taken = await second.subscribe(hook.url, "mention.created", {});
+	expect(taken.id).toBe(laterId);
+	expect((await stored()).map((row) => row.id)).toEqual([laterId]);
+	await post("plans", "@meta-bot once");
+	await eventually(() => hook.texts(laterId).includes("@meta-bot once"));
+	expect(hook.texts(laterId)).toEqual(["@meta-bot once"]);
+	expect(hook.texts(earlier.id)).toEqual([]);
+}, 120000);
+
 it("never takes over across humans, client documents, posting names or registered clients", async (test) => {
 	const { fixture, app, cookie, post } = await installed(test);
 	const documents = await metadataHost(test, ["/client.json", "/other.json"]);

@@ -345,7 +345,8 @@ export const installEvents = (api: Api, origin: string) =>
 			{ skipIfColumnExists: { table: "example_mcp_events", column: "grant_family" } },
 		);
 		// A reconnect through a client document takes over its earlier connection's subscriptions, so each row records
-		// the document and the approving human. Rows from before have neither and are never taken over.
+		// the document and the approving human. Rows from before have neither until a refresh writes them; a later
+		// matching refresh then takes the peer over.
 		yield* api.migrate(
 			"event_client_url",
 			on(sql, {
@@ -643,12 +644,25 @@ export const installEvents = (api: Api, origin: string) =>
 						// A live subscription keeps its own position: whatever cursor the refresh carries is at or behind it.
 						if (existing) {
 							const rotating = !sameSecret(existing.secret, input.delivery.secret);
-							const previous = rotating ? existing.secret : existing.previous_secret;
+							const previousSecret = rotating ? existing.secret : existing.previous_secret;
 							const previousUntil = rotating ? now + secretOverlap : existing.previous_secret_until;
 							const resetRetries = existing.agent !== agent ? 0 : existing.attempts;
-							const storedFamily = storedFamilies(existing.grant_family, ...families);
-							yield* sql`UPDATE example_mcp_events SET agent=${agent},previous_secret=${previous},previous_secret_until=${previousUntil},secret=${input.delivery.secret},refresh_before=${refreshBefore},verified_at=${verifiedAt},attempts=${resetRetries},next_attempt=0,grant_family=${storedFamily},client_url=${clientUrl},subject=${caller.subject} WHERE id=${id}`;
-							return { position: existing.position, truncated: false };
+							// Migrated peers get client_url and subject on their own refresh. Once they match, take them
+							// over here too: the insert path never runs while this row is live.
+							const previous = yield* takeable(sql);
+							if (previous.length > 0)
+								yield* sql`DELETE FROM example_mcp_events WHERE id IN ${sql.in(previous.map((row) => row.id))}`;
+							const storedFamily = storedFamilies(
+								existing.grant_family,
+								...previous.flatMap((row) => [row.grant_family, row.instance]),
+								...families,
+							);
+							const position = previous.reduce(
+								(furthest, row) => (row.position > furthest ? row.position : furthest),
+								existing.position,
+							);
+							yield* sql`UPDATE example_mcp_events SET agent=${agent},previous_secret=${previousSecret},previous_secret_until=${previousUntil},secret=${input.delivery.secret},refresh_before=${refreshBefore},verified_at=${verifiedAt},position=${position},attempts=${resetRetries},next_attempt=0,grant_family=${storedFamily},client_url=${clientUrl},subject=${caller.subject} WHERE id=${id}`;
+							return { position, truncated: false };
 						}
 						const clientCount =
 							yield* sql`SELECT COUNT(*) AS count FROM example_mcp_events WHERE client_id=${caller.clientId}`.pipe(
