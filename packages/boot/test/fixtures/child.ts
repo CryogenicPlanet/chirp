@@ -151,6 +151,8 @@ export function serve(mode: string) {
 						"content-type": "text/javascript",
 						"service-worker-allowed": "/",
 						"clear-site-data": '"cookies"',
+						"cache-control": "max-age=31536000",
+						vary: "Accept-Encoding",
 					},
 				});
 			if (url.pathname === "/api")
