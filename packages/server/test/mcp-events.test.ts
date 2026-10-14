@@ -791,6 +791,19 @@ it("reports truncated for a topic mention replay only when it skipped a matching
 	});
 }, 120000);
 
+it("keeps a full 200-candidate replay look-back within the message query limit", async (test) => {
+	const { app, cookie, post } = await installed(test);
+	const mentioned = await authorize(app, cookie, "Bound replay client", "bound-bot", false);
+	const hook = await receiver(test);
+	await post("watched", "setup");
+	const scoped = await mentioned.subscribe(hook.url, "mention.created", { topic: "watched" });
+	await mentioned.unsubscribe(hook.url, "mention.created", { topic: "watched" });
+	for (let n = 1; n <= 200; n++) await post("elsewhere", `@bound-bot noise ${n}`);
+	expect(await mentioned.subscribe(hook.url, "mention.created", { topic: "watched" }, scoped.cursor)).toMatchObject({
+		truncated: false,
+	});
+}, 180000);
+
 it("persists idle scan progress so a reload cannot re-emit an edited message", async (test) => {
 	const { fixture, app, cookie, post } = await installed(test);
 	const editor = await authorize(app, cookie, "Reload edit client", "reload-bot", false);
