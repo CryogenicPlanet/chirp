@@ -646,7 +646,6 @@ export const installEvents = (api: Api, origin: string) =>
 							const rotating = !sameSecret(existing.secret, input.delivery.secret);
 							const previousSecret = rotating ? existing.secret : existing.previous_secret;
 							const previousUntil = rotating ? now + secretOverlap : existing.previous_secret_until;
-							const resetRetries = existing.agent !== agent ? 0 : existing.attempts;
 							// Migrated peers get client_url and subject on their own refresh. Once they match, take them
 							// over here too: the insert path never runs while this row is live.
 							const previous = yield* takeable(sql);
@@ -661,6 +660,8 @@ export const installEvents = (api: Api, origin: string) =>
 								(furthest, row) => (row.position > furthest ? row.position : furthest),
 								existing.position,
 							);
+							// A new posting name, or a cursor that jumped to a peer's, is not the failure the attempts count.
+							const resetRetries = existing.agent !== agent || position !== existing.position ? 0 : existing.attempts;
 							yield* sql`UPDATE example_mcp_events SET agent=${agent},previous_secret=${previousSecret},previous_secret_until=${previousUntil},secret=${input.delivery.secret},refresh_before=${refreshBefore},verified_at=${verifiedAt},position=${position},attempts=${resetRetries},next_attempt=0,grant_family=${storedFamily},client_url=${clientUrl},subject=${caller.subject} WHERE id=${id}`;
 							return { position, truncated: false };
 						}

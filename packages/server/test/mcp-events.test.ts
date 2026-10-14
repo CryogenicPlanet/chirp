@@ -1593,9 +1593,17 @@ it("consolidates migrated metadata-document subscriptions when they refresh", as
 	// Each refresh writes the document and human onto its own migrated row; the first still finds no annotated peer.
 	await first.subscribe(hook.url, "mention.created", {});
 	expect((await stored()).map((row) => row.id).toSorted()).toEqual([earlier.id, laterId].toSorted());
+	// Failed attempts at the older cursor must not count against the first event after the cursor jumps.
+	await fixture.sql(`UPDATE example_mcp_events SET attempts=4,position=0 WHERE id='${laterId}'`);
 	const taken = await second.subscribe(hook.url, "mention.created", {});
 	expect(taken.id).toBe(laterId);
-	expect((await stored()).map((row) => row.id)).toEqual([laterId]);
+	expect(Number(taken.cursor)).toBeGreaterThan(0);
+	expect(
+		decode(
+			Schema.Array(Schema.Struct({ id: Schema.String, attempts: Schema.Finite, position: Schema.Finite })),
+			await fixture.sql(`SELECT id,attempts,position FROM example_mcp_events WHERE url='${hook.url}'`),
+		),
+	).toEqual([{ id: laterId, attempts: 0, position: Number(taken.cursor) }]);
 	await post("plans", "@meta-bot once");
 	await eventually(() => hook.texts(laterId).includes("@meta-bot once"));
 	expect(hook.texts(laterId)).toEqual(["@meta-bot once"]);
