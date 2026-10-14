@@ -325,22 +325,30 @@ it("watches a topic with or without its subtopics and never delivers the connect
 	expect(hook.texts(exact.id)).toEqual(["top level", "last"]);
 }, 60000);
 
-it("never delivers posts the connection made through its editing grant", async (test) => {
+it("never delivers posts the connection made through its editing grant, while other agents' @here arrives", async (test) => {
 	const { app, cookie, post } = await installed(test);
 	await post("plans", "kickoff");
 	const granted = await authorize(app, cookie, "Granted client", "grant-bot", true);
+	const other = await authorize(app, cookie, "Other client", "other-bot", false);
 	const hook = await receiver(test);
-	const watch = await granted.subscribe(hook.url, "message.created", { topic: "plans" });
 	const mentions = await granted.subscribe(hook.url, "mention.created", {});
-	// Posted through the grant, so the message is the agent's own and its instance is the grant family.
-	expect(await granted.post("plans", "my reply, @grant-bot", "grant-1")).toMatchObject({
-		result: { structuredContent: { agent: "grant-bot", instance: expect.stringMatching(/^f_/) } },
-	});
-	await post("plans", "a human reply for @grant-bot");
-	await eventually(() => hook.texts(watch.id).length > 0 && hook.texts(mentions.id).length > 0);
-	await delay(500);
-	expect(hook.texts(watch.id)).toEqual(["a human reply for @grant-bot"]);
-	expect(hook.texts(mentions.id)).toEqual(["a human reply for @grant-bot"]);
+	const watch = await granted.subscribe(hook.url, "message.created", { topic: "plans" });
+	// Posted through the grant, so each message is the agent's own and its instance is the grant family.
+	for (const { body, key } of [
+		{ body: "@here from grant-bot", key: "grant-1" },
+		{ body: "@grant-bot note to self", key: "grant-2" },
+	])
+		expect(await granted.post("plans", body, key)).toMatchObject({
+			result: { structuredContent: { agent: "grant-bot", instance: expect.stringMatching(/^f_/) } },
+		});
+	await other.post("plans", "@here from another connection", "other-1");
+	await post("plans", "@here standup");
+	// Delivery is in order, so once the last post arrives every earlier one has been delivered or skipped.
+	await eventually(
+		() => hook.texts(mentions.id).includes("@here standup") && hook.texts(watch.id).includes("@here standup"),
+	);
+	expect(hook.texts(mentions.id)).toEqual(["@here from another connection", "@here standup"]);
+	expect(hook.texts(watch.id)).toEqual(["@here from another connection", "@here standup"]);
 }, 60000);
 
 it("narrows mention events to a topic while the whole-board subscription keeps its id", async (test) => {
