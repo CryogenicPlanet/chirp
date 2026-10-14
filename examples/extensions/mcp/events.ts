@@ -581,22 +581,22 @@ export const installEvents = (api: Api, origin: string) =>
 					over === undefined && window !== undefined && window.items.length === replayScan
 						? window.items[0]
 						: undefined;
-				// Truncation looks at one older page only, the same 200-candidate bound as the newest window. A full
-				// older page that never reaches the window left unexamined candidates, so the replay is truncated.
+				// Truncation looks at one older page plus one overlapping candidate, still within the newest window's
+				// bound. Adjacent pages meet at oldest; a full page that still ends before it left a gap.
 				const older =
 					oldest === undefined
 						? false
 						: yield* Effect.gen(function* () {
 								const page = yield* ctx.messages.query({
 									since,
-									limit: replayScan,
+									limit: replayScan + 1,
 									exclude: instance,
 									...selection(name, agent, topic, subtopics),
 								});
 								if (page.items.some((item) => item.seq < oldest.seq && matches(topic, subtopics, family, item)))
 									return true;
 								const last = page.items.at(-1);
-								return last !== undefined && last.seq < oldest.seq && page.items.length === replayScan;
+								return last !== undefined && last.seq < oldest.seq && page.items.length === replayScan + 1;
 							});
 				const start =
 					over !== undefined

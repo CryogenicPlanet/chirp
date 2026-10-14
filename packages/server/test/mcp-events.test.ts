@@ -781,6 +781,14 @@ it("reports truncated for a topic mention replay only when it skipped a matching
 	expect(await mentioned.subscribe(hook.url, "mention.created", { topic: "watched" }, after)).toMatchObject({
 		truncated: true,
 	});
+	// Exactly two candidate pages of other-topic mentions meet at the window; nothing deliverable was skipped.
+	await mentioned.unsubscribe(hook.url, "mention.created", { topic: "watched" });
+	const fresh = await mentioned.subscribe(hook.url, "mention.created", { topic: "watched" });
+	await mentioned.unsubscribe(hook.url, "mention.created", { topic: "watched" });
+	for (let n = 1; n <= 8; n++) await post("elsewhere", `@filter-bot pair ${n}`);
+	expect(await mentioned.subscribe(hook.url, "mention.created", { topic: "watched" }, fresh.cursor)).toMatchObject({
+		truncated: false,
+	});
 }, 120000);
 
 it("persists idle scan progress so a reload cannot re-emit an edited message", async (test) => {
