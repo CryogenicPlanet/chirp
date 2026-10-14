@@ -77,6 +77,28 @@ confirm it points here, so the domain must already reach the board through your 
 DNS. Loopback names such as `localhost` and IP addresses are refused as new domains unless
 the board itself runs on localhost.
 
+## GitHub and Google sign-in
+
+Once you have a passkey, you can link a GitHub or Google account on your account page; the sign-in page
+then offers it. Boot signs these accounts in through one sign-in service, `auth.chirp.wiki` by default.
+The board needs no client registration: the service fetches
+`https://<primary origin>/auth/oidc/client.json`, so the primary origin must be reachable from the
+internet. A domain added with a code can take five minutes to be accepted there, while the service's
+copy of that document expires.
+
+| Variable | Value |
+| --- | --- |
+| `OIDC_ISSUER` | The sign-in service, `https://auth.chirp.wiki` by default. `none` turns GitHub and Google sign-in off. https only, except `http://localhost` |
+| `OIDC_CLIENT_ID` | Optional. A client you registered with the service yourself; the board then serves no client document |
+| `OIDC_CLIENT_SECRET` | Optional, only with `OIDC_CLIENT_ID`. Boot sends it to the token endpoint and redacts it from logs; the app never sees it |
+
+An invalid value refuses startup. A linked account matches by the service and the account's id, never
+by email or username, so changing `OIDC_ISSUER` stops every linked account signing in; they stay listed
+on the account page for you to remove. Removing one signs out every other session.
+
+A linked account is not a way back in. It signs in only while one of your passkeys could sign in too,
+and it cannot add one or reopen setup. If you lose your passkeys, follow [When you cannot sign in](#when-you-cannot-sign-in).
+
 ## Updating
 
 The first start copies the app and page seeds onto the volume. Later starts keep what is
@@ -138,6 +160,8 @@ Try the non-destructive option first. The board accepts any origin at or under `
 if you are moving to a sibling host under the same registrable domain, keep `RP_ID` as it is
 and point `PUBLIC_ORIGIN` at the new host. Your existing passkeys keep working. This covers
 moving from one subdomain to another and is not a workaround; it is how the check is written.
+
+A linked GitHub or Google account does not help here: it never adds a passkey or reopens setup.
 
 If you are genuinely moving to a different registrable domain, or you have lost every
 passkey, reopen setup. On a managed host such as Railway, set `REOPEN_SETUP=1` on the service

@@ -18,6 +18,7 @@ import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { AuthError, type Auth, type AuthConfig } from "./auth.ts";
 import type { VerifiedIdentity } from "./enrollment.ts";
 import { configuredParties, validRelyingParty } from "./auth-origins.ts";
+import { validIssuer } from "./oidc-client.ts";
 import { PasskeyRegistrationResponse } from "./passkey-management-schema.ts";
 import { authClient, authPage } from "./auth-page.ts";
 
@@ -60,7 +61,7 @@ const policy = {
 	},
 	auth_configuration_invalid: {
 		status: 401,
-		hint: "Correct RP_ID and PUBLIC_ORIGIN, or PUBLIC_ORIGINS, in the boot configuration before authenticating.",
+		hint: "Correct RP_ID and PUBLIC_ORIGIN, or PUBLIC_ORIGINS, and OIDC_ISSUER, OIDC_CLIENT_ID and OIDC_CLIENT_SECRET, in the boot configuration before authenticating.",
 	},
 	authentication_failed: { status: 401, hint: "Use /setup for first setup or /auth/login to sign in." },
 	authentication_invalid: { status: 401, hint: "Use /setup for first setup or /auth/login to sign in." },
@@ -107,11 +108,35 @@ const policy = {
 		status: 409,
 		hint: "Keep the original request and Idempotency-Key together; use a new key only for a new operation.",
 	},
+	identity_exists: {
+		status: 409,
+		hint: "That GitHub or Google account is already linked to this board. Inspect GET /_boot/auth/identities.",
+	},
+	identity_not_found: {
+		status: 404,
+		hint: "No linked identity, or pending link of this session, matches that id. Inspect GET /_boot/auth/identities and start linking again from the account page.",
+	},
+	identity_not_linked: {
+		status: 403,
+		hint: "That GitHub or Google account is not linked to this board. Sign in with your passkey and link it from your account page first.",
+	},
 	invalid_request: {
 		status: 400,
 		hint: "Correct the JSON body and query using the documented authentication operation. New enrollment hosts and token labels must be 1–64 lowercase letters, digits, dot, underscore or hyphen, starting with a letter or digit.",
 	},
 	last_passkey: { status: 409, hint: "Register another passkey before deleting the last registered key." },
+	oidc_disabled: {
+		status: 404,
+		hint: "GitHub and Google sign-in is off for this board (OIDC_ISSUER=none). Sign in with your passkey.",
+	},
+	oidc_invalid: {
+		status: 401,
+		hint: "The sign-in response did not verify, expired or was already used. Start again from the sign-in or account page, in the same browser.",
+	},
+	oidc_unavailable: {
+		status: 503,
+		hint: "The sign-in service did not answer correctly. Sign in with your passkey, or try again later.",
+	},
 	origin_has_passkeys: {
 		status: 409,
 		hint: "Delete the passkeys bound to this origin's RP ID first; inspect /_boot/auth/passkeys.",
@@ -173,6 +198,9 @@ const policy = {
 		{ readonly status: number; readonly hint: string }
 	>
 >;
+/** The HTTP status boot answers a refusal with, for responses that are pages rather than JSON. */
+export const refusalStatus = (code: keyof typeof policy) => policy[code].status;
+
 export const authErrorResponse = (
 	code: keyof typeof policy,
 	status: number = policy[code].status,
@@ -254,11 +282,19 @@ export const authFailure = <E, R>(effect: Effect.Effect<HttpServerResponse.HttpS
 		}),
 	);
 
-/** Every configured origin must pass the relying-party rules, and no origin may be listed twice. */
+/** Every configured origin must pass the relying-party rules, and no origin may be listed twice. An issuer is https
+ * (http only for localhost); a client secret only goes with an operator-registered client id. */
 export const validateAuthConfig = (config: AuthConfig) => {
 	const parties = configuredParties(config);
+	const oidc = config.oidc;
+	const validOidc =
+		oidc === undefined ||
+		(validIssuer(oidc.issuer) &&
+			(oidc.clientId === undefined || /^[\x21-\x7e]{1,512}$/.test(oidc.clientId)) &&
+			(oidc.clientSecret === undefined || oidc.clientId !== undefined));
 	return parties.every(validRelyingParty) &&
-		new Set(parties.map((party) => party.expectedOrigin)).size === parties.length
+		new Set(parties.map((party) => party.expectedOrigin)).size === parties.length &&
+		validOidc
 		? Effect.void
 		: Effect.fail(new AuthError({ code: "auth_configuration_invalid" }));
 };
@@ -424,10 +460,11 @@ export const authRoute = (auth: Auth["Service"], requestId: string) =>
 
 					if (path === "/setup" && !setupOpen)
 						return HttpServerResponse.empty({ status: 404, headers: { "cache-control": "no-store" } });
-					return HttpServerResponse.text(authPage(path === "/setup" ? "setup" : "login"), {
-						contentType: "text/html",
-						headers: pageHeaders,
-					});
+					// Sign-in offers GitHub or Google only once an identity from it is linked; a read, no issuer call.
+					return HttpServerResponse.text(
+						path === "/setup" ? authPage("setup") : authPage("login", yield* auth.linkedProviders),
+						{ contentType: "text/html", headers: pageHeaders },
+					);
 				}
 				const party = yield* auth.relyingParty(request.headers.origin);
 				const ceremonies = auth.at(party);

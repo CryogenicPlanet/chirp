@@ -31,6 +31,8 @@ import { canonicalDecision, type EnrollmentDecision } from "./enrollment-schema.
 import { allowedParties, makeOriginManagement, passkeyOriginMismatch, type RelyingParty } from "./auth-origins.ts";
 import { makeActionAssertions, restartBinding } from "./action-assertions.ts";
 import { makePasskeyCodes } from "./passkey-code.ts";
+import { makeIdentityLinks } from "./identity-links.ts";
+import type { OidcConfig } from "./oidc-client.ts";
 import { Events } from "./events.ts";
 import { humanAgent } from "./human-agent.ts";
 import type { RemoveOrigin } from "./passkey-code-schema.ts";
@@ -42,6 +44,8 @@ export interface AuthConfig extends RelyingParty {
 	readonly originList?: boolean;
 	/** Operator recovery switch read by boot from its own environment: one setup may add a passkey while passkeys exist. */
 	readonly reopenSetup?: boolean;
+	/** Sign-in service for linked GitHub and Google identities; absent when the operator sets OIDC_ISSUER=none. */
+	readonly oidc?: OidcConfig;
 }
 
 export class AuthError extends Schema.TaggedError<AuthError>()("AuthError", {
@@ -68,8 +72,14 @@ export class AuthError extends Schema.TaggedError<AuthError>()("AuthError", {
 		"grant_forbidden",
 		"grant_invalid",
 		"idempotency_conflict",
+		"identity_exists",
+		"identity_not_found",
+		"identity_not_linked",
 		"invalid_request",
 		"last_passkey",
+		"oidc_disabled",
+		"oidc_invalid",
+		"oidc_unavailable",
 		"origin_has_passkeys",
 		"origin_last_passkey",
 		"origin_invalid",
@@ -122,7 +132,8 @@ const same = (left: string, right: string) => {
 const passkeyRecoveryHint =
 	"PUBLIC_ORIGINS gives each origin its hostname as RP ID, so it only keeps passkeys whose RP ID equals one of those hostnames; otherwise keep RP_ID and PUBLIC_ORIGIN. Fix it by restoring the previous origin variables, or recover by setting REOPEN_SETUP=1 and opening /setup with the code in this log, or by emptying boot's passkey table (DELETE FROM passkeys).";
 
-/** Boot-owned passkeys and sessions. No app code or external credential issuer is involved. */
+/** Boot-owned passkeys and sessions. No app code is involved. An optional sign-in issuer only vouches for a GitHub or
+ * Google identity the human linked with a passkey; boot itself issues every session and keeps every credential. */
 const makeAuth = (config: AuthConfig) =>
 	Effect.gen(function* () {
 		const sql = yield* SqlClient.SqlClient;
@@ -451,6 +462,13 @@ const makeAuth = (config: AuthConfig) =>
 			newSession,
 			mutex,
 		);
+		const identities = yield* makeIdentityLinks(
+			config,
+			(action, binding, proof) => verifyAssertion(proof.id, proof.response, action, binding),
+			newSession,
+			Effect.map(passkeyOriginState, (state) => state.stranded),
+			mutex,
+		);
 		const breakLock = yield* makeLockBreak(
 			(params: BreakLock, proof: AssertionProof) =>
 				verifyAssertion(proof.id, proof.response, "lock.break", canonicalLockBreak(params)),
@@ -552,6 +570,7 @@ const makeAuth = (config: AuthConfig) =>
 			deletePasskey: passkeys.deletePasskey,
 			listOrigins: origins.listOrigins,
 			...codes,
+			...identities,
 			...mint,
 			authorizeRestart,
 			authorizeSourceReset,

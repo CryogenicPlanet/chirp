@@ -18,6 +18,8 @@ const main = Effect.gen(function* () {
 		() => "https://comms.test",
 	);
 	const additional = yield* Config.option(Config.String("ADDITIONAL_ORIGIN"));
+	// Optional loopback sign-in issuer for linked-identity tests.
+	const oidcIssuer = yield* Config.option(Config.String("OIDC_ISSUER"));
 	return yield* boot({
 		dataDirectory,
 		seedDirectory: path.dirname(entry),
@@ -32,6 +34,7 @@ const main = Effect.gen(function* () {
 					rpId: new URL(origin).hostname,
 					expectedOrigin: origin,
 				})),
+			...Option.match(oidcIssuer, { onNone: () => ({}), onSome: (issuer) => ({ oidc: { issuer } }) }),
 		},
 	}).pipe(
 		Effect.provide(

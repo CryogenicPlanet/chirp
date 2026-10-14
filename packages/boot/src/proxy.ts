@@ -43,6 +43,7 @@ import { reachesAttempt } from "./internal-channel.ts";
 import { editRoute } from "./edit-http.ts";
 import { passkeyManagementRoute } from "./passkey-management-http.ts";
 import { passkeyCodeRoute } from "./passkey-code-http.ts";
+import { oidcCookie, oidcRoute } from "./oidc-http.ts";
 import { accountRoute } from "./account-http.ts";
 import { tokenMintRoute } from "./token-mint-http.ts";
 import { tokenRoute } from "./token-http.ts";
@@ -75,6 +76,9 @@ POST /_boot/tokens mints a pair with a human session and fresh token.mint assert
 GET /_boot/auth/passkeys lists keys; passkey.add and passkey.delete assertions authorize key changes.
 POST /_boot/auth/passkey-code {origin?} with a passkey.code assertion issues a 10-minute one-time code; redeem it at /auth/passkey-code.
 A code bound to a new origin activates that origin when redeemed there. GET/DELETE /_boot/auth/origins lists or removes runtime origins.
+GitHub and Google sign-in goes through OIDC_ISSUER (auth.chirp.wiki by default): POST /_boot/auth/oidc/start, then /auth/oidc/callback.
+GET /_boot/auth/identities lists linked accounts; linking and unlinking need identity.link and identity.unlink assertions.
+A linked account only opens a session. It is not a recovery path: passkeys and REOPEN_SETUP are the way back in.
 POST /_boot/tokens/:family/revoke requires a human session and fresh token.revoke passkey assertion.
 Extension grants: the live app asks boot to hold access for an agent; the human approves at /approve/<id>, and boot
 answers the app's calls naming that grant. Boot keeps the credential; revoke a grant like any token family.
@@ -429,6 +433,7 @@ export const proxy = Effect.gen(function* () {
 											Object.values(response.cookies.cookies).filter(
 												(cookie) =>
 													cookie.name !== sessionCookie &&
+													cookie.name !== oidcCookie &&
 													(ingress?.applicationManagedIngress !== true ||
 														cookie.name.startsWith(applicationCookiePrefix)),
 											),
@@ -510,6 +515,8 @@ export const proxy = Effect.gen(function* () {
 		if (restarted) return restarted;
 		const authResponse = yield* authRoute(auth, requestId);
 		if (authResponse) return authResponse;
+		const oidcResponse = yield* oidcRoute(auth, requestId);
+		if (oidcResponse) return oidcResponse;
 		const passkeyResponse = yield* passkeyManagementRoute(auth);
 		if (passkeyResponse) return passkeyResponse;
 		const passkeyCodeResponse = yield* passkeyCodeRoute(auth);

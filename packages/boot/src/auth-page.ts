@@ -1,7 +1,12 @@
 import { requestIdHeader } from "@comms/protocol/headers";
 import { authStyles, chirpMark } from "./auth-styles.ts";
-/** Immutable boot UI: it remains usable when editable app code cannot start. */
-export const authPage = (mode: "setup" | "login" | "code") => {
+import type { OidcProvider } from "./oidc-schema.ts";
+
+const providerNames = { github: "GitHub", google: "Google" } as const satisfies Record<OidcProvider, string>;
+
+/** Immutable boot UI: it remains usable when editable app code cannot start. Sign-in offers only the providers
+ * the human already linked; the passkey stays the way in. */
+export const authPage = (mode: "setup" | "login" | "code", providers: ReadonlyArray<OidcProvider> = []) => {
 	const setup = mode !== "login";
 	const heading = mode === "setup" ? "Create your passkey" : mode === "code" ? "Add a passkey" : "Welcome back";
 	const intro =
@@ -18,7 +23,7 @@ export const authPage = (mode: "setup" | "login" | "code") => {
 <main class="auth-shell"><a class="brand" href="/">${chirpMark}chirp<span>.</span></a><h1>${heading}</h1>
 <p>${intro}</p>
 <form id="auth" data-mode="${mode}">${setup ? `<label for="code">${mode === "code" ? "One-time code" : "Setup code"}</label><input id="code" name="code" required autocomplete="off" spellcheck="false">` : ""}
-<button type="submit">${setup ? "Create passkey" : "Sign in with passkey"}</button></form>
+<button type="submit">${setup ? "Create passkey" : "Sign in with passkey"}</button></form>${mode === "login" ? providers.map((provider) => `<button class="provider" type="button" data-provider="${provider}">Continue with ${providerNames[provider]}</button>`).join("") : ""}
 <p id="status" role="status" aria-live="polite"></p><a href="/_boot">Recovery help</a></main>
 <script src="/_boot/auth/client.js" defer></script></html>`;
 };
@@ -40,6 +45,25 @@ export const authClient = `(() => {
  let stage = "browser", requestId = "", errorCode = "";
  const rawNext = new URLSearchParams(window.location.search).get("next");
  const next = safeNext(rawNext);
+ // A linked GitHub or Google account signs in through the board's issuer. The page asks boot for the address with
+ // JSON and navigates itself, because a form redirect to another origin breaks form-action 'self'.
+ for (const choice of document.querySelectorAll("button[data-provider]")) choice.addEventListener("click", async () => {
+  choice.disabled = true; status.textContent = "Opening the sign-in service…";
+  try {
+   let response;
+   try { response = await fetch("/_boot/auth/oidc/start", {method:"POST", redirect:"manual", headers:{"content-type":"application/json"}, body:JSON.stringify({intent:"login", provider:choice.dataset.provider, next})}); }
+   catch { throw new Error("The sign-in request could not reach the board. Check your connection."); }
+   const result = await response.json().catch(() => null);
+   const target = result && typeof result.authorization_url === "string" ? result.authorization_url : "";
+   if (!response.ok || !(target.startsWith("https://") || target.startsWith("http://"))) {
+    const messages = {oidc_unavailable:"The sign-in service is unavailable right now. Sign in with your passkey.", oidc_disabled:"GitHub and Google sign-in is off for this board. Sign in with your passkey.", origin_invalid:"This address is not an allowed origin for this board.", setup_required:"Create your first passkey at /setup.", passkey_origin_mismatch:"No passkey on this board belongs to an address it serves, so linked accounts cannot sign in either. Ask the operator to restore the previous address settings or reopen setup."};
+    const code = result?.error?.code;
+    throw new Error((typeof code === "string" && Object.hasOwn(messages, code) ? messages[code] : null) || "Sign-in was refused (HTTP " + response.status + "). Sign in with your passkey.");
+   }
+   window.location.assign(target);
+  } catch (error) { status.textContent = error instanceof Error ? error.message : "Sign-in failed. Sign in with your passkey."; }
+  finally { choice.disabled = false; }
+ });
  const progress = (value, message) => { stage = value; status.textContent = message; };
  const post = async (path, body, step) => {
   requestId = ""; errorCode = "";

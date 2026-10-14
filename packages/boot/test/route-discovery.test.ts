@@ -28,6 +28,21 @@ it("serves immutable recovery metadata without opening authentication or app sto
 		"get.description",
 		expect.stringContaining("verified human session"),
 	);
+	// GitHub and Google sign-in: the client document and callback are public, identities need the human session.
+	expect(manifest.endpoints["/auth/oidc/client.json"]).toHaveProperty("get.security", []);
+	expect(manifest.endpoints["/auth/oidc/callback"]).toHaveProperty(
+		"get.description",
+		expect.stringContaining("not a recovery path"),
+	);
+	for (const method of ["get", "post"])
+		expect(manifest.endpoints["/_boot/auth/identities"]).toHaveProperty(`${method}.security`, [
+			{ commsBootSession: [] },
+		]);
+	expect(manifest.endpoints["/_boot/auth/identities/{id}"]).toHaveProperty("delete.parameters.0.name", "id");
+	expect(manifest.endpoints["/_boot/auth/challenge"]).toHaveProperty(
+		"post.description",
+		expect.stringContaining("identity.unlink"),
+	);
 	expect(manifest.endpoints["/_boot/seq"]).toBeUndefined();
 	expect(manifest.endpoints["/_boot/events/append"]).toBeUndefined();
 	expect(manifest.endpoints["/api/messages"]).toBeUndefined();
