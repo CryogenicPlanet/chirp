@@ -46,12 +46,12 @@ it(
 );
 
 it(
-	"asks Google for openid email and sends no upstream nonce",
+	"asks Google for openid email with a nonce",
 	withHarness(async (h) => {
 		const upstream = location(await h.request(authorizeQuery(h.clients.board(), challenge, { provider: "google" })));
 		expect(upstream.searchParams.get("scope")).toBe("openid email");
 		expect(upstream.searchParams.get("response_type")).toBe("code");
-		expect(upstream.searchParams.has("nonce")).toBe(false);
+		expect(upstream.searchParams.get("nonce")).toMatch(/^[A-Za-z0-9_-]{22}$/);
 		expect(upstream.searchParams.get("redirect_uri")).toBe(`${issuer}/callback/google`);
 	}),
 );

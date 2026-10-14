@@ -64,11 +64,8 @@ const make = (endpoints: Endpoints) =>
 					Effect.mapError(() => new UpstreamError({ provider, step })),
 				);
 
-		/**
-		 * GitHub needs no scope to read the public profile; Google needs `openid email`. No nonce goes upstream: the
-		 * identity comes from the user endpoint over TLS, never from an upstream ID token.
-		 */
-		const authorizeUrl = (provider: Provider, params: { state: string; challenge: string }) => {
+		/** GitHub needs no scope to read the public profile; Google needs `openid email`. */
+		const authorizeUrl = (provider: Provider, params: { state: string; challenge: string; nonce: string }) => {
 			const url = new URL(endpoints[provider].authorize);
 			const query: Record<string, string> = {
 				client_id: settings[provider].clientId,
@@ -76,7 +73,8 @@ const make = (endpoints: Endpoints) =>
 				state: params.state,
 				code_challenge: params.challenge,
 				code_challenge_method: "S256",
-				...(provider === "google" ? { response_type: "code", scope: "openid email" } : {}),
+				// Google lists nonce as required; it is never checked, since identity comes from userinfo, not Google's ID token.
+				...(provider === "google" ? { response_type: "code", scope: "openid email", nonce: params.nonce } : {}),
 			};
 			for (const [name, value] of Object.entries(query)) url.searchParams.set(name, value);
 			return url.href;

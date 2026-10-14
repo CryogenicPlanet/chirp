@@ -181,6 +181,7 @@ export const authorizeRoute = finish(
 		const location = (yield* Upstream).authorizeUrl(provider, {
 			state: upstreamState,
 			challenge: yield* s256(upstreamVerifier),
+			nonce: yield* randomToken(16),
 		});
 		return HttpServerResponse.redirect(location, {
 			status: 303,

@@ -28,6 +28,7 @@ const identify = async (fake: Fake, provider: Upstream.Provider, options: { veri
 			return (yield* Upstream.Upstream).authorizeUrl(provider, {
 				state: "upstream-state",
 				challenge: s256(upstreamVerifier),
+				nonce: "upstream-nonce",
 			});
 		}),
 	);
