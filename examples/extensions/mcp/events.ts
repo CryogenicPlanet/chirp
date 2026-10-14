@@ -32,6 +32,11 @@ const verificationWindow = 10 * 60 * 1000;
 const excerpt = 4000;
 /** A replay delivers at most this many of the newest missed messages; `truncated` says an older one was skipped. */
 const replayLimit = 100;
+/**
+ * An idle subscription moves its cursor to the board's head only once it trails by this many sequence numbers. Every
+ * board request advances the head, so moving on each one would cost a write per subscription per request.
+ */
+const idleCheckpoint = 1000;
 
 const payloadSchema = {
 	type: "object",
@@ -478,8 +483,13 @@ export const installEvents = (api: Api, origin: string) =>
 								? Effect.succeed(error.code)
 								: Effect.fail(error),
 						),
+						// The topic view also reads the topic's pages, which refuse some valid topic names such as node_modules.
+						Effect.catchTag("PageRejected", (error) => Effect.succeed(error.code)),
 					);
-					if (missing === "input_invalid") return invalid("topic must be a board topic path");
+					if (missing === "input_invalid" || missing === "page_path_invalid")
+						return invalid("topic must be a board topic path that can be read");
+					if (missing === "pages_unavailable")
+						return failure(-32603, "Internal error", { retriable: true, reason: "pages_unavailable" });
 					if (missing !== null) return failure(-32011, "NotFound", { kind: "topic", topic });
 				}
 				const id = subscriptionId(caller.clientId, target.href, name, filter.value);
@@ -710,7 +720,8 @@ export const installEvents = (api: Api, origin: string) =>
 					yield* checkpoint(ctx, row.id, row.agent, position, message.seq, 0, 0, error);
 					position = message.seq;
 				}
-				if (page.cursor > position) {
+				// Past what this page scanned; when it scanned nothing, only once the gap is worth a write.
+				if (page.cursor > position && (page.items.length > 0 || page.cursor - position >= idleCheckpoint)) {
 					const at = yield* Clock.currentTimeMillis;
 					const current = yield* live(ctx, row.id, position, at);
 					if (current && current.agent === row.agent) {
@@ -719,6 +730,23 @@ export const installEvents = (api: Api, origin: string) =>
 				}
 				return { wake: now + 60_000, backlog: page.items.length === 16 };
 			});
+
+		/** One subscription's failure backs off only that subscription for a minute; the others keep delivering. */
+		const isolated = (ctx: BackgroundContext, row: typeof Row.Type, now: number) =>
+			drain(ctx, row, now).pipe(
+				Effect.exit,
+				Effect.flatMap((exit) =>
+					Effect.gen(function* () {
+						if (exit._tag === "Success") return exit.value;
+						if (Cause.hasInterruptsOnly(exit.cause)) return yield* Effect.interrupt;
+						const wake = (yield* Clock.currentTimeMillis) + 60_000;
+						yield* ctx
+							.mutate(ctx.db`UPDATE example_mcp_events SET next_attempt=${wake} WHERE id=${row.id}`)
+							.pipe(Effect.ignore);
+						return { wake, backlog: false };
+					}),
+				),
+			);
 
 		/** Messages are read through the public message query, so delivery sees exactly what the board has published. */
 		const run = (ctx: BackgroundContext) =>
@@ -729,7 +757,7 @@ export const installEvents = (api: Api, origin: string) =>
 						const now = yield* Clock.currentTimeMillis;
 						yield* ctx.mutate(ctx.db`DELETE FROM example_mcp_events WHERE refresh_before<=${now}`);
 						// Subscriptions drain concurrently so one slow callback cannot hold up the others.
-						const results = yield* Effect.forEach(yield* rows(ctx), (row) => drain(ctx, row, now), {
+						const results = yield* Effect.forEach(yield* rows(ctx), (row) => isolated(ctx, row, now), {
 							concurrency: 8,
 						});
 						if (results.some((result) => result.backlog)) return;

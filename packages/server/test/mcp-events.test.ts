@@ -272,7 +272,15 @@ it("watches a topic with or without its subtopics and never delivers the connect
 	await post("plans", "kickoff");
 	await post("plans/backend", "api notes");
 	await post("elsewhere", "noise");
-	for (const args of [undefined, {}, { topic: "" }, { topic: "Plans!" }, { topic: "plans", channel: "x" }])
+	// node_modules is a valid topic name, but the topic view cannot read pages under it.
+	for (const args of [
+		undefined,
+		{},
+		{ topic: "" },
+		{ topic: "Plans!" },
+		{ topic: "node_modules" },
+		{ topic: "plans", channel: "x" },
+	])
 		expect(await watcher.refused(hook.url, "message.created", args), JSON.stringify(args)).toMatchObject({
 			code: -32602,
 		});
@@ -546,4 +554,73 @@ it("keeps delivering mention subscriptions created before events took arguments"
 	expect((await legacy.subscribe(hook.url, "mention.created", {})).id).toBe(id);
 	expect(hook.verifications()).toHaveLength(0);
 	expect(await fixture.sql(`SELECT COUNT(*) AS count FROM example_mcp_events`)).toEqual([{ count: 1 }]);
+}, 60000);
+
+it("pages of the connection's own grant posts neither stall the cursor nor skip other agents' messages", async (test) => {
+	const { fixture, app, cookie, post } = await installed(test);
+	const kickoff = await post("plans", "kickoff");
+	const granted = await authorize(app, cookie, "Granted client", "grant-bot", true);
+	const other = await authorize(app, cookie, "Other client", "other-bot", false);
+	const hook = await receiver(test);
+	const own = async (prefix: string, count: number) => {
+		for (let n = 0; n < count; n++)
+			expect(await granted.post("plans", `@here own ${prefix}${n}`, `own-${prefix}-${n}`)).toMatchObject({
+				result: { structuredContent: { instance: expect.stringMatching(/^f_/) } },
+			});
+	};
+	// Replaying from kickoff makes the 16-message pages deterministic: 15 own and another agent's post, then 16 own (a
+	// full page that matches nothing), then another agent's post and 15 own, then one own and the human's.
+	await own("a", 15);
+	await other.post("plans", "@here other 1", "other-1");
+	await own("b", 16);
+	await other.post("plans", "@here other 2", "other-2");
+	await own("c", 16);
+	const last = await post("plans", "@here human last");
+	const mentions = await granted.subscribe(hook.url, "mention.created", {}, String(kickoff.seq));
+	const watch = await granted.subscribe(hook.url, "message.created", { topic: "plans" }, String(kickoff.seq));
+	for (const subscribed of [mentions, watch])
+		expect(subscribed).toMatchObject({ cursor: String(kickoff.seq), truncated: false });
+	await eventually(() => [mentions.id, watch.id].every((id) => hook.texts(id).includes("@here human last")));
+	for (const id of [mentions.id, watch.id])
+		expect(hook.texts(id)).toEqual(["@here other 1", "@here other 2", "@here human last"]);
+	const rows = decode(
+		Schema.Array(Schema.Struct({ position: Schema.Finite, attempts: Schema.Finite })),
+		await fixture.sql("SELECT position,attempts FROM example_mcp_events"),
+	);
+	expect(rows).toHaveLength(2);
+	for (const row of rows) {
+		expect(row.position).toBeGreaterThanOrEqual(last.seq);
+		expect(row.attempts).toBe(0);
+	}
+}, 120000);
+
+it("leaves idle cursors alone between board requests and backs off only a subscription that fails", async (test) => {
+	const { fixture, app, cookie, post } = await installed(test);
+	const client = await authorize(app, cookie, "Isolated client", "iso-bot", false);
+	const hook = await receiver(test);
+	await post("iso", "setup");
+	const mentions = await client.subscribe(hook.url, "mention.created", {});
+	const stored = async (id: string) =>
+		decode(
+			Schema.Array(Schema.Struct({ position: Schema.Finite, next_attempt: Schema.Finite })),
+			await fixture.sql(`SELECT position,next_attempt FROM example_mcp_events WHERE id='${id}'`),
+		)[0];
+	// Board requests advance the head and wake delivery, but an idle subscription does not write on each one.
+	for (let n = 0; n < 20; n++) await fetch(`${app.url}/api/messages?since=0`, { headers: { cookie } });
+	await delay(1000);
+	const later = await client.subscribe(hook.url, "message.created", { topic: "iso" });
+	expect(Number(later.cursor)).toBeGreaterThan(Number(mentions.cursor));
+	expect((await stored(mentions.id))?.position).toBe(Number(mentions.cursor));
+
+	// A row the board refuses to query backs off alone, and the healthy subscriptions still deliver.
+	await fixture.sql(
+		`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,previous_secret_until,refresh_before,verified_at,position,attempts,next_attempt,last_error,event_name,topic,subtopics) VALUES('sub_broken','${client.clientId}','iso-bot','extension:mcp:${client.clientId}','${hook.url}','${secret}',NULL,NULL,${Date.now() + 3600000},${Date.now()},0,0,0,NULL,'message.created','Not A Topic',1)`,
+	);
+	await post("iso", "@iso-bot still delivered");
+	await eventually(
+		() =>
+			hook.texts(mentions.id).includes("@iso-bot still delivered") &&
+			hook.texts(later.id).includes("@iso-bot still delivered"),
+	);
+	expect((await stored("sub_broken"))?.next_attempt).toBeGreaterThan(Date.now());
 }, 60000);
