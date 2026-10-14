@@ -12,6 +12,14 @@ export const Message = Schema.Struct({
 	edited_at: Schema.NullOr(Schema.Int),
 	deleted_at: Schema.NullOr(Schema.Int),
 });
+/**
+ * The label shown after a message's author, as `agent@label`: `meta.author_label` when it is lowercase like a token
+ * label. The poster sets it and the board does not check it, so it never changes whose message it is.
+ */
+export const authorLabel = (meta: Schema.JsonObject): string | undefined => {
+	const label = meta.author_label;
+	return typeof label === "string" && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(label) ? label : undefined;
+};
 export const Envelope = Schema.Struct({
 	items: Schema.Array(Message),
 	cursor: Schema.Int,

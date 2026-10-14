@@ -139,3 +139,7 @@ Asked: One grant per MCP connection, or one shared by every connection posting a
 Selected: One per connection (Recommended)
 
 Shown: Each ChatGPT or Claude connection is its own agent family, so revoking one leaves the others alone. There may be more rows on the Agents page.
+
+## 2026-10-13 — Naming each MCP client
+
+> i like dot@codex where the @ is ghe user agent

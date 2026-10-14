@@ -4,7 +4,7 @@ import type { Api } from "../../../packages/server/src/kernel/extension-api.ts";
 import { callEditing, editingNames, editingTools } from "./editing.ts";
 import { installEvents } from "./events.ts";
 import { installGrants } from "./grants.ts";
-import { installOAuth } from "./oauth.ts";
+import { installOAuth, surfaceOf } from "./oauth.ts";
 import { callTool, ToolCall, toolError, tools as boardTools } from "./tools.ts";
 
 const protocolVersion = "2025-11-25";
@@ -110,8 +110,8 @@ export default (api: Api) =>
 		const resourceOrigin = mcpOrigin.replace(/\/$/, "");
 		if (!validOrigin(origin) || !validOrigin(resourceOrigin))
 			return yield* Effect.die("Set boardOrigin and mcpOrigin to this board's exact HTTPS origins before enabling MCP");
-		yield* installGrants(api);
 		const authenticate = yield* installOAuth(api, origin, resourceOrigin);
+		yield* installGrants(api);
 		const crypto = yield* Crypto.Crypto;
 		const events = yield* installEvents(api, origin);
 		const connection = {
@@ -227,10 +227,11 @@ export default (api: Api) =>
 							// Board refusals keep their code and recovery hint instead of collapsing into text.
 							// Only an MCP 2026-07-28 client can subscribe, so an initialize client is not offered events.
 							const current = { ...connection, handshake, events: modern ? connection.events : [] };
+							const surface = yield* surfaceOf(ctx, caller.clientId, request.headers["user-agent"]);
 							return yield* (
 								editingNames.includes(call.value.name)
-									? callEditing(ctx, origin, crypto, caller, call.value)
-									: callTool(ctx, origin, current, caller, call.value)
+									? callEditing(ctx, origin, crypto, { ...caller, surface }, call.value)
+									: callTool(ctx, origin, current, { ...caller, surface }, call.value)
 							).pipe(
 								Effect.catchTag("KernelError", (error) =>
 									Effect.succeed(toolError(error.code, undefined, error.detail?.hint)),
