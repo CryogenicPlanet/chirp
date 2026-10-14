@@ -186,7 +186,39 @@ const client = (app: App, token: string) => {
 			),
 		post: async (topic: string, body: string, key: string) =>
 			call("tools/call", { name: "post_message", arguments: { topic, body, idempotencyKey: key } }),
+		edit: async (name: string, args: Readonly<Record<string, unknown>> = {}) =>
+			call("tools/call", { name, arguments: args }),
 	};
+};
+
+/** Revokes the connection's live mcp grant, as the human would from the token list. */
+const revokeGrant = async (app: App, cookie: string, agent: string) => {
+	const families = decode(
+		Schema.Struct({
+			items: Schema.Array(
+				Schema.Struct({
+					family: Schema.String,
+					agent: Schema.String,
+					held_by: Schema.NullOr(Schema.String),
+					revoked: Schema.Boolean,
+				}),
+			),
+		}),
+		await (await fetch(`${app.url}/_boot/tokens`, { headers: { cookie } })).json(),
+	).items.filter((item) => item.held_by === "mcp" && item.agent === agent && !item.revoked);
+	expect(families).toHaveLength(1);
+	const family = families[0]?.family ?? "";
+	const revoked = await fetch(`${app.url}/_boot/tokens/${family}/revoke`, {
+		method: "POST",
+		headers: {
+			cookie,
+			origin: "https://comms.test",
+			"content-type": "application/json",
+			[assertionHeader]: await app.revocationAssertion(family, cookie),
+		},
+		body: "{}",
+	});
+	expect(revoked.status).toBe(200);
 };
 
 /** A webhook endpoint that echoes verification challenges and records each delivered event with its subscription. */
@@ -393,6 +425,26 @@ it("never delivers posts the connection made through its editing grant, while ot
 	expect(new Set(same.map((event) => event.eventId))).toEqual(
 		new Set([`evt_${mentions.id}_${same[0]?.cursor}`, `evt_${watch.id}_${same[0]?.cursor}`]),
 	);
+}, 120000);
+
+it("does not replay posts from a replaced editing grant", async (test) => {
+	const { app, cookie, post } = await installed(test);
+	const kickoff = await post("plans", "kickoff");
+	const granted = await authorize(app, cookie, "Granted client", "grant-bot", true);
+	const other = await authorize(app, cookie, "Other client", "other-bot", false);
+	const hook = await receiver(test);
+	expect(await granted.post("plans", "@here from the first grant", "own-1")).toMatchObject({
+		result: { structuredContent: { instance: expect.stringMatching(/^f_/) } },
+	});
+	await other.post("plans", "@here from another connection", "other-1");
+	await revokeGrant(app, cookie, "grant-bot");
+	expect(await granted.edit("request_editing")).toMatchObject({
+		result: { structuredContent: { status: "pending" } },
+	});
+	const mentions = await granted.subscribe(hook.url, "mention.created", {}, String(kickoff.seq));
+	await post("plans", "@here after replacement");
+	await eventually(() => hook.texts(mentions.id).includes("@here after replacement"));
+	expect(hook.texts(mentions.id)).toEqual(["@here from another connection", "@here after replacement"]);
 }, 120000);
 
 it("narrows mention events to a topic while the whole-board subscription keeps its id", async (test) => {

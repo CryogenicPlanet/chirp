@@ -12,6 +12,8 @@ import type { Identity } from "./identity.ts";
 
 export interface MessageQuery {
 	readonly since?: number;
+	/** Exclusive upper bound: only messages with `seq < before`. */
+	readonly before?: number;
 	readonly topic?: string;
 	readonly recursive?: boolean;
 	readonly limit: number;
@@ -21,6 +23,8 @@ export interface MessageQuery {
 	readonly agent?: string;
 	readonly q?: string;
 	readonly mentions?: ReadonlyArray<string>;
+	/** When set, topic and mentions must both match instead of OR. */
+	readonly all?: boolean;
 }
 /**
  * Names a post made without a signed-in caller, such as one relayed from an MCP client.

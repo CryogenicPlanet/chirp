@@ -136,7 +136,9 @@ const Row = Schema.Struct({
 	grant_family: Schema.NullOr(Schema.String),
 });
 const Count = Schema.Array(Schema.Struct({ count: Schema.Finite }));
-const Family = Schema.Array(Schema.Struct({ family: Schema.NullOr(Schema.String) }));
+const Family = Schema.Array(
+	Schema.Struct({ family: Schema.NullOr(Schema.String), families: Schema.NullOr(Schema.String) }),
+);
 const Filter = Schema.Struct({
 	topic: Schema.optionalKey(Schema.String),
 	recursive: Schema.optionalKey(Schema.Boolean),
@@ -232,15 +234,14 @@ const selection = (name: EventName, agent: string, topic: string | null, subtopi
 /** Whether a message's topic is the subscription's topic, or under it when subtopics are included. */
 const within = (topic: string | null, subtopics: boolean, candidate: string) =>
 	topic === null || candidate === topic || (subtopics && candidate.startsWith(`${topic}/`));
-/** Grant families this subscription must treat as its own, including one retained after a replacement. */
-const familiesOf = (...values: ReadonlyArray<string | null>) => [
-	...new Set(values.filter((value): value is string => value !== null)),
+/** Grant families this subscription must treat as its own, including ones retained after a replacement. */
+const familiesOf = (...values: ReadonlyArray<string | null | undefined>) => [
+	...new Set(
+		values.flatMap((value) =>
+			value == null || value === "" ? [] : value.split(" ").filter((item) => item.length > 0),
+		),
+	),
 ];
-/** Whether the published body names this connection or @here, for a topic-scoped mention existence read. */
-const mentioned = (body: string, agent: string) => {
-	const names = new Set([...body.matchAll(/@[a-z0-9][a-z0-9._-]*/g)].map((match) => match[0].replace(/[._-]+$/, "")));
-	return names.has(`@${agent}`) || names.has("@here");
-};
 /** The subscription's full delivery predicate: not this connection's grant posts, and inside its topic filter. */
 const matches = (topic: string | null, subtopics: boolean, families: ReadonlyArray<string>, item: Message) =>
 	!families.includes(item.instance) && within(topic, subtopics, item.topic);
@@ -551,8 +552,7 @@ export const installEvents = (api: Api, origin: string) =>
 				}
 				const verifiedAt = cached?.verified_at ?? now;
 				const subtopics = filter.value.recursive !== false;
-				const liveFamily = yield* grantFamily(ctx, caller.clientId, agent);
-				const families = familiesOf(liveFamily);
+				const families = yield* grantFamilies(ctx, caller.clientId, agent);
 				// A replay is bounded by the messages it would deliver, not by board sequence numbers, and is worked out only
 				// for a subscribe that creates the row. If the row vanishes before the mutation below anyway, the insert
 				// starts at the fence and reports truncated whenever the client was behind.
@@ -573,34 +573,43 @@ export const installEvents = (api: Api, origin: string) =>
 							if (over !== undefined) return { position: over.seq, truncated: true };
 							const oldest = window.items.length === replayScan ? window.items[0] : undefined;
 							if (oldest === undefined) return { position: since, truncated: false };
-							// Truncation looks at one older page, the same 200-candidate bound as the newest window. A full page
-							// that ends before oldest may still meet it; the next page is truncated only when a match is in that gap.
-							const page = yield* ctx.messages.query({
-								since,
-								limit: replayScan,
-								exclude: instance,
-								...selection(name, agent, topic, subtopics),
-							});
-							if (page.items.some((item) => item.seq < oldest.seq && matches(topic, subtopics, families, item)))
-								return { position: oldest.seq - 1, truncated: true };
-							const last = page.items.at(-1);
-							if (last === undefined || last.seq >= oldest.seq || page.items.length < replayScan)
-								return { position: oldest.seq - 1, truncated: false };
-							// Broad mention pages can leave a match past the next 200. A topic-scoped read covers the
-							// remaining range for a watch; a mention-only watch is already the delivery set.
-							const gap = yield* ctx.messages.query({
-								since: last.seq,
-								limit: replayScan,
-								exclude: instance,
-								...(topic !== null ? { topic, recursive: subtopics } : selection(name, agent, topic, subtopics)),
-							});
-							return {
-								position: oldest.seq - 1,
-								truncated: gap.items.some((item) => {
-									if (item.seq >= oldest.seq || !matches(topic, subtopics, families, item)) return false;
-									return name === messageEvent || topic === null || mentioned(item.body, agent);
-								}),
-							};
+							// One existence page uses the subscription's delivery filters over the whole skipped range, so a
+							// topic mention past three broad candidate pages is still found without walking mention history.
+							const exists = (from: number) =>
+								ctx.messages
+									.query({
+										since: from,
+										before: oldest.seq,
+										limit: replayScan,
+										exclude: instance,
+										...(name === mentionEvent
+											? {
+													mentions: [`@${agent}`, "@here"],
+													...(topic === null ? {} : { topic, recursive: subtopics, all: true }),
+												}
+											: topic === null
+												? { mentions: [`@${agent}`, "@here"] }
+												: { topic, recursive: subtopics }),
+									})
+									.pipe(
+										Effect.map((page) => ({
+											hit: page.items.some((item) => matches(topic, subtopics, families, item)),
+											last: page.items.at(-1),
+											full: page.items.length === replayScan,
+										})),
+									);
+							let from = since;
+							let skipped = false;
+							while (true) {
+								const page = yield* exists(from);
+								if (page.hit) {
+									skipped = true;
+									break;
+								}
+								if (page.last === undefined || !page.full) break;
+								from = page.last.seq;
+							}
+							return { position: oldest.seq - 1, truncated: skipped };
 						});
 				const sql = ctx.db;
 				// Mutations serialize on the board's writer lock, so the existence and limit checks cannot race.
@@ -617,7 +626,8 @@ export const installEvents = (api: Api, origin: string) =>
 							const previous = rotating ? existing.secret : existing.previous_secret;
 							const previousUntil = rotating ? now + secretOverlap : existing.previous_secret_until;
 							const resetRetries = existing.agent !== agent ? 0 : existing.attempts;
-							yield* sql`UPDATE example_mcp_events SET agent=${agent},previous_secret=${previous},previous_secret_until=${previousUntil},secret=${input.delivery.secret},refresh_before=${refreshBefore},verified_at=${verifiedAt},attempts=${resetRetries},next_attempt=0,grant_family=${liveFamily ?? existing.grant_family} WHERE id=${id}`;
+							const storedFamily = existing.grant_family ?? families[0] ?? null;
+							yield* sql`UPDATE example_mcp_events SET agent=${agent},previous_secret=${previous},previous_secret_until=${previousUntil},secret=${input.delivery.secret},refresh_before=${refreshBefore},verified_at=${verifiedAt},attempts=${resetRetries},next_attempt=0,grant_family=${storedFamily} WHERE id=${id}`;
 							return { position: existing.position, truncated: false };
 						}
 						const clientCount =
@@ -629,7 +639,7 @@ export const installEvents = (api: Api, origin: string) =>
 							Effect.flatMap(decodeCount),
 						);
 						if (boardCount >= perBoard) return { limit: perBoard };
-						yield* sql`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,previous_secret_until,refresh_before,verified_at,position,attempts,next_attempt,last_error,event_name,topic,subtopics,grant_family) VALUES(${id},${caller.clientId},${agent},${instance},${target.href},${input.delivery.secret},NULL,NULL,${refreshBefore},${verifiedAt},${start.position},0,0,NULL,${name},${topic},${subtopics ? 1 : 0},${liveFamily})`;
+						yield* sql`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,previous_secret_until,refresh_before,verified_at,position,attempts,next_attempt,last_error,event_name,topic,subtopics,grant_family) VALUES(${id},${caller.clientId},${agent},${instance},${target.href},${input.delivery.secret},NULL,NULL,${refreshBefore},${verifiedAt},${start.position},0,0,NULL,${name},${topic},${subtopics ? 1 : 0},${families[0] ?? null})`;
 						return start;
 					}),
 				);
@@ -669,15 +679,15 @@ export const installEvents = (api: Api, origin: string) =>
 					sql`SELECT COUNT(*) AS count FROM example_mcp_oauth WHERE client_id=${clientId} AND (kind='access' OR kind='refresh') AND expires_at>${now}`,
 			).pipe(Effect.map((total) => total > 0));
 
-		/** The subscription's grant family: the row for this client and posting name, not a later re-consent. */
-		const grantFamily = (ctx: Store, clientId: string, agent: string) =>
+		/** Families this client and posting name have used, including ones kept after a replacement request. */
+		const grantFamilies = (ctx: Store, clientId: string, agent: string) =>
 			ctx
 				.read(() =>
-					ctx.db`SELECT family FROM example_mcp_grants WHERE client_id=${clientId} AND agent=${agent}`.pipe(
+					ctx.db`SELECT family,families FROM example_mcp_grants WHERE client_id=${clientId} AND agent=${agent}`.pipe(
 						Effect.flatMap(Schema.decodeUnknownEffect(Family)),
 					),
 				)
-				.pipe(Effect.map((found) => found[0]?.family ?? null));
+				.pipe(Effect.map((found) => familiesOf(found[0]?.family, found[0]?.families)));
 
 		const deliver = (row: typeof Row.Type, message: Message) =>
 			Effect.gen(function* () {
@@ -765,11 +775,11 @@ export const installEvents = (api: Api, origin: string) =>
 					exclude: row.instance,
 					limit: 16,
 				});
-				const liveFamily = page.items.length === 0 ? null : yield* grantFamily(ctx, row.client_id, row.agent);
-				const families = familiesOf(row.grant_family, liveFamily);
-				if (liveFamily !== null && liveFamily !== row.grant_family)
+				const held = page.items.length === 0 ? [] : yield* grantFamilies(ctx, row.client_id, row.agent);
+				const families = familiesOf(row.grant_family, ...held);
+				if (row.grant_family === null && held[0] !== undefined)
 					yield* ctx.mutate(
-						ctx.db`UPDATE example_mcp_events SET grant_family=${liveFamily} WHERE id=${row.id} AND agent=${row.agent} AND position=${row.position}`,
+						ctx.db`UPDATE example_mcp_events SET grant_family=${held[0]} WHERE id=${row.id} AND agent=${row.agent} AND position=${row.position}`,
 					);
 				let position = row.position;
 				let attempts = row.attempts;

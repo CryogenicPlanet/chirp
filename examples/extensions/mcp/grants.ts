@@ -13,6 +13,7 @@ const Row = Schema.Struct({
 	code: Schema.NullOr(Schema.String),
 	agent: Schema.String,
 	family: Schema.NullOr(Schema.String),
+	families: Schema.NullOr(Schema.String),
 	scopes: Schema.String,
 	status: Schema.Literals(["pending", "active", "expired", "revoked", "denied"]),
 	expires_at: Schema.Finite,
@@ -78,11 +79,23 @@ export const installGrants = (api: Api) =>
 			}),
 			{ protect: true },
 		);
+		yield* api.migrate(
+			"grant_prior_families",
+			on(sql, {
+				sqlite: () => "ALTER TABLE example_mcp_grants ADD COLUMN families TEXT",
+				pg: () => "ALTER TABLE example_mcp_grants ADD COLUMN families TEXT",
+				mysql: () => "ALTER TABLE example_mcp_grants ADD COLUMN families LONGTEXT",
+			}),
+			{ skipIfColumnExists: { table: "example_mcp_grants", column: "families" } },
+		);
 	});
 
+const listed = (value: string | null) => (value ?? "").split(" ").filter((item) => item.length > 0);
+const retained = (...values: ReadonlyArray<string | null | undefined>) =>
+	[...new Set(values.flatMap((value) => (value == null || value === "" ? [] : listed(value))))].join(" ") || null;
 /** The connection's row, whichever identity it was requested for. */
 const connectionRow = (ctx: Context, clientId: string) =>
-	ctx.db`SELECT client_id,subject,request_id,approve_url,code,agent,family,scopes,status,expires_at,created_at,updated_at FROM example_mcp_grants WHERE client_id=${clientId}`.pipe(
+	ctx.db`SELECT client_id,subject,request_id,approve_url,code,agent,family,families,scopes,status,expires_at,created_at,updated_at FROM example_mcp_grants WHERE client_id=${clientId}`.pipe(
 		Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Row))),
 		Effect.map((rows) => rows[0]),
 	);
@@ -102,10 +115,16 @@ const collected = (ctx: Context, row: Row) =>
 					...row,
 					status: "active",
 					family: result.family,
+					families: retained(row.families, row.family, result.family),
 					scopes: result.scopes.join(" "),
 					expires_at: result.expires_at,
 				};
-			return { ...row, status: result.status, family: result.family ?? row.family };
+			return {
+				...row,
+				status: result.status,
+				family: result.family ?? row.family,
+				families: retained(row.families, row.family, result.family),
+			};
 		}),
 		Effect.catchTag("KernelError", (error) =>
 			error.code === "input_invalid" ? Effect.succeed<Row>({ ...row, status: "revoked" }) : Effect.fail(error),
@@ -136,11 +155,12 @@ export const editingState = (
 			!options.readOnly &&
 			(next.status !== row.status ||
 				next.family !== row.family ||
+				next.families !== row.families ||
 				next.scopes !== row.scopes ||
 				next.expires_at !== row.expires_at)
 		)
 			yield* ctx.mutate(
-				ctx.db`UPDATE example_mcp_grants SET status=${next.status},family=${next.family},scopes=${next.scopes},expires_at=${next.expires_at},updated_at=${now} WHERE client_id=${holder.clientId} AND request_id=${row.request_id}`,
+				ctx.db`UPDATE example_mcp_grants SET status=${next.status},family=${next.family},families=${next.families},scopes=${next.scopes},expires_at=${next.expires_at},updated_at=${now} WHERE client_id=${holder.clientId} AND request_id=${row.request_id}`,
 			);
 		return view(next);
 	});
@@ -162,7 +182,7 @@ export const requestEditing = (
 	label: string,
 ) =>
 	Effect.gen(function* () {
-		const prior = (yield* connectionRow(ctx, holder.clientId))?.request_id ?? null;
+		const prior = yield* connectionRow(ctx, holder.clientId);
 		const created = yield* ctx.agentGrants.request({ agent: holder.agent, label, scopes: ["read", "write", "fs"] });
 		const now = yield* Clock.currentTimeMillis;
 		const row: Row = {
@@ -173,6 +193,7 @@ export const requestEditing = (
 			code: created.user_code,
 			agent: holder.agent,
 			family: null,
+			families: prior?.agent === holder.agent ? retained(prior.families, prior.family) : null,
 			scopes: "read write fs",
 			status: "pending",
 			expires_at: created.expires_at,
@@ -183,9 +204,9 @@ export const requestEditing = (
 		const tracked = yield* ctx.mutate(
 			Effect.gen(function* () {
 				const now = yield* connectionRow(ctx, row.client_id);
-				if ((now?.request_id ?? null) !== prior) return now;
+				if ((now?.request_id ?? null) !== (prior?.request_id ?? null)) return now;
 				yield* ctx.db`DELETE FROM example_mcp_grants WHERE client_id=${row.client_id}`;
-				yield* ctx.db`INSERT INTO example_mcp_grants(client_id,subject,request_id,approve_url,code,agent,family,scopes,status,expires_at,created_at,updated_at) VALUES(${row.client_id},${row.subject},${row.request_id},${row.approve_url},${row.code},${row.agent},${row.family},${row.scopes},${row.status},${row.expires_at},${row.created_at},${row.updated_at})`;
+				yield* ctx.db`INSERT INTO example_mcp_grants(client_id,subject,request_id,approve_url,code,agent,family,families,scopes,status,expires_at,created_at,updated_at) VALUES(${row.client_id},${row.subject},${row.request_id},${row.approve_url},${row.code},${row.agent},${row.family},${row.families},${row.scopes},${row.status},${row.expires_at},${row.created_at},${row.updated_at})`;
 				return row;
 			}),
 		);
