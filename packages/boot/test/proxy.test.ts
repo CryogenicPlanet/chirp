@@ -153,7 +153,7 @@ describe("real Bun boot proxy", () => {
 		expect(await (await app.fetch(app.url, { method: "HEAD" })).text()).toBe("");
 	});
 
-	it("refuses service worker scripts on every path and strips Service-Worker-Allowed", async (test) => {
+	it("refuses service worker scripts on every path and strips Service-Worker-Allowed and Clear-Site-Data", async (test) => {
 		const app = await launch(test);
 		await expect.poll(async () => (await app.state()).state).toBe("live");
 		// Browsers send this header, with the session cookie, when they fetch a worker's script to register or update it.
@@ -172,6 +172,7 @@ describe("real Bun boot proxy", () => {
 		expect(script.status).toBe(200);
 		expect(script.headers.get("content-type")).toBe("text/javascript");
 		expect(script.headers.get("service-worker-allowed")).toBeNull();
+		// The app's own Clear-Site-Data would clear boot's session cookie and sign the human out.
 		expect(script.headers.get("clear-site-data")).toBeNull();
 		expect(await script.text()).toContain("addEventListener");
 	});

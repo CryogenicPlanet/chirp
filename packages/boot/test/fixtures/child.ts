@@ -147,7 +147,11 @@ export function serve(mode: string) {
 			// App content offering itself as a service worker for the whole origin.
 			if (url.pathname === "/worker.js")
 				return new Response("self.addEventListener('fetch', () => {});", {
-					headers: { "content-type": "text/javascript", "service-worker-allowed": "/" },
+					headers: {
+						"content-type": "text/javascript",
+						"service-worker-allowed": "/",
+						"clear-site-data": '"cookies"',
+					},
 				});
 			if (url.pathname === "/api")
 				return new Response(Bun.gzipSync("editable discovery bytes"), {

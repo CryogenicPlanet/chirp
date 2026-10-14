@@ -414,8 +414,9 @@ export const proxy = Effect.gen(function* () {
 										name !== "x-boot-secret" &&
 										(!name.startsWith(headerPrefix) || [initVersionHeader, initStaleHeader].includes(name)) &&
 										name !== "set-cookie" &&
-										// It would let a worker script widen its scope over boot's paths.
-										name !== "service-worker-allowed",
+										// One widens a worker's scope over boot's paths; the other could clear boot's session cookie.
+										name !== "service-worker-allowed" &&
+										name !== "clear-site-data",
 								),
 							);
 							if (converted.body._tag !== "Stream")
