@@ -735,7 +735,7 @@ it("serves MCP 2.0 discovery and delivers signed mention events to a verified we
 	expect(first.headers["webhook-signature"]).toBe(signatureOf(secret, first.headers, first.body));
 	expect(first.headers["x-mcp-subscription-id"]).toBe(subscriptionId);
 	expect(JSON.parse(first.body)).toEqual({
-		eventId: `evt_${mentioned.seq}`,
+		eventId: `evt_${subscriptionId}_${mentioned.seq}`,
 		name: "mention.created",
 		timestamp: new Date(mentioned.created_at).toISOString(),
 		data: {
@@ -748,7 +748,7 @@ it("serves MCP 2.0 discovery and delivers signed mention events to a verified we
 		},
 		cursor: String(mentioned.seq),
 	});
-	expect(first.headers["webhook-id"]).toBe(`evt_${mentioned.seq}`);
+	expect(first.headers["webhook-id"]).toBe(`evt_${subscriptionId}_${mentioned.seq}`);
 
 	await app.post("/api/messages", { topic: "plans", body: "Nobody is mentioned here" }, cookie);
 	await modern(app.url, access, 13, "tools/call", {

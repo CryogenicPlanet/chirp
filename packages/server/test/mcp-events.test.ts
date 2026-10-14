@@ -333,7 +333,7 @@ it("watches a topic with or without its subtopics and never delivers the connect
 	expect(first).toEqual({
 		subscription: exact.id,
 		signed: true,
-		eventId: `evt_${top.seq}`,
+		eventId: `evt_${exact.id}_${top.seq}`,
 		name: "message.created",
 		timestamp: new Date(top.created_at).toISOString(),
 		data: {
@@ -387,6 +387,12 @@ it("never delivers posts the connection made through its editing grant, while ot
 	);
 	expect(hook.texts(mentions.id)).toEqual(["@here from another connection", "@here standup"]);
 	expect(hook.texts(watch.id)).toEqual(["@here from another connection", "@here standup"]);
+	const same = hook.events().filter((event) => event.data.text === "@here standup");
+	expect(same).toHaveLength(2);
+	expect(same[0]?.eventId).not.toBe(same[1]?.eventId);
+	expect(new Set(same.map((event) => event.eventId))).toEqual(
+		new Set([`evt_${mentions.id}_${same[0]?.cursor}`, `evt_${watch.id}_${same[0]?.cursor}`]),
+	);
 }, 120000);
 
 it("narrows mention events to a topic while the whole-board subscription keeps its id", async (test) => {
@@ -619,7 +625,7 @@ it("keeps delivering mention subscriptions created before events took arguments"
 	const mention = await post("legacy", "still there, @legacy-bot?");
 	await eventually(() => hook.texts(id).length > 0);
 	expect(hook.events()).toMatchObject([
-		{ subscription: id, signed: true, name: "mention.created", eventId: `evt_${mention.seq}` },
+		{ subscription: id, signed: true, name: "mention.created", eventId: `evt_${id}_${mention.seq}` },
 	]);
 	// The client's next refresh finds the same subscription rather than creating another.
 	expect((await legacy.subscribe(hook.url, "mention.created", {})).id).toBe(id);
@@ -685,12 +691,12 @@ it("leaves idle cursors alone between board requests and backs off only a subscr
 			),
 			await fixture.sql(`SELECT position,next_attempt,last_error FROM example_mcp_events WHERE id='${id}'`),
 		)[0];
-	// Board requests advance the head and wake delivery, but an idle subscription does not write on each one.
+	// Board requests advance the event fence and wake delivery, but an idle subscription does not write on each one.
 	for (let n = 0; n < 20; n++) await fetch(`${app.url}/api/messages?since=0`, { headers: { cookie } });
 	const later = await client.subscribe(hook.url, "message.created", { topic: "iso" });
 	expect(Number(later.cursor)).toBeGreaterThan(Number(mentions.cursor));
-	await settle(post, () => hook.texts(later.id), "iso");
 	expect((await stored(mentions.id))?.position).toBe(Number(mentions.cursor));
+	await settle(post, () => hook.texts(later.id), "iso");
 
 	// A row the board refuses to query backs off alone, and the healthy subscriptions still deliver.
 	await fixture.sql(
@@ -736,4 +742,128 @@ it("never delivers again a message that an edit made match after delivery had re
 	await post("plans", "@edit-bot after the edit");
 	await eventually(() => hook.texts(mentions.id).includes("@edit-bot after the edit"));
 	expect(hook.texts(mentions.id)).toEqual(["@edit-bot after the edit"]);
+}, 120000);
+
+it("reports truncated for a topic mention replay only when it skipped a matching mention", async (test) => {
+	const { app, cookie, post } = await installed(test, (source) =>
+		source.replace("const replayScan = 200;", "const replayScan = 4;"),
+	);
+	const mentioned = await authorize(app, cookie, "Filtered replay client", "filter-bot", false);
+	const hook = await receiver(test);
+	await post("watched", "setup");
+	const scoped = await mentioned.subscribe(hook.url, "mention.created", { topic: "watched" });
+	await mentioned.unsubscribe(hook.url, "mention.created", { topic: "watched" });
+	// A full window of other-topic mentions must not count as skipped deliveries for this watch.
+	for (let n = 1; n <= 4; n++) await post("elsewhere", `@filter-bot other ${n}`);
+	await post("watched", "@filter-bot keep 1");
+	await post("watched", "@filter-bot keep 2");
+	expect(await mentioned.subscribe(hook.url, "mention.created", { topic: "watched" }, scoped.cursor)).toMatchObject({
+		truncated: false,
+	});
+	await eventually(() => hook.texts(scoped.id).includes("@filter-bot keep 2"));
+	expect(hook.texts(scoped.id)).toEqual(["@filter-bot keep 1", "@filter-bot keep 2"]);
+	const cursor = hook.events().at(-1)?.cursor ?? null;
+	await mentioned.unsubscribe(hook.url, "mention.created", { topic: "watched" });
+	await post("watched", "@filter-bot skipped");
+	for (let n = 1; n <= 4; n++) await post("elsewhere", `@filter-bot noise ${n}`);
+	await post("watched", "@filter-bot kept");
+	expect(await mentioned.subscribe(hook.url, "mention.created", { topic: "watched" }, cursor)).toMatchObject({
+		truncated: true,
+	});
+	await eventually(() => hook.texts(scoped.id).includes("@filter-bot kept"));
+	expect(hook.texts(scoped.id)).toEqual(["@filter-bot keep 1", "@filter-bot keep 2", "@filter-bot kept"]);
+}, 120000);
+
+it("persists idle scan progress so a reload cannot re-emit an edited message", async (test) => {
+	const { fixture, app, cookie, post } = await installed(test);
+	const editor = await authorize(app, cookie, "Reload edit client", "reload-bot", false);
+	const hook = await receiver(test);
+	await post("plans", "setup");
+	const mentions = await editor.subscribe(hook.url, "mention.created", {});
+	const draft = await post("plans", "draft without a mention");
+	await until(async () => {
+		const [row] = decode(
+			Schema.Array(Schema.Struct({ position: Schema.Finite })),
+			await fixture.sql(`SELECT position FROM example_mcp_events WHERE id='${mentions.id}'`),
+		);
+		return row !== undefined && row.position >= draft.seq ? row : undefined;
+	});
+	const headers = { cookie, origin: "https://comms.test" };
+	expect((await app.post("/api/lock", {}, cookie)).status).toBe(200);
+	const current = await fetch(`${app.url}/api/fs/app/ext/mcp/events.ts`, { headers });
+	const staged = await fetch(
+		`${app.url}/api/fs/app/ext/mcp/events.ts?reload=0&baseVersion=${current.headers.get("x-chirp-base-version")}`,
+		{
+			method: "PUT",
+			headers,
+			body: `${await current.text()}// persisted watermark\n`,
+		},
+	);
+	expect(staged.status).toBe(200);
+	expect(await (await app.post("/api/reload?release=1", {}, cookie)).json()).toMatchObject({ status: "live" });
+	const edited = await fetch(`${app.url}/api/messages/${draft.id}`, {
+		method: "PATCH",
+		headers: { cookie, origin: "https://comms.test", "content-type": "application/json" },
+		body: JSON.stringify({ body: "draft for @reload-bot" }),
+	});
+	expect(edited.status).toBe(200);
+	await post("plans", "@reload-bot after reload");
+	await eventually(() => hook.texts(mentions.id).includes("@reload-bot after reload"));
+	expect(hook.texts(mentions.id)).toEqual(["@reload-bot after reload"]);
+}, 120000);
+
+it("does not let an in-flight drain checkpoint a recreated subscription", async (test) => {
+	const received: Array<string> = [];
+	const waiting: Array<() => void> = [];
+	let hold = false;
+	let completed = 0;
+	const server = createServer((request, response) => {
+		const chunks: Buffer[] = [];
+		request.on("data", (chunk: Buffer) => chunks.push(chunk));
+		request.on("end", () => {
+			const body = Buffer.concat(chunks).toString("utf8");
+			received.push(body);
+			const challenge = Reflect.get(Object(JSON.parse(body)), "challenge");
+			const finish = () => {
+				response.writeHead(200, { "content-type": "application/json" });
+				response.end(JSON.stringify(typeof challenge === "string" ? { challenge } : {}));
+				completed += 1;
+			};
+			if (typeof challenge === "string" || !hold) finish();
+			else waiting.push(finish);
+		});
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	test.onTestFinished(async () => {
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error("receiver has no address");
+	const { fixture, app, cookie, post } = await installed(test);
+	const client = await authorize(app, cookie, "Incarnation client", "inc-bot", false);
+	const hook = `http://127.0.0.1:${address.port}/hook`;
+	const started = await client.subscribe(hook, "mention.created", {});
+	const [before] = decode(
+		Schema.Array(Schema.Struct({ position: Schema.Finite, incarnation: Schema.NullOr(Schema.String) })),
+		await fixture.sql(`SELECT position,incarnation FROM example_mcp_events WHERE id='${started.id}'`),
+	);
+	expect(before?.incarnation).toEqual(expect.any(String));
+	const answered = completed;
+	hold = true;
+	const first = await post("plans", "@inc-bot first");
+	await until(() => (received.some((body) => body.includes("@inc-bot first")) ? true : undefined));
+	await fixture.sql(
+		`UPDATE example_mcp_events SET incarnation='recreated',next_attempt=${Date.now() + 300_000} WHERE id='${started.id}'`,
+	);
+	hold = false;
+	for (const finish of waiting.splice(0)) finish();
+	await until(() => (completed > answered ? true : undefined));
+	const [after] = decode(
+		Schema.Array(Schema.Struct({ position: Schema.Finite, incarnation: Schema.NullOr(Schema.String) })),
+		await fixture.sql(`SELECT position,incarnation FROM example_mcp_events WHERE id='${started.id}'`),
+	);
+	expect(after).toEqual({ position: before?.position, incarnation: "recreated" });
+	expect(after?.position).toBeLessThan(first.seq);
 }, 120000);

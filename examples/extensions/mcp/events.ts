@@ -35,8 +35,10 @@ const replayLimit = 100;
 /** How many candidates a replay checks, the board's largest query page, so posts it would not deliver leave headroom. */
 const replayScan = 200;
 /**
- * An idle subscription moves its cursor to the board's head only once it trails by this many sequence numbers. Every
- * board request advances the head, so moving on each one would cost a write per subscription per request.
+ * An idle subscription moves its cursor to the board's event-fence head only once it trails by this many sequence
+ * numbers. Every board request advances that fence, so moving on each one would cost a write per subscription per
+ * request. A filtered page that has already scanned a later message still persists that message's sequence, so a
+ * reload cannot re-emit an edit or move of something delivery already read.
  */
 const idleCheckpoint = 1000;
 
@@ -230,6 +232,16 @@ const selection = (name: EventName, agent: string, topic: string | null, subtopi
 /** Whether a message's topic is the subscription's topic, or under it when subtopics are included. */
 const within = (topic: string | null, subtopics: boolean, candidate: string) =>
 	topic === null || candidate === topic || (subtopics && candidate.startsWith(`${topic}/`));
+/** The subscription's full delivery predicate: not this connection's grant posts, and inside its topic filter. */
+const matches = (topic: string | null, subtopics: boolean, family: string | null, item: Message) =>
+	item.instance !== family && within(topic, subtopics, item.topic);
+/** Null-safe row-incarnation equality so a compare-and-swap cannot touch a recreated subscription. */
+const sameIncarnation = (sql: Store["db"], incarnation: string | null) =>
+	on(sql, {
+		sqlite: () => sql`incarnation IS ${incarnation}`,
+		pg: () => sql`incarnation IS NOT DISTINCT FROM ${incarnation}`,
+		mysql: () => sql`incarnation <=> ${incarnation}`,
+	});
 
 type Sent =
 	| { readonly status: "sent"; readonly code: number; readonly body: string }
@@ -561,12 +573,9 @@ export const installEvents = (api: Api, origin: string) =>
 						: undefined;
 				const family =
 					window === undefined || window.items.length === 0 ? null : yield* grantFamily(ctx, caller.clientId);
-				const matched = (window?.items ?? []).filter(
-					(item) => item.instance !== family && within(topic, subtopics, item.topic),
-				);
-				// Past the newest replayLimit matches, or a full window of candidates, it starts after the one just older.
+				const matched = (window?.items ?? []).filter((item) => matches(topic, subtopics, family, item));
 				// Past the newest replayLimit matches it starts after the one just older. A full window of candidates starts
-				// at its oldest, and has skipped something only if an older candidate exists.
+				// at its oldest, and has skipped something only if an older matching message exists.
 				const over = matched.length > replayLimit ? matched[matched.length - replayLimit - 1] : undefined;
 				const oldest =
 					over === undefined && window !== undefined && window.items.length === replayScan
@@ -577,10 +586,10 @@ export const installEvents = (api: Api, origin: string) =>
 						? undefined
 						: (yield* ctx.messages.query({
 								since,
-								limit: 1,
+								limit: replayScan,
 								exclude: instance,
 								...selection(name, agent, topic, subtopics),
-							})).items[0];
+							})).items.find((item) => item.seq < oldest.seq && matches(topic, subtopics, family, item));
 				const start =
 					over !== undefined
 						? { position: over.seq, truncated: true }
@@ -667,7 +676,9 @@ export const installEvents = (api: Api, origin: string) =>
 
 		const deliver = (row: typeof Row.Type, message: Message) =>
 			Effect.gen(function* () {
-				const eventId = `evt_${message.seq}`;
+				// Subscription id plus sequence: the same post on two subscriptions is two deliveries, and a retry
+				// of one subscription keeps the same Standard Webhooks id.
+				const eventId = `evt_${row.id}_${message.seq}`;
 				const body = JSON.stringify({
 					eventId,
 					name: row.event_name,
@@ -704,6 +715,7 @@ export const installEvents = (api: Api, origin: string) =>
 			ctx: Store,
 			id: string,
 			agent: string,
+			incarnation: string | null,
 			from: number,
 			to: number,
 			attempts: number,
@@ -711,14 +723,14 @@ export const installEvents = (api: Api, origin: string) =>
 			error: string | null,
 		) =>
 			ctx.mutate(
-				ctx.db`UPDATE example_mcp_events SET position=${to},attempts=${attempts},next_attempt=${next},last_error=${error} WHERE id=${id} AND agent=${agent} AND position=${from}`,
+				ctx.db`UPDATE example_mcp_events SET position=${to},attempts=${attempts},next_attempt=${next},last_error=${error} WHERE id=${id} AND agent=${agent} AND position=${from} AND ${sameIncarnation(ctx.db, incarnation)}`,
 			);
 
-		/** Live row at this cursor, or none if it was deleted, expired, or moved. */
-		const live = (ctx: Store, id: string, from: number, now: number) =>
+		/** Live row at this cursor and incarnation, or none if it was deleted, expired, moved, or recreated. */
+		const live = (ctx: Store, id: string, from: number, now: number, incarnation: string | null) =>
 			ctx
 				.read(() =>
-					ctx.db`SELECT * FROM example_mcp_events WHERE id=${id} AND position=${from} AND refresh_before>${now}`.pipe(
+					ctx.db`SELECT * FROM example_mcp_events WHERE id=${id} AND position=${from} AND refresh_before>${now} AND ${sameIncarnation(ctx.db, incarnation)}`.pipe(
 						Effect.flatMap(decodeRows),
 					),
 				)
@@ -736,7 +748,7 @@ export const installEvents = (api: Api, origin: string) =>
 									Effect.flatMap(decodeCount),
 								);
 							if (grantCount === 0) {
-								yield* ctx.db`DELETE FROM example_mcp_events WHERE id=${row.id}`;
+								yield* ctx.db`DELETE FROM example_mcp_events WHERE id=${row.id} AND ${sameIncarnation(ctx.db, row.incarnation)}`;
 							}
 						}),
 					);
@@ -757,12 +769,10 @@ export const installEvents = (api: Api, origin: string) =>
 				const family = page.items.length === 0 ? null : yield* grantFamily(ctx, row.client_id);
 				let position = row.position;
 				let attempts = row.attempts;
-				for (const message of page.items.filter(
-					(item) => item.instance !== family && within(row.topic, row.subtopics === 1, item.topic),
-				)) {
+				for (const message of page.items.filter((item) => matches(row.topic, row.subtopics === 1, family, item))) {
 					const at = yield* Clock.currentTimeMillis;
-					const current = yield* live(ctx, row.id, position, at);
-					// Stop if unsubscribe, expiry, grant loss, agent change, or another drain moved the cursor.
+					const current = yield* live(ctx, row.id, position, at, row.incarnation);
+					// Stop if unsubscribe, expiry, grant loss, agent change, recreate, or another drain moved the cursor.
 					if (!current || !(yield* granted(ctx, current.client_id, at)) || current.agent !== row.agent)
 						return { wake: Infinity, backlog: false };
 					const outcome = message.deleted_at === null ? yield* deliver(current, message) : "rejected";
@@ -772,21 +782,30 @@ export const installEvents = (api: Api, origin: string) =>
 					if (attempts > 0 && attempts < maxAttempts) {
 						const failedAt = yield* Clock.currentTimeMillis;
 						const next = failedAt + Math.min(300_000, 10_000 * 2 ** (attempts - 1));
-						yield* checkpoint(ctx, row.id, row.agent, position, position, attempts, next, outcome);
+						yield* checkpoint(ctx, row.id, row.agent, row.incarnation, position, position, attempts, next, outcome);
 						return { wake: next, backlog: false };
 					}
 					// Delivered, refused with 410 or 413, or out of attempts: move past this message.
 					const error = attempts === 0 ? null : outcome;
 					attempts = 0;
-					yield* checkpoint(ctx, row.id, row.agent, position, message.seq, 0, 0, error);
+					yield* checkpoint(ctx, row.id, row.agent, row.incarnation, position, message.seq, 0, 0, error);
 					position = message.seq;
 				}
-				// Past what this page scanned; when it scanned nothing, only once the gap is worth a write.
-				if (page.cursor > position && (page.items.length > 0 || page.cursor - position >= idleCheckpoint)) {
-					const at = yield* Clock.currentTimeMillis;
-					const current = yield* live(ctx, row.id, position, at);
-					if (current && current.agent === row.agent) {
-						yield* checkpoint(ctx, row.id, row.agent, position, page.cursor, 0, 0, null);
+				// Past what this page scanned. Empty pages write the event fence only once the gap is large, but they
+				// still persist once a later message exists so a reload cannot re-read an edit or move.
+				if (page.cursor > position) {
+					const persistFence = page.items.length > 0 || page.cursor - position >= idleCheckpoint;
+					const newest = persistFence
+						? undefined
+						: (yield* ctx.messages.query({ since: position, newest: true, limit: 1 })).items[0];
+					const to = persistFence ? page.cursor : newest?.seq;
+					if (to !== undefined && to > position) {
+						const at = yield* Clock.currentTimeMillis;
+						const current = yield* live(ctx, row.id, position, at, row.incarnation);
+						if (current && current.agent === row.agent) {
+							yield* checkpoint(ctx, row.id, row.agent, row.incarnation, position, to, 0, 0, null);
+							position = to;
+						}
 					}
 				}
 				// Remember how far this page read. A drain of a replaced or re-consented row ends in an earlier cycle than the
@@ -822,7 +841,7 @@ export const installEvents = (api: Api, origin: string) =>
 						const wake = (yield* Clock.currentTimeMillis) + Math.min(60_000, 2_000 * 2 ** (failed - 1));
 						yield* ctx
 							.mutate(
-								ctx.db`UPDATE example_mcp_events SET next_attempt=${wake},last_error='drain_failed' WHERE id=${row.id} AND position=${row.position} AND agent=${row.agent}`,
+								ctx.db`UPDATE example_mcp_events SET next_attempt=${wake},last_error='drain_failed' WHERE id=${row.id} AND position=${row.position} AND agent=${row.agent} AND ${sameIncarnation(ctx.db, row.incarnation)}`,
 							)
 							.pipe(Effect.ignore);
 						return { wake, backlog: false };
