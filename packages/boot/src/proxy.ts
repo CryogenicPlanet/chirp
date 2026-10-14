@@ -44,6 +44,7 @@ import { editRoute } from "./edit-http.ts";
 import { passkeyManagementRoute } from "./passkey-management-http.ts";
 import { passkeyCodeRoute } from "./passkey-code-http.ts";
 import { oidcCookie, oidcRoute } from "./oidc-http.ts";
+import { oidcCallbackPath } from "./identity-links.ts";
 import { accountRoute } from "./account-http.ts";
 import { tokenMintRoute } from "./token-mint-http.ts";
 import { tokenRoute } from "./token-http.ts";
@@ -142,7 +143,8 @@ export const proxy = Effect.gen(function* () {
 				started,
 				method: request.method,
 				path,
-				search: url.search,
+				// The sign-in callback's code, state and issuer are never recorded, not even redacted.
+				search: path === oidcCallbackPath ? "" : url.search,
 				userAgent: request.headers["user-agent"],
 				identity: null,
 				generation: 0,

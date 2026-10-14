@@ -60,6 +60,7 @@ const run = Effect.gen(function* () {
 		});
 	const sessions = Effect.map(sql`SELECT id FROM sessions`, (rows) => rows.length);
 	type Boot = Effect.Success<ReturnType<typeof build>>;
+	type Callback = Parameters<Boot["finishOidc"]>[0];
 	const setup = (auth: Boot) =>
 		Effect.gen(function* () {
 			const code = output.at(-1)?.split("code ")[1];
@@ -94,7 +95,7 @@ const run = Effect.gen(function* () {
 			const issued = via.issue(started.authorizationUrl, grant);
 			return {
 				issued,
-				callback: { state: issued.state, code: issued.code, iss: via.issuer, binding: started.binding },
+				callback: { state: issued.state, code: issued.code, iss: via.issuer, binding: started.binding, refused: false },
 			};
 		});
 	const signIn = (auth: Boot, grant: Grant) =>
@@ -155,29 +156,40 @@ const run = Effect.gen(function* () {
 		const refuse = (
 			grant: Grant,
 			expected: string,
-			change: (callback: {
-				readonly state: string;
-				readonly code: string;
-				readonly iss: string;
-				readonly binding: string | null;
-			}) => { readonly state: string; readonly code: string; readonly iss: string; readonly binding: string | null } = (
-				value,
-			) => value,
+			change: (callback: Callback) => Callback = (value) => value,
+			name: string = expected,
 		) =>
 			Effect.gen(function* () {
 				const { callback } = yield* begin(auth, grant);
 				const before = yield* sessions;
 				yield* refused(auth.finishOidc(change(callback)), expected);
-				assert.equal(yield* sessions, before, `${expected} opened a session`);
+				assert.equal(yield* sessions, before, `${name} opened a session`);
+				// Every refused callback naming a live state spends it.
+				assert.equal((yield* sql`SELECT id FROM auth_challenges WHERE id=${callback.state}`).length, 0, name);
 				return callback;
 			});
 		yield* refuse(octocat, "oidc_invalid", (callback) => ({ ...callback, binding: null }));
 		yield* refuse(octocat, "oidc_invalid", (callback) => ({ ...callback, binding: "x".repeat(43) }));
-		yield* refuse(octocat, "oidc_invalid", (callback) => ({ ...callback, state: "unknown-state" }));
 		yield* refuse(octocat, "oidc_invalid", (callback) => ({ ...callback, iss: "https://auth.chirp.wiki" }));
+		yield* refuse(octocat, "oidc_invalid", (callback) => ({ ...callback, code: undefined }));
+		yield* refuse(octocat, "oidc_invalid", (callback) => ({ ...callback, refused: true }));
+		// An unknown state, or a state that is not a sign-in's, is refused and leaves what it named alone.
+		const named = yield* begin(auth, octocat);
+		yield* refused(auth.finishOidc({ ...named.callback, state: "unknown-state" }), "oidc_invalid");
+		const pendingRow = yield* pendingLink(auth, owner.id, human);
+		yield* refused(auth.finishOidc({ ...named.callback, state: pendingRow }), "oidc_invalid");
+		assert.equal((yield* sql`SELECT id FROM auth_challenges WHERE id=${pendingRow}`).length, 1);
+		// The takeover this closes: an attacker starts a sign-in and gets the owner to approve it. The code lands
+		// in the owner's browser, which has no binding, and that refusal spends the state, so replaying the same
+		// callback from the attacker's browser, which has the binding, fails.
+		yield* refused(auth.finishOidc({ ...named.callback, binding: null }), "oidc_invalid");
+		const replayBefore = yield* sessions;
+		yield* refused(auth.finishOidc(named.callback), "oidc_invalid");
+		assert.equal(yield* sessions, replayBefore);
 		const expiring = yield* begin(auth, octocat);
 		yield* sql`UPDATE auth_challenges SET expires_at=0 WHERE id=${expiring.callback.state}`;
 		yield* refused(auth.finishOidc(expiring.callback), "oidc_invalid");
+		assert.equal((yield* sql`SELECT id FROM auth_challenges WHERE id=${expiring.callback.state}`).length, 0);
 		// Boot spends the state itself, even if an issuer would redeem a code twice.
 		issuer.modes.reuse = true;
 		const reused = yield* begin(auth, octocat);
@@ -223,9 +235,7 @@ const run = Effect.gen(function* () {
 			["mismatched nonce", { ...octocat, claims: (payload) => ({ ...payload, nonce: "another-nonce" }) }],
 			["unknown provider", { ...octocat, claims: (payload) => ({ ...payload, chirp_provider: "gitlab" }) }],
 		] as const satisfies ReadonlyArray<readonly [string, Grant]>) {
-			const callback = yield* refuse(grant, "oidc_invalid");
-			// Verification failures are refused before boot takes any lock, so the state stays for nobody to use.
-			assert.equal((yield* sql`SELECT id FROM auth_challenges WHERE id=${callback.state}`).length, 1, label);
+			yield* refuse(grant, "oidc_invalid", undefined, label);
 		}
 		assert.equal(issuer.counts.jwks, fetches, "A known kid never refetches keys");
 		// Clock skew up to 60 seconds is tolerated.
@@ -267,7 +277,13 @@ const run = Effect.gen(function* () {
 		elsewhereUrl.searchParams.set("redirect_uri", "https://x.test/auth/oidc/callback");
 		const foreign = issuer.issue(elsewhereUrl.href, octocat);
 		yield* refused(
-			auth.finishOidc({ state: foreign.state, code: foreign.code, iss: issuer.issuer, binding: misdirected.binding }),
+			auth.finishOidc({
+				state: foreign.state,
+				code: foreign.code,
+				iss: issuer.issuer,
+				binding: misdirected.binding,
+				refused: false,
+			}),
 			"oidc_invalid",
 		);
 	} else if (scenario === "stall") {

@@ -138,9 +138,9 @@ it("links, signs in with and unlinks a GitHub identity through a loopback issuer
 		const issued = issuer.issue(Schema.decodeUnknownSync(started)(await start.json()).authorization_url, grant);
 		const callback = new URL(issued.callback);
 		expect(callback.origin + callback.pathname).toBe(`${origin}/auth/oidc/callback`);
-		const follow = () =>
+		const follow = (bound = true) =>
 			fetch(`${board.url}${callback.pathname}${callback.search}`, {
-				headers: { cookie: binding.split(";")[0] ?? "", accept: "text/html" },
+				headers: { ...(bound ? { cookie: binding.split(";")[0] ?? "" } : {}), accept: "text/html" },
 				redirect: "manual",
 			});
 		return { issued, follow };
@@ -216,10 +216,24 @@ it("links, signs in with and unlinks a GitHub identity through a loopback issuer
 	expect(signedIn.status).toBe(200);
 	expect(await signedIn.text()).toContain('content="0;url=/t/design"');
 	const sessionHeader = cookieNamed(signedIn, "__Host-comms_session");
-	for (const flag of ["HttpOnly", "Secure", "SameSite=Strict", "Path=/"]) expect(sessionHeader).toContain(flag);
+	// The same cookie, lifetime included, that a passkey sign-in sets.
+	for (const flag of ["HttpOnly", "Secure", "SameSite=Strict", "Path=/", "Max-Age=2592000"])
+		expect(sessionHeader).toContain(flag);
 	const github = sessionHeader.split(";")[0] ?? "";
 	// The same callback cannot be replayed.
 	expect((await signingIn.follow()).status).toBe(401);
+	// An attacker starts a sign-in and gets the owner to approve it. The code lands in the owner's browser, which
+	// has no binding cookie; that refusal spends the state, so the attacker's browser, which has it, cannot replay
+	// the callback. The refusal page sends no Referer onward and loads nothing.
+	const lured = await roundTrip({ intent: "login" });
+	const owners = await lured.follow(false);
+	expect(owners.status).toBe(401);
+	expect(owners.headers.get("referrer-policy")).toBe("no-referrer");
+	expect(owners.headers.get("content-security-policy")).toContain("default-src 'none'");
+	expect(cookieNamed(owners, "__Host-comms_session")).toBe("");
+	const replayed = await lured.follow();
+	expect(replayed.status).toBe(401);
+	expect(cookieNamed(replayed, "__Host-comms_session")).toBe("");
 
 	// The GitHub session has a passkey session's rights on session-only routes ...
 	for (const path of ["/_boot/auth/passkeys", "/_boot/tokens", "/_boot/auth/identities", "/_boot/status"])
@@ -255,6 +269,14 @@ it("links, signs in with and unlinks a GitHub identity through a loopback issuer
 		.toBe(true);
 	expect(events).not.toContain(signingIn.issued.code);
 	expect(events).not.toContain(signingIn.issued.state);
+	// Nothing of the callback's query is kept, not even redacted parameter names or the issuer.
+	const records = Schema.decodeUnknownSync(
+		Schema.Struct({
+			items: Schema.Array(Schema.Struct({ payload: Schema.Record(Schema.String, Schema.Unknown) })),
+		}),
+	)(JSON.parse(events)).items.filter((item) => item.payload.path === "/auth/oidc/callback");
+	expect(records.length).toBeGreaterThan(0);
+	for (const record of records) expect(record.payload).not.toHaveProperty("query");
 
 	// A real restart: a sign-in started before it finishes after it, through a link that survived.
 	const beforeRestart = await roundTrip({ intent: "login" });

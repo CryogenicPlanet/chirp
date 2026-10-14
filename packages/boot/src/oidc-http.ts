@@ -74,17 +74,17 @@ export const oidcRoute = (auth: Auth["Service"], requestId: string) =>
 			const iss = single("iss");
 			return yield* authFailure(
 				Effect.gen(function* () {
-					// A refusal from the issuer, a credential beside the callback, or a malformed callback finishes nothing.
-					if (
-						url.searchParams.has("error") ||
-						request.headers.authorization !== undefined ||
-						namesGrant(request) ||
-						state === undefined ||
-						code === undefined ||
-						iss === undefined
-					)
+					// A credential beside the callback, or no single state, finishes nothing. Anything else naming a live
+					// state reaches boot's check, which spends that state on any refusal, including an issuer error.
+					if (request.headers.authorization !== undefined || namesGrant(request) || state === undefined)
 						return yield* new AuthError({ code: "oidc_invalid" });
-					const result = yield* auth.finishOidc({ state, code, iss, binding: binding(request.headers.cookie) });
+					const result = yield* auth.finishOidc({
+						state,
+						code,
+						iss,
+						binding: binding(request.headers.cookie),
+						refused: url.searchParams.has("error"),
+					});
 					yield* Console.error(`boot.auth stage=oidc_callback outcome=${result._tag} request_id=${requestId}`);
 					const response = HttpServerResponse.text(oidcContinuePage(result.next), {
 						contentType: "text/html",

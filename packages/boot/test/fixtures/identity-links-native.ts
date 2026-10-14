@@ -95,7 +95,7 @@ const main = Effect.gen(function* () {
 			Effect.gen(function* () {
 				const started = yield* instance.startOidc({ intent }, primary, intent === "link" ? owner.id : null);
 				const issued = issuer.issue(started.authorizationUrl, grant);
-				return { state: issued.state, code: issued.code, iss: issuer.issuer, binding: started.binding };
+				return { state: issued.state, code: issued.code, iss: issuer.issuer, binding: started.binding, refused: false };
 			});
 		const pendingId = (instance: typeof auth, grant: Grant) =>
 			Effect.gen(function* () {

@@ -1,4 +1,5 @@
 import { on } from "@comms/storage/dialect";
+import { lockBootWrite } from "./boot-write-lock.ts";
 // Effect Crypto has no constant-time comparison primitive.
 // oxlint-disable-next-line effecttsgo/node-builtin-import
 import { timingSafeEqual } from "node:crypto";
@@ -212,9 +213,11 @@ export const makeIdentityLinks = <E, R, S extends { readonly id: string }, SE, S
 		 * redeem and verify over the network; then take the state row exactly once and act in one boot write. */
 		const finishOidc = (input: {
 			readonly state: string;
-			readonly code: string;
-			readonly iss: string;
+			readonly code: string | undefined;
+			readonly iss: string | undefined;
 			readonly binding: string | null;
+			/** The issuer sent the human back with an error instead of a code. */
+			readonly refused: boolean;
 		}) =>
 			Effect.gen(function* () {
 				const client = yield* enabled;
@@ -222,25 +225,38 @@ export const makeIdentityLinks = <E, R, S extends { readonly id: string }, SE, S
 					(yield* sql`SELECT ceremony, challenge, setup_generation, expires_at FROM auth_challenges WHERE id=${input.state}`.pipe(
 						decodeRows(stateRow),
 					))[0];
-				if (
-					!row ||
-					(row.ceremony !== "oidc.login" && row.ceremony !== "oidc.link") ||
-					row.expires_at <= (yield* Clock.currentTimeMillis) ||
-					input.binding === null ||
-					input.iss !== issuer
-				)
+				if (!row || (row.ceremony !== "oidc.login" && row.ceremony !== "oidc.link"))
 					return yield* refuse("oidc_invalid");
 				const ceremony = row.ceremony;
-				const state = yield* Schema.decodeEffect(Schema.fromJsonString(OidcState))(row.challenge).pipe(
-					Effect.mapError(() => new AuthError({ code: "oidc_invalid" })),
-				);
-				if (!same(yield* hash(input.binding), state.binding_hash)) return yield* refuse("oidc_invalid");
-				const identity = yield* client.exchange(
-					input.code,
-					state.verifier,
-					`${state.origin}${oidcCallbackPath}`,
-					state.nonce,
-				);
+				// Any refused callback naming a live state spends it. A code that reached a browser without the binding,
+				// for instance the owner's after an attacker started the round trip, then cannot be replayed from the
+				// browser that holds it. The write runs only after any issuer request has finished.
+				const spend = (error: AuthError) =>
+					mutex
+						.withPermit(sql.withTransaction(lockBootWrite(sql).pipe(Effect.andThen(take(input.state, ceremony, null)))))
+						.pipe(Effect.andThen(Effect.fail(error)));
+				const { state, identity } = yield* Effect.gen(function* () {
+					const code = input.code;
+					if (
+						input.refused ||
+						code === undefined ||
+						input.binding === null ||
+						input.iss !== issuer ||
+						row.expires_at <= (yield* Clock.currentTimeMillis)
+					)
+						return yield* refuse("oidc_invalid");
+					const state = yield* Schema.decodeEffect(Schema.fromJsonString(OidcState))(row.challenge).pipe(
+						Effect.mapError(() => new AuthError({ code: "oidc_invalid" })),
+					);
+					if (!same(yield* hash(input.binding), state.binding_hash)) return yield* refuse("oidc_invalid");
+					const identity = yield* client.exchange(
+						code,
+						state.verifier,
+						`${state.origin}${oidcCallbackPath}`,
+						state.nonce,
+					);
+					return { state, identity };
+				}).pipe(Effect.catchTag("AuthError", spend));
 				const id = yield* identityId(identity.issuer, identity.subject);
 				return yield* mutex.withPermit(
 					committed(
