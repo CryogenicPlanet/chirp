@@ -13,6 +13,7 @@ const Row = Schema.Struct({
 	code: Schema.NullOr(Schema.String),
 	agent: Schema.String,
 	family: Schema.NullOr(Schema.String),
+	families: Schema.NullOr(Schema.String),
 	scopes: Schema.String,
 	status: Schema.Literals(["pending", "active", "expired", "revoked", "denied"]),
 	expires_at: Schema.Finite,
@@ -78,11 +79,52 @@ export const installGrants = (api: Api) =>
 			}),
 			{ protect: true },
 		);
+		yield* api.migrate(
+			"grant_prior_families",
+			on(sql, {
+				sqlite: () => "ALTER TABLE example_mcp_grants ADD COLUMN families TEXT",
+				pg: () => "ALTER TABLE example_mcp_grants ADD COLUMN families TEXT",
+				mysql: () => "ALTER TABLE example_mcp_grants ADD COLUMN families LONGTEXT",
+			}),
+			{ skipIfColumnExists: { table: "example_mcp_grants", column: "families" } },
+		);
 	});
 
+/** The kernel excludes at most 64 instances per query, and the connection's own instance is one of them. */
+const familyCap = 63;
+/**
+ * Grant families from stored space-separated lists and single families, oldest first: each once, keeping only the
+ * newest familyCap. Events and grants both store this list joined by spaces.
+ */
+export const familyList = (...values: ReadonlyArray<string | null | undefined>): ReadonlyArray<string> =>
+	[
+		...new Set(
+			values.flatMap((value) =>
+				value === undefined || value === null ? [] : value.split(" ").filter((item) => item.length > 0),
+			),
+		),
+	].slice(-familyCap);
+/** The stored form of familyList: the families joined by spaces, or null when there are none. */
+export const storedFamilies = (...values: ReadonlyArray<string | null | undefined>) =>
+	familyList(...values).join(" ") || null;
+const EventFamily = Schema.Array(Schema.Struct({ id: Schema.String, grant_family: Schema.NullOr(Schema.String) }));
+/** Union retained families onto live subscriptions for this client and posting name, without shrinking what they already store. */
+const remember = (ctx: Context, clientId: string, agent: string, families: string | null) =>
+	Effect.gen(function* () {
+		if (families === null) return;
+		const rows =
+			yield* ctx.db`SELECT id,grant_family FROM example_mcp_events WHERE client_id=${clientId} AND agent=${agent}`.pipe(
+				Effect.flatMap(Schema.decodeUnknownEffect(EventFamily)),
+			);
+		for (const row of rows) {
+			const next = storedFamilies(row.grant_family, families);
+			if (next !== null && next !== row.grant_family)
+				yield* ctx.db`UPDATE example_mcp_events SET grant_family=${next} WHERE id=${row.id} AND agent=${agent}`;
+		}
+	});
 /** The connection's row, whichever identity it was requested for. */
 const connectionRow = (ctx: Context, clientId: string) =>
-	ctx.db`SELECT client_id,subject,request_id,approve_url,code,agent,family,scopes,status,expires_at,created_at,updated_at FROM example_mcp_grants WHERE client_id=${clientId}`.pipe(
+	ctx.db`SELECT client_id,subject,request_id,approve_url,code,agent,family,families,scopes,status,expires_at,created_at,updated_at FROM example_mcp_grants WHERE client_id=${clientId}`.pipe(
 		Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Row))),
 		Effect.map((rows) => rows[0]),
 	);
@@ -102,10 +144,16 @@ const collected = (ctx: Context, row: Row) =>
 					...row,
 					status: "active",
 					family: result.family,
+					families: storedFamilies(row.families, row.family, result.family),
 					scopes: result.scopes.join(" "),
 					expires_at: result.expires_at,
 				};
-			return { ...row, status: result.status, family: result.family ?? row.family };
+			return {
+				...row,
+				status: result.status,
+				family: result.family ?? row.family,
+				families: storedFamilies(row.families, row.family, result.family),
+			};
 		}),
 		Effect.catchTag("KernelError", (error) =>
 			error.code === "input_invalid" ? Effect.succeed<Row>({ ...row, status: "revoked" }) : Effect.fail(error),
@@ -136,11 +184,26 @@ export const editingState = (
 			!options.readOnly &&
 			(next.status !== row.status ||
 				next.family !== row.family ||
+				next.families !== row.families ||
 				next.scopes !== row.scopes ||
 				next.expires_at !== row.expires_at)
 		)
 			yield* ctx.mutate(
-				ctx.db`UPDATE example_mcp_grants SET status=${next.status},family=${next.family},scopes=${next.scopes},expires_at=${next.expires_at},updated_at=${now} WHERE client_id=${holder.clientId} AND request_id=${row.request_id}`,
+				Effect.gen(function* () {
+					const current = yield* connectionRow(ctx, holder.clientId);
+					if (current !== undefined && current.request_id === row.request_id) {
+						yield* ctx.db`UPDATE example_mcp_grants SET status=${next.status},family=${next.family},families=${next.families},scopes=${next.scopes},expires_at=${next.expires_at},updated_at=${now} WHERE client_id=${holder.clientId} AND request_id=${row.request_id}`;
+						yield* remember(ctx, holder.clientId, row.agent, storedFamilies(next.families, next.family));
+						return;
+					}
+					if (current !== undefined && current.agent === row.agent) {
+						const families = storedFamilies(current.families, current.family, next.families, next.family);
+						yield* ctx.db`UPDATE example_mcp_grants SET families=${families},updated_at=${now} WHERE client_id=${holder.clientId} AND request_id=${current.request_id}`;
+						yield* remember(ctx, holder.clientId, current.agent, families);
+						return;
+					}
+					yield* remember(ctx, holder.clientId, row.agent, storedFamilies(next.families, next.family));
+				}),
 			);
 		return view(next);
 	});
@@ -162,7 +225,7 @@ export const requestEditing = (
 	label: string,
 ) =>
 	Effect.gen(function* () {
-		const prior = (yield* connectionRow(ctx, holder.clientId))?.request_id ?? null;
+		const prior = yield* connectionRow(ctx, holder.clientId);
 		const created = yield* ctx.agentGrants.request({ agent: holder.agent, label, scopes: ["read", "write", "fs"] });
 		const now = yield* Clock.currentTimeMillis;
 		const row: Row = {
@@ -173,6 +236,7 @@ export const requestEditing = (
 			code: created.user_code,
 			agent: holder.agent,
 			family: null,
+			families: null,
 			scopes: "read write fs",
 			status: "pending",
 			expires_at: created.expires_at,
@@ -182,11 +246,15 @@ export const requestEditing = (
 		// Kernel mutations are serialized, so this read and the replacement are one compare-and-swap.
 		const tracked = yield* ctx.mutate(
 			Effect.gen(function* () {
-				const now = yield* connectionRow(ctx, row.client_id);
-				if ((now?.request_id ?? null) !== prior) return now;
-				yield* ctx.db`DELETE FROM example_mcp_grants WHERE client_id=${row.client_id}`;
-				yield* ctx.db`INSERT INTO example_mcp_grants(client_id,subject,request_id,approve_url,code,agent,family,scopes,status,expires_at,created_at,updated_at) VALUES(${row.client_id},${row.subject},${row.request_id},${row.approve_url},${row.code},${row.agent},${row.family},${row.scopes},${row.status},${row.expires_at},${row.created_at},${row.updated_at})`;
-				return row;
+				const current = yield* connectionRow(ctx, row.client_id);
+				if ((current?.request_id ?? null) !== (prior?.request_id ?? null)) return current;
+				if (current)
+					yield* remember(ctx, current.client_id, current.agent, storedFamilies(current.families, current.family));
+				const families = storedFamilies(current?.families, current?.family);
+				const next = { ...row, families };
+				yield* ctx.db`DELETE FROM example_mcp_grants WHERE client_id=${next.client_id}`;
+				yield* ctx.db`INSERT INTO example_mcp_grants(client_id,subject,request_id,approve_url,code,agent,family,families,scopes,status,expires_at,created_at,updated_at) VALUES(${next.client_id},${next.subject},${next.request_id},${next.approve_url},${next.code},${next.agent},${next.family},${next.families},${next.scopes},${next.status},${next.expires_at},${next.created_at},${next.updated_at})`;
+				return next;
 			}),
 		);
 		return holds(tracked, holder) ? view(tracked) : none;

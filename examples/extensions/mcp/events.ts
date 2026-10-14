@@ -12,12 +12,15 @@ import type {
 	ManagedRequestContext,
 } from "../../../packages/server/src/kernel/extension-api.ts";
 import { makeAddressPolicy } from "./addresses.ts";
+import { familyList, storedFamilies } from "./grants.ts";
 import type { OAuthIdentity } from "./oauth.ts";
 import { messageUrl } from "./tools.ts";
 
 /** Accept http:// and private callback addresses. Only for local development and tests, never on a public board. */
 const allowLocalCallbacks = false;
 const mentionEvent = "mention.created";
+const messageEvent = "message.created";
+type EventName = typeof mentionEvent | typeof messageEvent;
 const defaultTtl = 24 * 60 * 60 * 1000;
 const minimumTtl = 5 * 60 * 1000;
 const verifiedFor = 24 * 60 * 60 * 1000;
@@ -28,27 +31,71 @@ const perBoard = 64;
 const verificationsPerWindow = 10;
 const verificationWindow = 10 * 60 * 1000;
 const excerpt = 4000;
+/** A replay delivers at most this many of the newest missed messages; `truncated` says an older one was skipped. */
+const replayLimit = 100;
+/** How many candidates a replay checks, the board's largest query page, so posts it would not deliver leave headroom. */
+const replayScan = 200;
+/**
+ * An idle subscription moves its cursor to the board's event-fence head only once it trails by this many sequence
+ * numbers. Every board request advances that fence, so moving on each one would cost a write per subscription per
+ * request. A filtered page that has already scanned a later message still persists that message's sequence, so a
+ * reload cannot re-emit an edit or move of something delivery already read.
+ */
+const idleCheckpoint = 1000;
 
+const payloadSchema = {
+	type: "object",
+	properties: {
+		id: { type: "string", description: "Message id accepted by the fetch tool." },
+		topic: { type: "string" },
+		author: { type: "string", description: "Agent name that posted the message." },
+		text: { type: "string", description: `Message text, shortened to ${excerpt} characters.` },
+		truncated: { type: "boolean" },
+		url: { type: "string" },
+	},
+	required: ["id", "topic", "author", "text", "truncated", "url"],
+	additionalProperties: false,
+} as const;
+const recursive = { type: "boolean", default: true, description: "Include the topic's subtopics." } as const;
 const eventDefinitions = [
 	{
 		name: mentionEvent,
 		description:
-			"A published chirp message mentioned this connection's posting name (@name) or @here. Posts made through this connection are not delivered. Call fetch with data.id for the full message.",
+			"A published chirp message mentioned this connection's posting name (@name) or @here, optionally only within one topic. Posts made through this connection are not delivered. Call fetch with data.id for the full message.",
 		delivery: ["webhook"],
-		inputSchema: { type: "object", properties: {}, additionalProperties: false },
-		payloadSchema: {
+		inputSchema: {
 			type: "object",
 			properties: {
-				id: { type: "string", description: "Message id accepted by the fetch tool." },
-				topic: { type: "string" },
-				author: { type: "string", description: "Agent name that posted the message." },
-				text: { type: "string", description: `Message text, shortened to ${excerpt} characters.` },
-				truncated: { type: "boolean" },
-				url: { type: "string" },
+				topic: {
+					type: "string",
+					minLength: 1,
+					description: "Only mentions in this existing topic; omit for the whole board.",
+				},
+				recursive,
 			},
-			required: ["id", "topic", "author", "text", "truncated", "url"],
 			additionalProperties: false,
 		},
+		payloadSchema,
+	},
+	{
+		name: messageEvent,
+		description:
+			"A message was published in the watched topic (and its subtopics unless recursive is false). Posts made through this connection are not delivered. Call fetch with data.id for the full message.",
+		delivery: ["webhook"],
+		inputSchema: {
+			type: "object",
+			properties: {
+				topic: {
+					type: "string",
+					minLength: 1,
+					description: "Existing topic path to watch, such as projects/chirp; an agent's home is @name.",
+				},
+				recursive,
+			},
+			required: ["topic"],
+			additionalProperties: false,
+		},
+		payloadSchema,
 	},
 ] as const;
 
@@ -62,6 +109,7 @@ const SubscribeParams = Schema.Struct({
 	name: Schema.String,
 	arguments: Schema.optionalKey(Schema.Unknown),
 	delivery: Schema.Struct({ mode: Schema.String, url: Schema.String, secret: Schema.String }),
+	cursor: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	ttlMs: Schema.optionalKey(Schema.NullOr(Schema.Int)),
 });
 const UnsubscribeParams = Schema.Struct({
@@ -83,16 +131,47 @@ const Row = Schema.Struct({
 	position: Schema.Finite,
 	attempts: Schema.Finite,
 	next_attempt: Schema.Finite,
+	event_name: Schema.Literals([mentionEvent, messageEvent]),
+	topic: Schema.NullOr(Schema.String),
+	subtopics: Schema.Finite,
+	grant_family: Schema.NullOr(Schema.String),
 });
 const Count = Schema.Array(Schema.Struct({ count: Schema.Finite }));
+const Family = Schema.Array(
+	Schema.Struct({ family: Schema.NullOr(Schema.String), families: Schema.NullOr(Schema.String) }),
+);
+const Filter = Schema.Struct({
+	topic: Schema.optionalKey(Schema.String),
+	recursive: Schema.optionalKey(Schema.Boolean),
+});
+type Filter = typeof Filter.Type;
 type Message = Effect.Success<ReturnType<BackgroundContext["messages"]["query"]>>["items"][number];
 type Store = Pick<BackgroundContext, "db" | "read" | "mutate">;
 type Rows = ReadonlyArray<typeof Row.Type>;
 
-/** Only an absent or empty `arguments` object is valid: the event has no filters. */
-const noArguments = (value: unknown) =>
-	value === undefined ||
-	(typeof value === "object" && value !== null && !Array.isArray(value) && Object.keys(value).length === 0);
+const isEvent = (name: string): name is EventName => name === mentionEvent || name === messageEvent;
+const usage: Readonly<Record<EventName, string>> = {
+	[mentionEvent]: `${mentionEvent} takes an optional topic and recursive`,
+	[messageEvent]: `${messageEvent} takes a topic and an optional recursive`,
+};
+/**
+ * message.created watches one topic; mention.created may narrow to one. Absent arguments are `{}`, and defaults are
+ * dropped (recursive true, or recursive without a topic) so every spelling of one filter is one subscription.
+ */
+const filterOf = (name: EventName, value: unknown) =>
+	Schema.decodeUnknownOption(Filter, { onExcessProperty: "error" })(value === undefined ? {} : value).pipe(
+		Option.filter((filter) => filter.topic !== "" && (name === mentionEvent || filter.topic !== undefined)),
+		Option.map((filter): Filter =>
+			filter.topic === undefined
+				? {}
+				: filter.recursive === false
+					? { topic: filter.topic, recursive: false }
+					: { topic: filter.topic },
+		),
+	);
+/** A cursor is the board sequence number delivery has passed, sent as a decimal string. */
+const positionOf = (cursor: string) =>
+	/^(0|[1-9][0-9]{0,15})$/.test(cursor) && Number.isSafeInteger(Number(cursor)) ? Number(cursor) : undefined;
 const validSecret = (secret: string) => {
 	const encoded = /^whsec_([A-Za-z0-9+/]+={0,2})$/.exec(secret)?.[1];
 	if (!encoded) return false;
@@ -134,11 +213,31 @@ const dualSign = (
 		return latest;
 	return `${latest} ${sign(previous, id, timestamp, body)}`;
 };
-const subscriptionId = (clientId: string, url: string, name: string) =>
+/**
+ * Deterministic over client, callback, event and arguments. Arguments hash with sorted keys so their order never splits
+ * a subscription, and `{}` hashes as it did before events took arguments, so those subscriptions keep their ids.
+ */
+const subscriptionId = (clientId: string, url: string, name: string, filter: Filter) =>
 	`sub_${createHash("sha256")
-		.update(JSON.stringify([clientId, url, name, {}]))
+		.update(
+			JSON.stringify([
+				clientId,
+				url,
+				name,
+				Object.fromEntries(Object.entries(filter).toSorted(([left], [right]) => (left < right ? -1 : 1))),
+			]),
+		)
 		.digest("hex")
 		.slice(0, 32)}`;
+/** The board query a subscription reads. The board ORs topic with mentions, so a mention filter's topic is applied after. */
+const selection = (name: EventName, agent: string, topic: string | null, subtopics: boolean) =>
+	name === messageEvent && topic !== null ? { topic, recursive: subtopics } : { mentions: [`@${agent}`, "@here"] };
+/** Whether a message's topic is the subscription's topic, or under it when subtopics are included. */
+const within = (topic: string | null, subtopics: boolean, candidate: string) =>
+	topic === null || candidate === topic || (subtopics && candidate.startsWith(`${topic}/`));
+/** The subscription's full delivery predicate: not this connection's grant posts, and inside its topic filter. */
+const matches = (topic: string | null, subtopics: boolean, families: ReadonlyArray<string>, item: Message) =>
+	!families.includes(item.instance) && within(topic, subtopics, item.topic);
 
 type Sent =
 	| { readonly status: "sent"; readonly code: number; readonly body: string }
@@ -204,6 +303,45 @@ export const installEvents = (api: Api, origin: string) =>
 			}),
 			{ skipIfColumnExists: { table: "example_mcp_events", column: "previous_secret_until" } },
 		);
+		// Topic watches came later still, so they are added the same way. The defaults keep every earlier row a
+		// mention.created subscription over the whole board.
+		yield* api.migrate(
+			"event_name",
+			on(sql, {
+				sqlite: () => "ALTER TABLE example_mcp_events ADD COLUMN event_name TEXT NOT NULL DEFAULT 'mention.created'",
+				pg: () => "ALTER TABLE example_mcp_events ADD COLUMN event_name TEXT NOT NULL DEFAULT 'mention.created'",
+				mysql: () =>
+					"ALTER TABLE example_mcp_events ADD COLUMN event_name VARCHAR(32) NOT NULL DEFAULT 'mention.created'",
+			}),
+			{ skipIfColumnExists: { table: "example_mcp_events", column: "event_name" } },
+		);
+		yield* api.migrate(
+			"event_topic",
+			on(sql, {
+				sqlite: () => "ALTER TABLE example_mcp_events ADD COLUMN topic TEXT",
+				pg: () => "ALTER TABLE example_mcp_events ADD COLUMN topic TEXT",
+				mysql: () => "ALTER TABLE example_mcp_events ADD COLUMN topic VARCHAR(256)",
+			}),
+			{ skipIfColumnExists: { table: "example_mcp_events", column: "topic" } },
+		);
+		yield* api.migrate(
+			"event_subtopics",
+			on(sql, {
+				sqlite: () => "ALTER TABLE example_mcp_events ADD COLUMN subtopics INTEGER NOT NULL DEFAULT 1",
+				pg: () => "ALTER TABLE example_mcp_events ADD COLUMN subtopics INTEGER NOT NULL DEFAULT 1",
+				mysql: () => "ALTER TABLE example_mcp_events ADD COLUMN subtopics INTEGER NOT NULL DEFAULT 1",
+			}),
+			{ skipIfColumnExists: { table: "example_mcp_events", column: "subtopics" } },
+		);
+		yield* api.migrate(
+			"event_grant_family",
+			on(sql, {
+				sqlite: () => "ALTER TABLE example_mcp_events ADD COLUMN grant_family TEXT",
+				pg: () => "ALTER TABLE example_mcp_events ADD COLUMN grant_family TEXT",
+				mysql: () => "ALTER TABLE example_mcp_events ADD COLUMN grant_family LONGTEXT",
+			}),
+			{ skipIfColumnExists: { table: "example_mcp_events", column: "grant_family" } },
+		);
 		const rows = (ctx: Store, clientId?: string) =>
 			ctx.read(() =>
 				(clientId === undefined
@@ -216,8 +354,11 @@ export const installEvents = (api: Api, origin: string) =>
 		const decodeRows = Schema.decodeUnknownEffect(Schema.Array(Row));
 		const decodeCount = (result: ReadonlyArray<unknown>) =>
 			Schema.decodeUnknownEffect(Count)(result).pipe(Effect.map((items) => items[0]?.count ?? 0));
-		// Verification makes the board contact a client-chosen host, so each client gets a small budget.
+		// Verification makes the board contact a client-chosen host, and a replay re-sends history to it, so each client
+		// gets a small budget for both.
 		const verifications = yield* Ref.make<ReadonlyMap<string, ReadonlyArray<number>>>(new Map());
+		// Consecutive drain failures per subscription in this generation, for its back-off.
+		const failures = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
 		const random = (size: number) =>
 			crypto.randomBytes(size).pipe(Effect.map((bytes) => Buffer.from(bytes).toString("hex")));
 
@@ -294,7 +435,12 @@ export const installEvents = (api: Api, origin: string) =>
 						Effect.exit,
 					);
 				if (outcome._tag === "Failure") {
-					if (Cause.hasInterruptsOnly(outcome.cause)) return yield* Effect.interrupt;
+					// A freeze (backup or reload) closing the extension's scope interrupts the fetch, not its caller: a
+					// subscribe then answers with a retriable failure. A caller that was itself interrupted stops here.
+					if (Cause.hasInterruptsOnly(outcome.cause)) {
+						yield* Effect.yieldNow;
+						return { status: "failed", reason: "timeout" } satisfies Sent;
+					}
 					return {
 						status: "failed",
 						reason: /cert|tls|ssl/i.test(Cause.pretty(outcome.cause)) ? "tls_error" : "connection_refused",
@@ -328,16 +474,26 @@ export const installEvents = (api: Api, origin: string) =>
 				return received.length === expected.length && timingSafeEqual(received, expected) ? null : "challenge_failed";
 			});
 
-		const subscribe = (ctx: Store & Pick<ManagedRequestContext, "extension">, caller: OAuthIdentity, params: unknown) =>
+		const subscribe = (
+			ctx: Store & Pick<ManagedRequestContext, "extension" | "topics" | "messages">,
+			caller: OAuthIdentity,
+			params: unknown,
+		) =>
 			Effect.gen(function* () {
 				const decoded = Schema.decodeUnknownOption(SubscribeParams)(params);
 				if (decoded._tag === "None")
-					return invalid("name, delivery.mode, delivery.url and delivery.secret are required");
+					return invalid(
+						"name, delivery.mode, delivery.url and delivery.secret are required; cursor is a string or null",
+					);
 				const input = decoded.value;
-				if (input.name !== mentionEvent) return failure(-32011, "NotFound", { kind: "event" });
+				const name = input.name;
+				if (!isEvent(name)) return failure(-32011, "NotFound", { kind: "event" });
 				if (input.delivery.mode !== "webhook")
 					return failure(-32014, "Unsupported", { feature: "deliveryMode", value: input.delivery.mode });
-				if (!noArguments(input.arguments)) return invalid(`${mentionEvent} takes no arguments`);
+				const filter = filterOf(name, input.arguments);
+				if (Option.isNone(filter)) return invalid(usage[name]);
+				const cursor = input.cursor === undefined || input.cursor === null ? null : positionOf(input.cursor);
+				if (cursor === undefined) return invalid("cursor must be null or a cursor this server sent");
 				if (!validSecret(input.delivery.secret))
 					return invalid("delivery.secret must be whsec_ and 24–64 base64 bytes");
 				const target = callbackUrl(input.delivery.url);
@@ -345,14 +501,40 @@ export const installEvents = (api: Api, origin: string) =>
 				const agent = caller.agent;
 				if (!caller.scopes.includes("read") || !agent)
 					return failure(-32012, "Forbidden", { reason: "Reconnect with write access to choose the name to watch." });
-				const id = subscriptionId(caller.clientId, target.href, input.name);
+				const topic = filter.value.topic ?? null;
+				if (topic !== null) {
+					const missing = yield* ctx.topics.read(topic, { depth: 0 }).pipe(
+						Effect.as(null),
+						Effect.catchTag("KernelError", (error) =>
+							error.code === "topic_not_found" || error.code === "input_invalid"
+								? Effect.succeed(error.code)
+								: Effect.fail(error),
+						),
+						// The topic view also reads the topic's pages, which refuse some valid topic names such as node_modules.
+						Effect.catchTag("PageRejected", (error) => Effect.succeed(error.code)),
+					);
+					if (missing === "input_invalid" || missing === "page_path_invalid")
+						return invalid("topic must be a board topic path that can be read");
+					if (missing === "topic_not_found") return failure(-32011, "NotFound", { kind: "topic", topic });
+					// The page store was unavailable or changed under the read, so the topic may exist: the client retries.
+					if (missing !== null) return failure(-32603, "Internal error", { retriable: true, reason: missing });
+				}
+				const id = subscriptionId(caller.clientId, target.href, name, filter.value);
 				const now = yield* Clock.currentTimeMillis;
 				const ttl = input.ttlMs === undefined || input.ttlMs === null ? defaultTtl : input.ttlMs;
 				const refreshBefore = now + Math.min(defaultTtl, Math.max(minimumTtl, ttl));
-				const cached = (yield* rows(ctx, caller.clientId)).find(
-					(row) => row.id === id && row.refresh_before > now && row.verified_at > now - verifiedFor,
-				);
-				if (!cached) {
+				const instance = `extension:${ctx.extension}:${caller.clientId}`;
+				const owned = yield* rows(ctx, caller.clientId);
+				// Verification is cached per client and callback, so differing arguments cannot multiply challenges.
+				const cached = owned
+					.filter((row) => row.url === target.href && row.refresh_before > now && row.verified_at > now - verifiedFor)
+					.toSorted((left, right) => right.verified_at - left.verified_at)[0];
+				const fence = yield* ctx.read((value) => Effect.succeed(value));
+				// A new subscription starts now, or after the client's cursor; a cursor beyond the board starts now.
+				const since = cursor === null ? fence : Math.min(cursor, fence);
+				// Only a replay that creates a row spends the budget below; a refresh keeps its position.
+				const replaying = since < fence && !owned.some((row) => row.id === id && row.refresh_before > now);
+				if (!cached || replaying) {
 					const allowed = yield* Ref.modify(verifications, (budget) => {
 						const recent = (budget.get(caller.clientId) ?? []).filter((at) => at > now - verificationWindow);
 						const next = new Map(budget);
@@ -361,45 +543,99 @@ export const installEvents = (api: Api, origin: string) =>
 					});
 					if (!allowed)
 						return failure(-32013, "ResourceExhausted", { limit: "verifications", max: verificationsPerWindow });
+				}
+				if (!cached) {
 					const reason = yield* verify(target, id, input.delivery.secret);
 					if (reason !== null) return failure(-32015, "CallbackEndpointError", { reason });
 				}
 				const verifiedAt = cached?.verified_at ?? now;
-				const start = yield* ctx.read((fence) => Effect.succeed(fence));
+				const subtopics = filter.value.recursive !== false;
+				let families = yield* grantFamilies(ctx, caller.clientId);
+				// A replay is bounded by the messages it would deliver, not by board sequence numbers, and is worked out only
+				// for a subscribe that creates the row. If the row vanishes before the mutation below anyway, the insert
+				// starts at the fence and reports truncated whenever the client was behind.
+				const replayFrom = (held: ReadonlyArray<string>) =>
+					Effect.gen(function* () {
+						const window = yield* ctx.messages.query({
+							since,
+							newest: true,
+							limit: replayScan,
+							exclude: [instance, ...held],
+							...selection(name, agent, topic, subtopics),
+						});
+						const matched = window.items.filter((item) => matches(topic, subtopics, held, item));
+						// Past the newest replayLimit matches it starts after the one just older. A full window of candidates
+						// starts at its oldest, and is truncated if an older match exists or older candidates went unexamined.
+						const over = matched.length > replayLimit ? matched[matched.length - replayLimit - 1] : undefined;
+						if (over !== undefined) return { position: over.seq, truncated: true };
+						const oldest = window.items.length === replayScan ? window.items[0] : undefined;
+						if (oldest === undefined) return { position: since, truncated: false };
+						// Every delivery filter is in the query, so the first message after the cursor is a deliverable one;
+						// the replay skipped something exactly when that message is older than the window.
+						const first = (yield* ctx.messages.query({
+							since,
+							limit: 1,
+							exclude: [instance, ...held],
+							...(name === mentionEvent
+								? {
+										mentions: [`@${agent}`, "@here"],
+										...(topic === null ? {} : { topic, recursive: subtopics, all: true }),
+									}
+								: topic === null
+									? { mentions: [`@${agent}`, "@here"] }
+									: { topic, recursive: subtopics }),
+						})).items[0];
+						return { position: oldest.seq - 1, truncated: first !== undefined && first.seq < oldest.seq };
+					});
+				let start = !replaying ? { position: fence, truncated: since < fence } : yield* replayFrom(families);
+				if (replaying) {
+					const latest = yield* grantFamilies(ctx, caller.clientId);
+					if (storedFamilies(...latest) !== storedFamilies(...families)) {
+						families = latest;
+						start = yield* replayFrom(families);
+					}
+				}
 				const sql = ctx.db;
 				// Mutations serialize on the board's writer lock, so the existence and limit checks cannot race.
-				const full = yield* ctx.mutate(
+				const outcome = yield* ctx.mutate(
 					Effect.gen(function* () {
 						yield* sql`DELETE FROM example_mcp_events WHERE refresh_before<=${now}`;
 						const current: Rows = yield* sql`SELECT * FROM example_mcp_events WHERE id=${id}`.pipe(
 							Effect.flatMap(decodeRows),
 						);
-						if (current.length > 0) {
-							const existing = current[0];
-							if (!existing) return null;
+						const existing = current[0];
+						// A live subscription keeps its own position: whatever cursor the refresh carries is at or behind it.
+						if (existing) {
 							const rotating = !sameSecret(existing.secret, input.delivery.secret);
 							const previous = rotating ? existing.secret : existing.previous_secret;
 							const previousUntil = rotating ? now + secretOverlap : existing.previous_secret_until;
 							const resetRetries = existing.agent !== agent ? 0 : existing.attempts;
-							yield* sql`UPDATE example_mcp_events SET agent=${agent},previous_secret=${previous},previous_secret_until=${previousUntil},secret=${input.delivery.secret},refresh_before=${refreshBefore},verified_at=${verifiedAt},attempts=${resetRetries},next_attempt=0 WHERE id=${id}`;
-							return null;
+							const storedFamily = storedFamilies(existing.grant_family, ...families);
+							yield* sql`UPDATE example_mcp_events SET agent=${agent},previous_secret=${previous},previous_secret_until=${previousUntil},secret=${input.delivery.secret},refresh_before=${refreshBefore},verified_at=${verifiedAt},attempts=${resetRetries},next_attempt=0,grant_family=${storedFamily} WHERE id=${id}`;
+							return { position: existing.position, truncated: false };
 						}
 						const clientCount =
 							yield* sql`SELECT COUNT(*) AS count FROM example_mcp_events WHERE client_id=${caller.clientId}`.pipe(
 								Effect.flatMap(decodeCount),
 							);
-						if (clientCount >= perClient) return perClient;
+						if (clientCount >= perClient) return { limit: perClient };
 						const boardCount = yield* sql`SELECT COUNT(*) AS count FROM example_mcp_events`.pipe(
 							Effect.flatMap(decodeCount),
 						);
-						if (boardCount >= perBoard) return perBoard;
-						yield* sql`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,previous_secret_until,refresh_before,verified_at,position,attempts,next_attempt,last_error) VALUES(${id},${caller.clientId},${agent},${`extension:${ctx.extension}:${caller.clientId}`},${target.href},${input.delivery.secret},NULL,NULL,${refreshBefore},${verifiedAt},${start},0,0,NULL)`;
-						return null;
+						if (boardCount >= perBoard) return { limit: perBoard };
+						yield* sql`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,previous_secret_until,refresh_before,verified_at,position,attempts,next_attempt,last_error,event_name,topic,subtopics,grant_family) VALUES(${id},${caller.clientId},${agent},${instance},${target.href},${input.delivery.secret},NULL,NULL,${refreshBefore},${verifiedAt},${start.position},0,0,NULL,${name},${topic},${subtopics ? 1 : 0},${storedFamilies(...families)})`;
+						return start;
 					}),
 				);
-				if (full !== null) return failure(-32013, "ResourceExhausted", { limit: "subscriptions", max: full });
+				if ("limit" in outcome)
+					return failure(-32013, "ResourceExhausted", { limit: "subscriptions", max: outcome.limit });
 				return {
-					result: { id, refreshBefore: new Date(refreshBefore).toISOString(), cursor: null, truncated: false },
+					result: {
+						id,
+						refreshBefore: new Date(refreshBefore).toISOString(),
+						cursor: String(outcome.position),
+						truncated: outcome.truncated,
+					},
 				};
 			});
 
@@ -408,11 +644,13 @@ export const installEvents = (api: Api, origin: string) =>
 				const decoded = Schema.decodeUnknownOption(UnsubscribeParams)(params);
 				if (decoded._tag === "None") return invalid("name and delivery.url are required");
 				const input = decoded.value;
-				if (input.name !== mentionEvent) return failure(-32011, "NotFound", { kind: "event" });
-				if (!noArguments(input.arguments)) return invalid(`${mentionEvent} takes no arguments`);
+				const name = input.name;
+				if (!isEvent(name)) return failure(-32011, "NotFound", { kind: "event" });
+				const filter = filterOf(name, input.arguments);
+				if (Option.isNone(filter)) return invalid(usage[name]);
 				const target = callbackUrl(input.delivery.url);
 				if (!target) return invalid("delivery.url must be an https URL without credentials");
-				const id = subscriptionId(caller.clientId, target.href, input.name);
+				const id = subscriptionId(caller.clientId, target.href, name, filter.value);
 				yield* ctx.mutate(ctx.db`DELETE FROM example_mcp_events WHERE id=${id} AND client_id=${caller.clientId}`);
 				return { result: {} };
 			});
@@ -425,12 +663,24 @@ export const installEvents = (api: Api, origin: string) =>
 					sql`SELECT COUNT(*) AS count FROM example_mcp_oauth WHERE client_id=${clientId} AND (kind='access' OR kind='refresh') AND expires_at>${now}`,
 			).pipe(Effect.map((total) => total > 0));
 
+		/** Families this connection has used, including ones kept after a replacement or posting-name change. */
+		const grantFamilies = (ctx: Store, clientId: string) =>
+			ctx
+				.read(() =>
+					ctx.db`SELECT family,families FROM example_mcp_grants WHERE client_id=${clientId}`.pipe(
+						Effect.flatMap(Schema.decodeUnknownEffect(Family)),
+					),
+				)
+				.pipe(Effect.map((found) => familyList(found[0]?.families, found[0]?.family)));
+
 		const deliver = (row: typeof Row.Type, message: Message) =>
 			Effect.gen(function* () {
-				const eventId = `evt_${message.seq}`;
+				// Subscription id plus sequence: the same post on two subscriptions is two deliveries, and a retry
+				// of one subscription keeps the same Standard Webhooks id.
+				const eventId = `evt_${row.id}_${message.seq}`;
 				const body = JSON.stringify({
 					eventId,
-					name: mentionEvent,
+					name: row.event_name,
 					timestamp: new Date(message.created_at).toISOString(),
 					data: {
 						id: `message:${message.seq}`,
@@ -440,7 +690,8 @@ export const installEvents = (api: Api, origin: string) =>
 						truncated: message.body.length > excerpt,
 						url: messageUrl(origin, message.seq),
 					},
-					cursor: null,
+					// Delivery is in order, so everything up to this message has been delivered or given up on.
+					cursor: String(message.seq),
 				});
 				const target = callbackUrl(row.url);
 				if (!target) return "rejected" as const;
@@ -483,7 +734,7 @@ export const installEvents = (api: Api, origin: string) =>
 				)
 				.pipe(Effect.map((found) => found[0]));
 
-		/** Delivers one subscription's pending mentions in order; says when to look again and whether more remain. */
+		/** Delivers one subscription's pending events in order; says when to look again and whether more remain. */
 		const drain = (ctx: BackgroundContext, row: typeof Row.Type, now: number) =>
 			Effect.gen(function* () {
 				if (row.next_attempt > now) return { wake: row.next_attempt, backlog: false };
@@ -501,10 +752,18 @@ export const installEvents = (api: Api, origin: string) =>
 					);
 					return { wake: Infinity, backlog: false };
 				}
+				// After an expired live() and a refresh before the DELETE, a re-read repeats only delivered ids; a first-time match has none.
+				const held = yield* grantFamilies(ctx, row.client_id);
+				const families = familyList(row.grant_family, ...held);
+				const stored = storedFamilies(row.grant_family, ...held);
+				if (stored !== null && stored !== row.grant_family)
+					yield* ctx.mutate(
+						ctx.db`UPDATE example_mcp_events SET grant_family=${stored} WHERE id=${row.id} AND agent=${row.agent} AND position=${row.position}`,
+					);
 				const page = yield* ctx.messages.query({
 					since: row.position,
-					mentions: [`@${row.agent}`, "@here"],
-					exclude: row.instance,
+					...selection(row.event_name, row.agent, row.topic, row.subtopics === 1),
+					exclude: [row.instance, ...families],
 					limit: 16,
 				});
 				let position = row.position;
@@ -515,6 +774,8 @@ export const installEvents = (api: Api, origin: string) =>
 					// Stop if unsubscribe, expiry, grant loss, agent change, or another drain moved the cursor.
 					if (!current || !(yield* granted(ctx, current.client_id, at)) || current.agent !== row.agent)
 						return { wake: Infinity, backlog: false };
+					const latest = familyList(current.grant_family, ...held);
+					if (!matches(row.topic, row.subtopics === 1, latest, message)) continue;
 					const outcome = message.deleted_at === null ? yield* deliver(current, message) : "rejected";
 					// Suppressed means this generation is no longer live; its scope is about to close.
 					if (outcome === "suppressed") return { wake: now + 1000, backlog: false };
@@ -531,17 +792,72 @@ export const installEvents = (api: Api, origin: string) =>
 					yield* checkpoint(ctx, row.id, row.agent, position, message.seq, 0, 0, error);
 					position = message.seq;
 				}
+				// Past what this page scanned. Empty pages write the event fence only once the gap is large, but they
+				// still persist once a later message exists so a reload cannot re-read an edit or move.
 				if (page.cursor > position) {
-					const at = yield* Clock.currentTimeMillis;
-					const current = yield* live(ctx, row.id, position, at);
-					if (current && current.agent === row.agent) {
-						yield* checkpoint(ctx, row.id, row.agent, position, page.cursor, 0, 0, null);
+					const persistFence = page.items.length > 0 || page.cursor - position >= idleCheckpoint;
+					const newest = persistFence
+						? undefined
+						: (yield* ctx.messages.query({ since: position, newest: true, limit: 1 })).items[0];
+					// The unfiltered newest read can see a message published after this page; never persist past the
+					// fence that page actually scanned, or a matching post in that gap is skipped forever.
+					const to = persistFence ? page.cursor : newest !== undefined ? Math.min(newest.seq, page.cursor) : undefined;
+					if (to !== undefined && to > position) {
+						const at = yield* Clock.currentTimeMillis;
+						const current = yield* live(ctx, row.id, position, at);
+						if (current && current.agent === row.agent) {
+							yield* checkpoint(ctx, row.id, row.agent, position, to, 0, 0, null);
+							position = to;
+						}
 					}
 				}
 				return { wake: now + 60_000, backlog: page.items.length === 16 };
 			});
 
-		/** Mentions are read through the public message query, so delivery sees exactly what the board has published. */
+		/**
+		 * One subscription's failure backs off only that subscription, from two seconds doubling to a minute, so a
+		 * transient board error delays it briefly while the others keep delivering.
+		 */
+		const isolated = (ctx: BackgroundContext, row: typeof Row.Type, now: number) =>
+			drain(ctx, row, now).pipe(
+				Effect.exit,
+				Effect.flatMap((exit) =>
+					Effect.gen(function* () {
+						if (exit._tag === "Success") {
+							// A drain still waiting out its back-off returned early, so only one that ran clears the count.
+							if (row.next_attempt <= now)
+								yield* Ref.update(failures, (map) =>
+									map.has(row.id) ? new Map([...map].filter(([key]) => key !== row.id)) : map,
+								);
+							return exit.value;
+						}
+						if (Cause.hasInterruptsOnly(exit.cause)) return yield* Effect.interrupt;
+						const failed = yield* Ref.modify(failures, (map) => {
+							const count = (map.get(row.id) ?? 0) + 1;
+							return [count, new Map(map).set(row.id, count)] as const;
+						});
+						const wake = (yield* Clock.currentTimeMillis) + Math.min(60_000, 2_000 * 2 ** (failed - 1));
+						yield* ctx
+							.mutate(
+								Effect.gen(function* () {
+									const current =
+										yield* ctx.db`SELECT position FROM example_mcp_events WHERE id=${row.id} AND agent=${row.agent}`.pipe(
+											Effect.flatMap(
+												Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ position: Schema.Finite }))),
+											),
+										);
+									const from = current[0]?.position;
+									if (from === undefined) return;
+									yield* ctx.db`UPDATE example_mcp_events SET next_attempt=${wake},last_error='drain_failed' WHERE id=${row.id} AND position=${from} AND agent=${row.agent}`;
+								}),
+							)
+							.pipe(Effect.ignore);
+						return { wake, backlog: false };
+					}),
+				),
+			);
+
+		/** Messages are read through the public message query, so delivery sees exactly what the board has published. */
 		const run = (ctx: BackgroundContext) =>
 			Effect.gen(function* () {
 				while (true) {
@@ -550,7 +866,11 @@ export const installEvents = (api: Api, origin: string) =>
 						const now = yield* Clock.currentTimeMillis;
 						yield* ctx.mutate(ctx.db`DELETE FROM example_mcp_events WHERE refresh_before<=${now}`);
 						// Subscriptions drain concurrently so one slow callback cannot hold up the others.
-						const results = yield* Effect.forEach(yield* rows(ctx), (row) => drain(ctx, row, now), {
+						const current = yield* rows(ctx);
+						// Back-off counts for subscriptions that expired, lost their grant or were unsubscribed go with them.
+						const ids = new Set(current.map((row) => row.id));
+						yield* Ref.update(failures, (map) => new Map([...map].filter(([id]) => ids.has(id))));
+						const results = yield* Effect.forEach(current, (row) => isolated(ctx, row, now), {
 							concurrency: 8,
 						});
 						if (results.some((result) => result.backlog)) return;

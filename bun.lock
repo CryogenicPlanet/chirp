@@ -107,6 +107,15 @@
         "@effect/sql-pglite": "4.0.0-rc.113",
       },
     },
+    "packages/signin": {
+      "name": "@comms/signin",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect/platform-bun": "4.0.0-rc.113",
+        "effect": "4.0.0-rc.113",
+        "jose": "6.2.12",
+      },
+    },
     "packages/storage": {
       "name": "@comms/storage",
       "version": "0.0.0",
@@ -239,6 +248,8 @@
     "@comms/protocol": ["@comms/protocol@workspace:packages/protocol"],
 
     "@comms/server": ["@comms/server@workspace:packages/server"],
+
+    "@comms/signin": ["@comms/signin@workspace:packages/signin"],
 
     "@comms/storage": ["@comms/storage@workspace:packages/storage"],
 

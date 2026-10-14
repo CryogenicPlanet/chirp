@@ -19,6 +19,7 @@ import { publishedMessages } from "./published-messages.ts";
 import { markRead } from "./read-marks.ts";
 import { moveTopic } from "./topic-move.ts";
 import { mentionsIn } from "./message-mentions.ts";
+import type { MessageQuery } from "../../kernel/extension-capabilities.ts";
 
 export const StoredMessage = Schema.Struct({
 	...Message.fields,
@@ -158,24 +159,15 @@ export const makeMessages = (
 					}),
 			});
 		});
-	const list = (input: {
-		readonly since?: number;
-		readonly topic?: string;
-		readonly recursive?: boolean;
-		readonly limit: number;
-		readonly exclude?: string;
-		readonly newest?: boolean;
-		readonly tag?: string;
-		readonly agent?: string;
-		readonly q?: string;
-		readonly mentions?: ReadonlyArray<string>;
-	}) =>
+	const list = (input: MessageQuery) =>
 		read((ceiling) =>
 			Effect.gen(function* () {
 				const since = input.since ?? (input.newest ? 0 : ceiling);
+				const excluded = typeof input.exclude === "string" ? [input.exclude] : (input.exclude ?? []);
 				if (
 					!Number.isSafeInteger(since) ||
 					since < 0 ||
+					excluded.length > 64 ||
 					!Number.isSafeInteger(input.limit) ||
 					input.limit < 1 ||
 					input.limit > 200 ||
@@ -197,6 +189,10 @@ export const makeMessages = (
 					targets.length === 0
 						? sql`1=0`
 						: sql`EXISTS (SELECT 1 FROM messages mention_source WHERE mention_source.id=visible_messages.id AND ${sql.or(targets.map((target) => jsonArrayHas(sql, mentions, target)))})`;
+				const addressed =
+					input.all === true && input.topic !== undefined && targets.length > 0
+						? sql`(${topicMatch} AND ${mentionMatch})`
+						: sql`((${input.topic === undefined && targets.length === 0 ? 1 : 0}=1) OR ${topicMatch} OR ${mentionMatch})`;
 				const folding =
 					input.q === undefined
 						? false
@@ -209,8 +205,8 @@ export const makeMessages = (
 					input.q === undefined ? sql`1=1` : yield* searchMessages(sql, input.q, ceiling, folding, mysql);
 				const items =
 					yield* sql`WITH visible_messages AS (${publishedMessages(sql, ceiling)}) SELECT * FROM visible_messages WHERE deleted_at IS NULL AND seq>${since} AND seq<=${ceiling}
-   AND ((${input.topic === undefined && targets.length === 0 ? 1 : 0}=1) OR ${topicMatch} OR ${mentionMatch})
-   AND (${nullable(sql, input.exclude ?? null)} IS NULL OR instance<>${input.exclude ?? null})
+   AND ${addressed}
+   AND ${excluded.length === 0 ? sql`1=1` : sql`instance NOT IN ${sql.in(excluded)}`}
    AND (${nullable(sql, input.agent ?? null)} IS NULL OR agent=${input.agent ?? null})
    AND (${nullable(sql, input.tag ?? null)} IS NULL OR ${jsonArrayHas(sql, sql("visible_messages.tags"), input.tag ?? null)})
    AND ${bodyMatch}

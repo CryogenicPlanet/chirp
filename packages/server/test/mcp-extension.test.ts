@@ -18,6 +18,21 @@ const stringField = (value: unknown, name: string) => {
 	return field;
 };
 
+/** A JSON-RPC answer and its HTTP status. A body that is not JSON fails with that status, so an empty answer is legible. */
+const rpc = async (response: Response) => {
+	const text = await response.text();
+	try {
+		return { status: response.status, body: JSON.parse(text) };
+	} catch (cause) {
+		throw new Error(
+			`MCP answered ${response.status} with a body that is not JSON: ${JSON.stringify(text.slice(0, 200))}`,
+			{
+				cause,
+			},
+		);
+	}
+};
+
 it("keeps MCP absent until its extension package is installed", async (test) => {
 	const fixture = await conversation(test);
 	const app = await fixture.launch(join(import.meta.dirname, "../src/server.ts"));
@@ -626,7 +641,6 @@ it("serves MCP 2.0 discovery and delivers signed mention events to a verified we
 	const { access } = await connect(app.url, cookie, "Event client", "gpt-bot");
 	const secret = `whsec_${Buffer.alloc(32, 7).toString("base64")}`;
 	const hook = await hookReceiver(test);
-	const rpc = async (response: Response) => ({ status: response.status, body: await response.json() });
 
 	const discovered = await rpc(await modern(app.url, access, 1, "server/discover"));
 	expect(discovered.status).toBe(200);
@@ -676,7 +690,10 @@ it("serves MCP 2.0 discovery and delivers signed mention events to a verified we
 	).toMatchObject({ resultType: "complete", structuredContent: { results: [] } });
 	expect((await rpc(await modern(app.url, access, 8, "events/list"))).body.result).toMatchObject({
 		resultType: "complete",
-		events: [{ name: "mention.created", delivery: ["webhook"] }],
+		events: [
+			{ name: "mention.created", delivery: ["webhook"] },
+			{ name: "message.created", delivery: ["webhook"] },
+		],
 	});
 
 	const subscription = (overrides: Record<string, unknown> = {}) => ({
@@ -688,7 +705,7 @@ it("serves MCP 2.0 discovery and delivers signed mention events to a verified we
 	});
 	for (const [overrides, code] of [
 		[{ delivery: { mode: "webhook", url: hook.url, secret: "whsec_short" } }, -32602],
-		[{ arguments: { topic: "plans" } }, -32602],
+		[{ arguments: { channel: "plans" } }, -32602],
 		[{ name: "message.deleted" }, -32011],
 		[{ delivery: { mode: "poll", url: hook.url, secret } }, -32014],
 	] as const)
@@ -704,7 +721,11 @@ it("serves MCP 2.0 discovery and delivers signed mention events to a verified we
 	hook.state.echo = true;
 	const verificationsBefore = hook.received.length;
 	const subscribed = await rpc(await modern(app.url, access, 11, "events/subscribe", subscription()));
-	expect(subscribed.body.result).toMatchObject({ resultType: "complete", cursor: null, truncated: false });
+	expect(subscribed.body.result).toMatchObject({
+		resultType: "complete",
+		cursor: expect.stringMatching(/^[0-9]+$/),
+		truncated: false,
+	});
 	const subscriptionId = subscribed.body.result.id;
 	expect(subscriptionId).toMatch(/^sub_[0-9a-f]{32}$/);
 	expect(Date.parse(subscribed.body.result.refreshBefore)).toBeGreaterThan(Date.now() + 23 * 60 * 60 * 1000);
@@ -728,7 +749,7 @@ it("serves MCP 2.0 discovery and delivers signed mention events to a verified we
 	expect(first.headers["webhook-signature"]).toBe(signatureOf(secret, first.headers, first.body));
 	expect(first.headers["x-mcp-subscription-id"]).toBe(subscriptionId);
 	expect(JSON.parse(first.body)).toEqual({
-		eventId: `evt_${mentioned.seq}`,
+		eventId: `evt_${subscriptionId}_${mentioned.seq}`,
 		name: "mention.created",
 		timestamp: new Date(mentioned.created_at).toISOString(),
 		data: {
@@ -739,9 +760,9 @@ it("serves MCP 2.0 discovery and delivers signed mention events to a verified we
 			truncated: false,
 			url: `https://comms.test/?message=${mentioned.seq}#message-${mentioned.seq}`,
 		},
-		cursor: null,
+		cursor: String(mentioned.seq),
 	});
-	expect(first.headers["webhook-id"]).toBe(`evt_${mentioned.seq}`);
+	expect(first.headers["webhook-id"]).toBe(`evt_${subscriptionId}_${mentioned.seq}`);
 
 	await app.post("/api/messages", { topic: "plans", body: "Nobody is mentioned here" }, cookie);
 	await modern(app.url, access, 13, "tools/call", {
@@ -808,7 +829,10 @@ it("offers events only to 2026-07-28 clients and records which handshake each re
 	expect(legacy.delivery.events).toEqual([]);
 	expect(legacy.delivery.events_transport).toContain("2026-07-28");
 	const current = await info(await modern(app.url, access, 2, "tools/call", { name: "connection_info" }));
-	expect(current).toMatchObject({ handshake: "2026-07-28", delivery: { events: ["mention.created"] } });
+	expect(current).toMatchObject({
+		handshake: "2026-07-28",
+		delivery: { events: ["mention.created", "message.created"] },
+	});
 	expect((await modern(app.url, access, 3, "server/discover", {}, { version: "2099-01-01" })).status).toBe(400);
 
 	expect((await fetch(`${app.url}/api/mcp/requests`)).status).toBe(401);
@@ -979,8 +1003,6 @@ it("stops delivering pending mentions when unsubscribe is called during drain", 
 	if (!address || typeof address === "string") throw new Error("receiver has no address");
 	const hookUrl = `http://127.0.0.1:${address.port}/hook`;
 
-	const rpc = async (response: Response) => ({ status: response.status, body: await response.json() });
-
 	const subscription = {
 		name: "mention.created",
 		arguments: {},
@@ -1069,7 +1091,6 @@ it("signs deliveries with both secrets while a refresh rotates the webhook key",
 	const address = slowServer.address();
 	if (!address || typeof address === "string") throw new Error("receiver has no address");
 	const hookUrl = `http://127.0.0.1:${address.port}/hook`;
-	const rpc = async (response: Response) => ({ status: response.status, body: await response.json() });
 	const params = (secret: string) => ({
 		name: "mention.created",
 		arguments: {},
@@ -1126,7 +1147,6 @@ it("retires the previous webhook secret after the overlap window", async (test) 
 	const address = slowServer.address();
 	if (!address || typeof address === "string") throw new Error("receiver has no address");
 	const hookUrl = `http://127.0.0.1:${address.port}/hook`;
-	const rpc = async (response: Response) => ({ status: response.status, body: await response.json() });
 	const params = (secret: string) => ({
 		name: "mention.created",
 		arguments: {},
@@ -1192,7 +1212,6 @@ it("preserves previous secret overlap during same-secret refreshes", async (test
 	const address = slowServer.address();
 	if (!address || typeof address === "string") throw new Error("receiver has no address");
 	const hookUrl = `http://127.0.0.1:${address.port}/hook`;
-	const rpc = async (response: Response) => ({ status: response.status, body: await response.json() });
 	const params = (secret: string) => ({
 		name: "mention.created",
 		arguments: {},
@@ -1352,7 +1371,6 @@ it("stops drain when subscription agent filter changes", async (test) => {
 	const address = slowServer.address();
 	if (!address || typeof address === "string") throw new Error("receiver has no address");
 	const hookUrl = `http://127.0.0.1:${address.port}/hook`;
-	const rpc = async (response: Response) => ({ status: response.status, body: await response.json() });
 	const params = (agent: string) => ({
 		name: "mention.created",
 		arguments: {},
@@ -1397,7 +1415,6 @@ it("rejects malformed unsubscribe callback URLs", async (test) => {
 	const address = receiver.address();
 	if (!address || typeof address === "string") throw new Error("receiver has no address");
 	const validUrl = `http://127.0.0.1:${address.port}/hook`;
-	const rpc = async (response: Response) => ({ status: response.status, body: await response.json() });
 	const subscribed = await rpc(
 		await modern(app.url, access, 1, "events/subscribe", {
 			name: "mention.created",
@@ -1422,7 +1439,7 @@ it("rejects malformed unsubscribe callback URLs", async (test) => {
 	const filteredUnsub = await rpc(
 		await modern(app.url, access, 3, "events/unsubscribe", {
 			name: "mention.created",
-			arguments: { topic: "plans" },
+			arguments: { channel: "plans" },
 			delivery: { url: validUrl },
 		}),
 	);
