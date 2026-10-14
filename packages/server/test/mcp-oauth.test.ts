@@ -378,6 +378,10 @@ it("refuses metadata documents that do not describe the client", async (test) =>
 			},
 			body: metadataDocument(`${base}/apparent-age.json`),
 		},
+		"/vary-star.json": {
+			headers: { vary: "*", "cache-control": "public, max-age=3600" },
+			body: metadataDocument(`${base}/vary-star.json`),
+		},
 	}));
 	const { challenge } = pkce("refusals");
 	const ask = (path: string, fields: Readonly<Record<string, string>> = {}) =>
@@ -454,6 +458,10 @@ it("refuses metadata documents that do not describe the client", async (test) =>
 	expect((await ask("/apparent-age.json")).status).toBe(200);
 	expect((await ask("/apparent-age.json")).status).toBe(200);
 	expect(host.hits("/apparent-age.json")).toBe(2);
+	// Vary: * never matches a later request (RFC 9111 §4.1).
+	expect((await ask("/vary-star.json")).status).toBe(200);
+	expect((await ask("/vary-star.json")).status).toBe(200);
+	expect(host.hits("/vary-star.json")).toBe(2);
 }, 60000);
 
 it("never fetches client metadata from private addresses on a public board", async (test) => {
@@ -540,6 +548,16 @@ it("names the issuer in every authorization response and keeps registered client
 	expect(
 		await refused(
 			await consent(app, cookie, authorizeQuery(clientId, challenge, { redirect_uri: "http://127.0.0.1:53682/other" })),
+		),
+	).toBe("redirect_uri is not registered for this client.");
+	// Loopback matching may differ only in the port, not a normalized path (RFC 8252 §8.4).
+	expect(
+		await refused(
+			await consent(
+				app,
+				cookie,
+				authorizeQuery(clientId, challenge, { redirect_uri: "http://localhost/a/../callback" }),
+			),
 		),
 	).toBe("redirect_uri is not registered for this client.");
 	expect(

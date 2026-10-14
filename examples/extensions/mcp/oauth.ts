@@ -124,8 +124,8 @@ const validRedirect = (value: string) => {
 const matched = (uri: string) => {
 	const url = URL.parse(uri);
 	if (!url || url.protocol !== "http:" || !loopback.includes(url.hostname)) return uri;
-	url.port = "";
-	return url.href;
+	// Drop only the port. URL.href would also resolve dot segments and normalize the host.
+	return uri.replace(/^http:\/\/(\[[^\]]+\]|[^/?#:]+):\d+/i, "http://$1");
 };
 const metadataPrefix = "mcp_cimd_";
 /** A client_id naming its Client ID Metadata Document (CIMD §3): https, a path, no userinfo, fragment or dot segments. */
@@ -145,12 +145,13 @@ const metadataUrl = (clientId: string) => {
 };
 const metadataLimit = 5120;
 const cachedDocuments = 64;
-/** How long a fetched document is reused. This shared cache uses Cache-Control s-maxage, then max-age, then Expires (CIMD §5.2, RFC 9111), at most an hour, five minutes if none is set. private, no-store and no-cache are not stored. When a freshness lifetime is set, current age (Age and Date, RFC 9111 §4.2.3) reduces what remains; an invalid Expires is already stale (RFC 9111 §5.3). */
+/** How long a fetched document is reused. This shared cache uses Cache-Control s-maxage, then max-age, then Expires (CIMD §5.2, RFC 9111), at most an hour, five minutes if none is set. private, no-store, no-cache, and Vary: * are not stored. When a freshness lifetime is set, current age (Age and Date, RFC 9111 §4.2.3) reduces what remains; an invalid Expires is already stale (RFC 9111 §5.3). */
 const cacheLifetime = (
 	header: string | undefined,
 	ageHeader: string | undefined,
 	expiresHeader: string | undefined,
 	dateHeader: string | undefined,
+	varyHeader: string | undefined,
 	now: number,
 ) => {
 	const directives = (header ?? "")
@@ -158,6 +159,11 @@ const cacheLifetime = (
 		.split(",")
 		.map((directive) => directive.trim());
 	if (directives.includes("no-store") || directives.includes("no-cache") || directives.includes("private")) return 0;
+	const vary = (varyHeader ?? "")
+		.toLowerCase()
+		.split(",")
+		.map((field) => field.trim());
+	if (vary.includes("*")) return 0;
 	const seconds = (pattern: RegExp) => directives.flatMap((directive) => pattern.exec(directive)?.[1] ?? []).at(0);
 	const shared = seconds(/^s-maxage=(\d+)$/) ?? seconds(/^max-age=(\d+)$/);
 	const age = Number(/^(\d+)$/.exec((ageHeader ?? "").trim())?.[1] ?? 0);
@@ -393,6 +399,7 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 								age: response.headers.age,
 								expires: response.headers.expires,
 								date: response.headers.date,
+								vary: response.headers.vary,
 							};
 						}),
 					)
@@ -418,7 +425,14 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 				if (redirects.length === 0) return "lists no HTTPS or loopback redirect URI";
 				return {
 					client: { client_name: client_name.trim(), redirect_uris: redirects, client_url: client_id },
-					lifetime: cacheLifetime(read.cacheControl, read.age, read.expires, read.date, yield* Clock.currentTimeMillis),
+					lifetime: cacheLifetime(
+						read.cacheControl,
+						read.age,
+						read.expires,
+						read.date,
+						read.vary,
+						yield* Clock.currentTimeMillis,
+					),
 				};
 			}).pipe(
 				Effect.timeoutOption("5 seconds"),
