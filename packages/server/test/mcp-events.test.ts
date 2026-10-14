@@ -799,6 +799,18 @@ it("reports truncated for a topic mention replay only when it skipped a matching
 	expect(await mentioned.subscribe(hook.url, "mention.created", { topic: "watched" }, quiet.cursor)).toMatchObject({
 		truncated: false,
 	});
+	// A matching mention past three broad candidate pages is still truncated.
+	await mentioned.unsubscribe(hook.url, "mention.created", { topic: "watched" });
+	const deep = await mentioned.subscribe(hook.url, "mention.created", { topic: "watched" });
+	await mentioned.unsubscribe(hook.url, "mention.created", { topic: "watched" });
+	for (let n = 1; n <= 4; n++) await post("elsewhere", `@filter-bot p1 ${n}`);
+	for (let n = 1; n <= 4; n++) await post("elsewhere", `@filter-bot p2 ${n}`);
+	await post("watched", "@filter-bot deep");
+	for (let n = 1; n <= 4; n++) await post("elsewhere", `@filter-bot p3 ${n}`);
+	for (let n = 1; n <= 4; n++) await post("elsewhere", `@filter-bot p4 ${n}`);
+	expect(await mentioned.subscribe(hook.url, "mention.created", { topic: "watched" }, deep.cursor)).toMatchObject({
+		truncated: true,
+	});
 }, 120000);
 
 it("keeps a full 200-candidate replay look-back within the message query limit", async (test) => {
