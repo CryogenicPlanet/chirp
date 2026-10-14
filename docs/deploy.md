@@ -81,10 +81,10 @@ the board itself runs on localhost.
 
 Once you have a passkey, you can link a GitHub or Google account on your account page; the sign-in page
 then offers it. Boot signs these accounts in through a chirp sign-in service. The board needs no client
-registration: the service fetches `https://<primary origin>/auth/oidc/client.json`, so the primary
-origin must be reachable from the internet. A domain added with a code can take five minutes to be
-accepted there, while the service's copy of that document expires. That document is public and lists
-every allowed origin, including private names such as a tailnet host.
+registration: the service fetches `https://<primary origin>/auth/oidc/client.json` on every authorize
+and does not cache it, so the primary origin must be reachable from the internet and a domain added
+with a code is accepted on the next sign-in. That document is public and lists every allowed origin,
+including private names such as a tailnet host.
 
 That linking UI is part of the editable app. Upgrading the image updates boot's OIDC endpoints; it does
 not replace an already-installed `app/ui`. Stage the new account-page files through the
