@@ -5,6 +5,7 @@ import { type BoardError } from "./board-api.ts";
 import { getPasskeys } from "./account-api.ts";
 import { addPasskey, deletePasskey } from "./account-passkeys.ts";
 import { AccountSettings } from "./account-settings.tsx";
+import { AccountIdentities } from "./account-identities.tsx";
 import { AccountOrigins } from "./account-origins.tsx";
 import { AccountTokens } from "./account-tokens.tsx";
 import { Alert } from "./ui/alert.tsx";
@@ -121,6 +122,7 @@ export function AccountControls() {
 					</Alert>
 				)}
 			</section>
+			<AccountIdentities />
 			<AccountOrigins />
 			<AccountTokens />
 			<AccountSettings />
