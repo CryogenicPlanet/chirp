@@ -207,7 +207,15 @@ export const callbackRoute = (provider: Provider) =>
 			)
 				return yield* new Refused({ status: 400, message: restart });
 			const board = transaction.request;
-			if (query.get("error") !== null) return yield* decline("access_denied", board);
+			// Only a person's refusal is a denial; a provider outage stays retryable and anything else is the issuer's fault.
+			const upstreamError = query.get("error");
+			if (upstreamError !== null)
+				return yield* decline(
+					upstreamError === "access_denied" || upstreamError === "temporarily_unavailable"
+						? upstreamError
+						: "server_error",
+					board,
+				);
 			const code = query.get("code");
 			if (!code) return yield* decline("server_error", board);
 			const identity = yield* (yield* Upstream).identify(provider, code, transaction.upstream_verifier).pipe(

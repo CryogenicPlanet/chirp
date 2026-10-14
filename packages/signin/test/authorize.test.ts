@@ -151,7 +151,7 @@ it(
 );
 
 it(
-	"returns access_denied when the person cancels upstream, and server_error when the exchange fails",
+	"returns access_denied only when the person cancels upstream, and server_error when the provider or the exchange fails",
 	withHarness(async (h) => {
 		const authorized = await h.request(authorizeQuery(h.clients.board(), challenge));
 		const cookie = transactionCookie(authorized);
@@ -164,6 +164,19 @@ it(
 			state: "board-state",
 			iss: issuer,
 		});
+		// A provider failure is not reported as the person's refusal.
+		for (const [upstream, expected] of [
+			["temporarily_unavailable", "temporarily_unavailable"],
+			["server_error", "server_error"],
+			["redirect_uri_mismatch", "server_error"],
+		]) {
+			const again = await h.request(authorizeQuery(h.clients.board(), challenge));
+			const answer = await h.request(
+				`/callback/github?error=${upstream}&state=${location(again).searchParams.get("state") ?? ""}`,
+				{ headers: { cookie: `${cookieName}=${transactionCookie(again)}` } },
+			);
+			expect(location(answer).searchParams.get("error")).toBe(expected);
+		}
 		h.upstream.profile.refuseToken = true;
 		const failed = await throughUpstream(h);
 		expect(failed.callback.status).toBe(303);
