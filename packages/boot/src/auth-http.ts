@@ -13,7 +13,7 @@ import { isSqlError } from "effect/unstable/sql/SqlError";
 import { chirpIcon } from "./auth-styles.ts";
 import { ChildError } from "./child-process.ts";
 import { TrafficError } from "./traffic.ts";
-import { Cause, Console, Effect, Option, Schema } from "effect";
+import { Cause, Console, Duration, Effect, Option, Schema } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { AuthError, type Auth, type AuthConfig } from "./auth.ts";
 import type { VerifiedIdentity } from "./enrollment.ts";
@@ -297,7 +297,8 @@ export const sessionResponse = (session: { readonly token: string; readonly expi
 			secure: true,
 			sameSite: "strict",
 			path: "/",
-			maxAge: 30 * 24 * 60 * 60,
+			// Effect reads a bare number as milliseconds, so the unit is explicit: the cookie lasts as long as the session.
+			maxAge: Duration.days(30),
 		}),
 	);
 
