@@ -127,7 +127,8 @@ it("creates a passkey and a protected session, forwards verified identity, and l
 	expect((await fetch(`${app.url}/setup`)).status).toBe(404);
 	expect((await app.post("/_boot/auth/setup/options", { code: app.code() })).status).toBe(404);
 	const session = await app.login();
-	for (const flag of ["HttpOnly", "Secure", "SameSite=Strict", "Path=/"]) expect(session.header).toContain(flag);
+	for (const flag of ["HttpOnly", "Secure", "SameSite=Strict", "Path=/", "Max-Age=2592000"])
+		expect(session.header).toContain(flag);
 	expect(session.header).not.toContain("Domain=");
 	expect(session.response.headers.get("cache-control")).toBe("no-store");
 	const token = session.cookie.split("=")[1];
