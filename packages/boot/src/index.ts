@@ -90,18 +90,16 @@ export const boot = Effect.fn("boot")(function* (options: ApplicationSource & { 
 			? configured
 			: { ...configured, runtime: yield* remoteRuntime(configured, options.dataDirectory) };
 	const remote = configuration._tag === "remote" ? configuration.runtime : undefined;
-	const clientSecret = options.auth.oidc?.clientSecret;
-	const redact = logRedactor([
-		...(configuration._tag === "remote"
+	const redact = logRedactor(
+		configuration._tag === "remote"
 			? [
 					Redacted.value(configuration.app.url),
 					Redacted.value(configuration.boot.url),
 					Redacted.value(configuration.appConnection.password),
 					Redacted.value(configuration.bootConnection.password),
 				]
-			: []),
-		...(clientSecret === undefined ? [] : [Redacted.value(clientSecret)]),
-	]);
+			: [],
+	);
 	const phase = yield* Ref.make<RecoveryPhase>({ _tag: "Recovering" });
 	const restart = yield* Deferred.make<void>();
 	const installed = yield* Ref.make<{ readonly handle: Handler; readonly shutdown: Effect.Effect<void> }>({

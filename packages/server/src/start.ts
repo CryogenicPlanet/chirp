@@ -37,10 +37,9 @@ export const startServer = (browserOrigin?: string) =>
 		]);
 		// Two spellings of the same setting are ambiguous; an invalid RP ID makes boot refuse the configuration.
 		const ambiguous = Option.isSome(origins) && (Option.isSome(configuredRpId) || Option.isSome(configuredOrigin));
-		// GitHub and Google sign-in for linked identities; OIDC_ISSUER=none turns it off. Boot refuses an invalid value.
+		// The chirp sign-in issuer for linked GitHub and Google identities; none turns it off. Boot refuses anything
+		// but an exact origin.
 		const oidcIssuer = yield* Config.String("OIDC_ISSUER").pipe(Config.withDefault("https://auth.chirp.wiki"));
-		const oidcClientId = yield* Config.option(Config.String("OIDC_CLIENT_ID"));
-		const oidcClientSecret = yield* Config.option(Config.Redacted("OIDC_CLIENT_SECRET"));
 		return yield* boot({
 			dataDirectory: path.resolve(dataDirectory),
 			seedDirectory,
@@ -53,18 +52,7 @@ export const startServer = (browserOrigin?: string) =>
 				expectedOrigin: primary?.expectedOrigin ?? "",
 				additionalOrigins,
 				originList: Option.isSome(origins),
-				...(oidcIssuer === "none"
-					? {}
-					: {
-							oidc: {
-								issuer: oidcIssuer,
-								...Option.match(oidcClientId, { onNone: () => ({}), onSome: (clientId) => ({ clientId }) }),
-								...Option.match(oidcClientSecret, {
-									onNone: () => ({}),
-									onSome: (clientSecret) => ({ clientSecret }),
-								}),
-							},
-						}),
+				...(oidcIssuer === "none" ? {} : { oidc: { issuer: oidcIssuer } }),
 			},
 		}).pipe(
 			Effect.provide(

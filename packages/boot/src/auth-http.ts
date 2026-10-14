@@ -61,7 +61,7 @@ const policy = {
 	},
 	auth_configuration_invalid: {
 		status: 401,
-		hint: "Correct RP_ID and PUBLIC_ORIGIN, or PUBLIC_ORIGINS, and OIDC_ISSUER, OIDC_CLIENT_ID and OIDC_CLIENT_SECRET, in the boot configuration before authenticating.",
+		hint: "Correct RP_ID and PUBLIC_ORIGIN, or PUBLIC_ORIGINS, and OIDC_ISSUER, in the boot configuration before authenticating.",
 	},
 	authentication_failed: { status: 401, hint: "Use /setup for first setup or /auth/login to sign in." },
 	authentication_invalid: { status: 401, hint: "Use /setup for first setup or /auth/login to sign in." },
@@ -282,19 +282,16 @@ export const authFailure = <E, R>(effect: Effect.Effect<HttpServerResponse.HttpS
 		}),
 	);
 
-/** Every configured origin must pass the relying-party rules, and no origin may be listed twice. An issuer is https
- * (http only for localhost); a client secret only goes with an operator-registered client id. */
+/** Every configured origin must pass the relying-party rules, and no origin may be listed twice. The sign-in issuer
+ * must be an exact origin; startup names the variable, because a near miss would otherwise fail every sign-in. */
 export const validateAuthConfig = (config: AuthConfig) => {
 	const parties = configuredParties(config);
-	const oidc = config.oidc;
-	const validOidc =
-		oidc === undefined ||
-		(validIssuer(oidc.issuer) &&
-			(oidc.clientId === undefined || /^[\x21-\x7e]{1,512}$/.test(oidc.clientId)) &&
-			(oidc.clientSecret === undefined || oidc.clientId !== undefined));
+	if (config.oidc !== undefined && !validIssuer(config.oidc.issuer))
+		return Console.error(
+			`chirp: OIDC_ISSUER must be an https origin with no path or trailing slash, such as https://auth.chirp.wiki, or none; got ${JSON.stringify(config.oidc.issuer)}`,
+		).pipe(Effect.andThen(Effect.fail(new AuthError({ code: "auth_configuration_invalid" }))));
 	return parties.every(validRelyingParty) &&
-		new Set(parties.map((party) => party.expectedOrigin)).size === parties.length &&
-		validOidc
+		new Set(parties.map((party) => party.expectedOrigin)).size === parties.length
 		? Effect.void
 		: Effect.fail(new AuthError({ code: "auth_configuration_invalid" }));
 };

@@ -80,19 +80,17 @@ the board itself runs on localhost.
 ## GitHub and Google sign-in
 
 Once you have a passkey, you can link a GitHub or Google account on your account page; the sign-in page
-then offers it. Boot signs these accounts in through one sign-in service, `auth.chirp.wiki` by default.
-The board needs no client registration: the service fetches
-`https://<primary origin>/auth/oidc/client.json`, so the primary origin must be reachable from the
-internet. A domain added with a code can take five minutes to be accepted there, while the service's
-copy of that document expires.
+then offers it. Boot signs these accounts in through a chirp sign-in service. The board needs no client
+registration: the service fetches `https://<primary origin>/auth/oidc/client.json`, so the primary
+origin must be reachable from the internet. A domain added with a code can take five minutes to be
+accepted there, while the service's copy of that document expires.
 
-| Variable | Value |
-| --- | --- |
-| `OIDC_ISSUER` | The sign-in service, `https://auth.chirp.wiki` by default. `none` turns GitHub and Google sign-in off. https only, except `http://localhost` |
-| `OIDC_CLIENT_ID` | Optional. A client you registered with the service yourself; the board then serves no client document |
-| `OIDC_CLIENT_SECRET` | Optional, only with `OIDC_CLIENT_ID`. Boot sends it to the token endpoint and redacts it from logs; the app never sees it |
+`OIDC_ISSUER` names that service: `https://auth.chirp.wiki` by default, the origin of your own
+deployment of `packages/signin`, or `none` to turn GitHub and Google sign-in off. It must be an exact
+https origin (`http://localhost` for local testing), with no path or trailing slash; anything else
+refuses startup and names the variable. Nothing else is configurable here.
 
-An invalid value refuses startup. A linked account matches by the service and the account's id, never
+A linked account matches by the service and the account's id, never
 by email or username, so changing `OIDC_ISSUER` stops every linked account signing in; they stay listed
 on the account page for you to remove. Removing one signs out every other session.
 

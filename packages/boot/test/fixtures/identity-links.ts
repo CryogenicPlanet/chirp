@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { BunServices } from "@effect/platform-bun";
 import { SqliteClient } from "@effect/sql-sqlite-bun";
-import { Clock, Console, Context, Effect, Layer, Redacted, Result } from "effect";
+import { Clock, Console, Context, Effect, Layer, Result } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { SqlClient } from "effect/unstable/sql";
 import { SignJWT, UnsecuredJWT } from "jose";
@@ -527,17 +527,6 @@ const run = Effect.gen(function* () {
 		assert.deepEqual(offList.providers, []);
 		assert.equal(offList.identities.length, 1);
 		assert.deepEqual(yield* off.linkedProviders, []);
-		// An operator-registered client replaces the board's own document and sends its secret.
-		const registered = yield* build({
-			issuer: issuer.issuer,
-			clientId: "board-client",
-			clientSecret: Redacted.make("s3cret"),
-		});
-		assert.equal(yield* registered.oidcClientDocument, null);
-		const google = yield* begin(registered, human);
-		assert.equal(google.issued.clientId, "board-client");
-		assert.equal((yield* registered.finishOidc(google.callback))._tag, "session");
-		assert.equal(issuer.lastSecret(), "s3cret");
 	} else throw new Error(`Unknown scenario ${scenario}`);
 });
 

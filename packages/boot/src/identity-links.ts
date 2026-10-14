@@ -74,7 +74,7 @@ export const makeIdentityLinks = <E, R, S extends { readonly id: string }, SE, S
 		const oidc =
 			config.oidc === undefined
 				? null
-				: yield* makeOidcClient(config.oidc, config.oidc.clientId ?? `${config.expectedOrigin}${oidcClientPath}`);
+				: yield* makeOidcClient(config.oidc, `${config.expectedOrigin}${oidcClientPath}`);
 		const enabled = oidc === null ? refuse("oidc_disabled") : Effect.succeed(oidc);
 		const event = (type: string, payload: Schema.Json, instance: string | null = null) =>
 			Effect.gen(function* () {
@@ -142,9 +142,9 @@ export const makeIdentityLinks = <E, R, S extends { readonly id: string }, SE, S
 			);
 		};
 
-		/** The board's own client metadata document, or null when OIDC is off or an operator client is configured. */
+		/** The board's own client metadata document, or null when OIDC is off. */
 		const oidcClientDocument = Effect.gen(function* () {
-			if (config.oidc === undefined || config.oidc.clientId !== undefined) return null;
+			if (config.oidc === undefined) return null;
 			return {
 				client_id: `${config.expectedOrigin}${oidcClientPath}`,
 				client_name: new URL(config.expectedOrigin).host,

@@ -291,7 +291,7 @@ const routes = [
 		"get",
 		["/auth/oidc/client.json"],
 		"public",
-		"This board's OAuth client metadata document for its sign-in issuer (OIDC_ISSUER, auth.chirp.wiki by default): client_id, client_name and a redirect_uri for every allowed origin. 404 while OIDC_ISSUER=none or an operator OIDC_CLIENT_ID is configured.",
+		"This board's OAuth client metadata document for its sign-in issuer (OIDC_ISSUER, auth.chirp.wiki by default): client_id, client_name and a redirect_uri for every allowed origin. 404 while OIDC_ISSUER=none.",
 	],
 	[
 		"post",

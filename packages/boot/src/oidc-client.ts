@@ -1,27 +1,23 @@
-import { Clock, DateTime, Effect, Redacted, Ref, Result, Schema, Stream } from "effect";
+import { Clock, DateTime, Effect, Ref, Result, Schema, Stream } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { createLocalJWKSet, errors, jwtVerify, type JSONWebKeySet, type JWTPayload } from "jose";
 import { AuthError } from "./auth.ts";
 import { OidcProvider } from "./oidc-schema.ts";
 
-/** The operator's sign-in service, read from boot's own environment. Absent when OIDC_ISSUER=none. */
+/** A chirp sign-in issuer (auth.chirp.wiki or another deployment of packages/signin), read from boot's own
+ * environment. Absent when OIDC_ISSUER=none. The board is always its own client, named by its metadata document. */
 export interface OidcConfig {
 	readonly issuer: string;
-	/** Set only by OIDC_CLIENT_ID; otherwise the board is its own client, named by its metadata document. */
-	readonly clientId?: string;
-	readonly clientSecret?: Redacted.Redacted<string>;
 }
 
-/** https, or http only for localhost, without credentials, query or fragment. */
+/** An exact origin: https, or http only for localhost, with no path, not even a trailing slash. Tokens name the
+ * issuer exactly, so anything else would start and then fail every sign-in. */
 export const validIssuer = (issuer: string) => {
 	const url = issuer.length <= 512 ? URL.parse(issuer) : null;
 	return (
 		url !== null &&
-		(url.protocol === "https:" || (url.protocol === "http:" && url.hostname === "localhost")) &&
-		!url.username &&
-		!url.password &&
-		!issuer.includes("?") &&
-		!issuer.includes("#")
+		url.origin === issuer &&
+		(url.protocol === "https:" || (url.protocol === "http:" && url.hostname === "localhost"))
 	);
 };
 /** Discovery may name endpoints elsewhere, but plain http only when the issuer itself is a localhost issuer, so a
@@ -130,9 +126,7 @@ export const makeOidcClient = (config: OidcConfig, clientId: string) =>
 			const cached = yield* Ref.get(cache);
 			if (cached !== null && cached.expiresAt > now) return cached.discovery;
 			const fetched = yield* exchangeJson(
-				HttpClientRequest.get(`${config.issuer.replace(/\/$/, "")}/.well-known/openid-configuration`).pipe(
-					HttpClientRequest.acceptJson,
-				),
+				HttpClientRequest.get(`${config.issuer}/.well-known/openid-configuration`).pipe(HttpClientRequest.acceptJson),
 				Discovery,
 			);
 			if (
@@ -227,7 +221,6 @@ export const makeOidcClient = (config: OidcConfig, clientId: string) =>
 								redirect_uri: redirectUri,
 								client_id: clientId,
 								code_verifier: verifier,
-								...(config.clientSecret === undefined ? {} : { client_secret: Redacted.value(config.clientSecret) }),
 							}),
 						),
 						TokenResponse,

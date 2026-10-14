@@ -52,7 +52,6 @@ export const fakeIssuer = async () => {
 	>();
 	const held: ServerResponse[] = [];
 	let base = "";
-	let secret: string | null = null;
 	const json = (response: ServerResponse, status: number, value: unknown) => {
 		response.writeHead(status, { "content-type": "application/json" });
 		response.end(JSON.stringify(value));
@@ -95,7 +94,6 @@ export const fakeIssuer = async () => {
 					return void response.end("<html>maintenance</html>");
 				}
 				const form = new URLSearchParams(body);
-				secret = form.get("client_secret");
 				const code = codes.get(form.get("code") ?? "");
 				const verifier = form.get("code_verifier") ?? "";
 				if (
@@ -142,8 +140,6 @@ export const fakeIssuer = async () => {
 		key,
 		counts,
 		modes,
-		/** The client_secret the last token request carried, if any. */
-		lastSecret: () => secret,
 		/** Make a new key the published set serves from now on. */
 		publish: (jwk: JWK) => {
 			published.push(jwk);
