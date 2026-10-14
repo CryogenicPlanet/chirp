@@ -584,12 +584,25 @@ export const installEvents = (api: Api, origin: string) =>
 				const older =
 					oldest === undefined
 						? undefined
-						: (yield* ctx.messages.query({
-								since,
-								limit: replayScan,
-								exclude: instance,
-								...selection(name, agent, topic, subtopics),
-							})).items.find((item) => item.seq < oldest.seq && matches(topic, subtopics, family, item));
+						: yield* Effect.gen(function* () {
+								let cursor = since;
+								while (cursor < oldest.seq) {
+									const page = yield* ctx.messages.query({
+										since: cursor,
+										limit: replayScan,
+										exclude: instance,
+										...selection(name, agent, topic, subtopics),
+									});
+									const found = page.items.find(
+										(item) => item.seq < oldest.seq && matches(topic, subtopics, family, item),
+									);
+									if (found !== undefined) return found;
+									const last = page.items.at(-1);
+									if (last === undefined || last.seq >= oldest.seq || page.items.length < replayScan) return undefined;
+									cursor = last.seq;
+								}
+								return undefined;
+							});
 				const start =
 					over !== undefined
 						? { position: over.seq, truncated: true }
@@ -798,7 +811,9 @@ export const installEvents = (api: Api, origin: string) =>
 					const newest = persistFence
 						? undefined
 						: (yield* ctx.messages.query({ since: position, newest: true, limit: 1 })).items[0];
-					const to = persistFence ? page.cursor : newest?.seq;
+					// The unfiltered newest read can see a message published after this page; never persist past the
+					// fence that page actually scanned, or a matching post in that gap is skipped forever.
+					const to = persistFence ? page.cursor : newest !== undefined ? Math.min(newest.seq, page.cursor) : undefined;
 					if (to !== undefined && to > position) {
 						const at = yield* Clock.currentTimeMillis;
 						const current = yield* live(ctx, row.id, position, at, row.incarnation);

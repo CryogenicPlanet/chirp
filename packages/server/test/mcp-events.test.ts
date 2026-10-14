@@ -772,6 +772,15 @@ it("reports truncated for a topic mention replay only when it skipped a matching
 	});
 	await eventually(() => hook.texts(scoped.id).includes("@filter-bot kept"));
 	expect(hook.texts(scoped.id)).toEqual(["@filter-bot keep 1", "@filter-bot keep 2", "@filter-bot kept"]);
+	// More than two candidate pages: a match in the unexamined middle must still set truncated.
+	const after = hook.events().at(-1)?.cursor ?? null;
+	await mentioned.unsubscribe(hook.url, "mention.created", { topic: "watched" });
+	for (let n = 1; n <= 4; n++) await post("elsewhere", `@filter-bot head ${n}`);
+	await post("watched", "@filter-bot middle");
+	for (let n = 1; n <= 4; n++) await post("elsewhere", `@filter-bot tail ${n}`);
+	expect(await mentioned.subscribe(hook.url, "mention.created", { topic: "watched" }, after)).toMatchObject({
+		truncated: true,
+	});
 }, 120000);
 
 it("persists idle scan progress so a reload cannot re-emit an edited message", async (test) => {
@@ -810,6 +819,32 @@ it("persists idle scan progress so a reload cannot re-emit an edited message", a
 	await post("plans", "@reload-bot after reload");
 	await eventually(() => hook.texts(mentions.id).includes("@reload-bot after reload"));
 	expect(hook.texts(mentions.id)).toEqual(["@reload-bot after reload"]);
+}, 120000);
+
+it("does not skip a mention published between an idle scan and its watermark read", async (test) => {
+	const { fixture, app, cookie, post } = await installed(test, (source) =>
+		source.replace(
+			"(yield* ctx.messages.query({ since: position, newest: true, limit: 1 })).items[0];",
+			"yield* Effect.sleep(400).pipe(Effect.andThen(ctx.messages.query({ since: position, newest: true, limit: 1 })), Effect.map((found) => found.items[0]));",
+		),
+	);
+	const editor = await authorize(app, cookie, "Race client", "race-bot", false);
+	const hook = await receiver(test);
+	await post("plans", "setup");
+	const mentions = await editor.subscribe(hook.url, "mention.created", {});
+	const draft = await post("plans", "draft without a mention");
+	await until(async () => {
+		const [row] = decode(
+			Schema.Array(Schema.Struct({ position: Schema.Finite })),
+			await fixture.sql(`SELECT position FROM example_mcp_events WHERE id='${mentions.id}'`),
+		);
+		return row !== undefined && row.position >= draft.seq ? row : undefined;
+	});
+	for (let n = 0; n < 3; n++) await fetch(`${app.url}/api/messages?since=0`, { headers: { cookie } });
+	await delay(80);
+	await post("plans", "@race-bot after the idle scan");
+	await eventually(() => hook.texts(mentions.id).includes("@race-bot after the idle scan"));
+	expect(hook.texts(mentions.id)).toEqual(["@race-bot after the idle scan"]);
 }, 120000);
 
 it("does not let an in-flight drain checkpoint a recreated subscription", async (test) => {
