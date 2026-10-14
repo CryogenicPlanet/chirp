@@ -517,6 +517,38 @@ it("bounds a replay by the messages it matches and reports truncated only when i
 	await eventually(() => hook.texts(started.id).includes("after the head"));
 }, 120000);
 
+it("starts a replay that fills its candidate window at the oldest one, truncated only when older ones exist", async (test) => {
+	const { app, cookie, post } = await installed(test, (source) =>
+		source.replace("const replayScan = 200;", "const replayScan = 4;"),
+	);
+	const resumer = await authorize(app, cookie, "Window client", "window-bot", false);
+	const hook = await receiver(test);
+	await post("window", "setup");
+	const watch = { topic: "window" };
+	const started = await resumer.subscribe(hook.url, "message.created", watch);
+	await resumer.unsubscribe(hook.url, "message.created", watch);
+	// Exactly a window's worth missed: nothing older exists, so all four replay and nothing was skipped.
+	const four: Array<number> = [];
+	for (let n = 1; n <= 4; n++) four.push((await post("window", `w${n}`)).seq);
+	expect(await resumer.subscribe(hook.url, "message.created", watch, started.cursor)).toMatchObject({
+		cursor: String((four[0] ?? 0) - 1),
+		truncated: false,
+	});
+	await eventually(() => hook.texts(started.id).includes("w4"));
+	expect(hook.texts(started.id)).toEqual(["w1", "w2", "w3", "w4"]);
+	// Six missed: the window holds the newest four, which replay, and the two older ones are skipped.
+	const cursor = hook.events().at(-1)?.cursor ?? null;
+	await resumer.unsubscribe(hook.url, "message.created", watch);
+	const six: Array<number> = [];
+	for (let n = 1; n <= 6; n++) six.push((await post("window", `x${n}`)).seq);
+	expect(await resumer.subscribe(hook.url, "message.created", watch, cursor)).toMatchObject({
+		cursor: String((six[2] ?? 0) - 1),
+		truncated: true,
+	});
+	await eventually(() => hook.texts(started.id).includes("x6"));
+	expect(hook.texts(started.id)).toEqual(["w1", "w2", "w3", "w4", "x3", "x4", "x5", "x6"]);
+}, 120000);
+
 it("charges replays to the verification budget even when the callback is already verified", async (test) => {
 	const { app, cookie, post } = await installed(test);
 	const client = await authorize(app, cookie, "Budget client", "budget-bot", false);

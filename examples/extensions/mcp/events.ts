@@ -131,6 +131,7 @@ const Row = Schema.Struct({
 	event_name: Schema.Literals([mentionEvent, messageEvent]),
 	topic: Schema.NullOr(Schema.String),
 	subtopics: Schema.Finite,
+	incarnation: Schema.NullOr(Schema.String),
 });
 const Count = Schema.Array(Schema.Struct({ count: Schema.Finite }));
 const Family = Schema.Array(Schema.Struct({ family: Schema.NullOr(Schema.String) }));
@@ -324,6 +325,17 @@ export const installEvents = (api: Api, origin: string) =>
 			}),
 			{ skipIfColumnExists: { table: "example_mcp_events", column: "subtopics" } },
 		);
+		// Each insert names its row with a random incarnation, so delivery's in-memory read point applies only to the
+		// row it was made for. Rows from before have none, which is still theirs alone.
+		yield* api.migrate(
+			"event_incarnation",
+			on(sql, {
+				sqlite: () => "ALTER TABLE example_mcp_events ADD COLUMN incarnation TEXT",
+				pg: () => "ALTER TABLE example_mcp_events ADD COLUMN incarnation TEXT",
+				mysql: () => "ALTER TABLE example_mcp_events ADD COLUMN incarnation VARCHAR(32)",
+			}),
+			{ skipIfColumnExists: { table: "example_mcp_events", column: "incarnation" } },
+		);
 		const rows = (ctx: Store, clientId?: string) =>
 			ctx.read(() =>
 				(clientId === undefined
@@ -341,9 +353,11 @@ export const installEvents = (api: Api, origin: string) =>
 		const verifications = yield* Ref.make<ReadonlyMap<string, ReadonlyArray<number>>>(new Map());
 		// How far each subscription has read in this generation. Kept in memory so an idle subscription need not write
 		// its position on every board request, yet never reads a message twice: an edit or topic move keeps a message's
-		// sequence number, and a second read would deliver it as new. A subscribe that creates a row puts a fresh entry
-		// here, so a drain still holding the previous one cannot write it back over the new row.
-		const scanned = yield* Ref.make<ReadonlyMap<string, { readonly through: number }>>(new Map());
+		// sequence number, and a second read would deliver it as new. Each entry names the row incarnation it was read
+		// for, and only drains write it, one cycle after another, so a re-created row never inherits its predecessor's.
+		const scanned = yield* Ref.make<
+			ReadonlyMap<string, { readonly incarnation: string | null; readonly through: number }>
+		>(new Map());
 		// Consecutive drain failures per subscription in this generation, for its back-off.
 		const failures = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
 		const random = (size: number) =>
@@ -550,13 +564,29 @@ export const installEvents = (api: Api, origin: string) =>
 					(item) => item.instance !== family && within(topic, subtopics, item.topic),
 				);
 				// Past the newest replayLimit matches, or a full window of candidates, it starts after the one just older.
-				const cut =
-					matched.length > replayLimit
-						? matched[matched.length - replayLimit - 1]
-						: window !== undefined && window.items.length === replayScan
-							? window.items[0]
-							: undefined;
-				const start = { position: cut?.seq ?? since, truncated: cut !== undefined };
+				// Past the newest replayLimit matches it starts after the one just older. A full window of candidates starts
+				// at its oldest, and has skipped something only if an older candidate exists.
+				const over = matched.length > replayLimit ? matched[matched.length - replayLimit - 1] : undefined;
+				const oldest =
+					over === undefined && window !== undefined && window.items.length === replayScan
+						? window.items[0]
+						: undefined;
+				const older =
+					oldest === undefined
+						? undefined
+						: (yield* ctx.messages.query({
+								since,
+								limit: 1,
+								exclude: instance,
+								...selection(name, agent, topic, subtopics),
+							})).items[0];
+				const start =
+					over !== undefined
+						? { position: over.seq, truncated: true }
+						: oldest !== undefined
+							? { position: oldest.seq - 1, truncated: older !== undefined && older.seq < oldest.seq }
+							: { position: since, truncated: false };
+				const incarnation = yield* random(8);
 				const sql = ctx.db;
 				// Mutations serialize on the board's writer lock, so the existence and limit checks cannot race.
 				const outcome = yield* ctx.mutate(
@@ -584,8 +614,7 @@ export const installEvents = (api: Api, origin: string) =>
 							Effect.flatMap(decodeCount),
 						);
 						if (boardCount >= perBoard) return { limit: perBoard };
-						yield* sql`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,previous_secret_until,refresh_before,verified_at,position,attempts,next_attempt,last_error,event_name,topic,subtopics) VALUES(${id},${caller.clientId},${agent},${instance},${target.href},${input.delivery.secret},NULL,NULL,${refreshBefore},${verifiedAt},${start.position},0,0,NULL,${name},${topic},${subtopics ? 1 : 0})`;
-						yield* Ref.update(scanned, (map) => new Map(map).set(id, { through: start.position }));
+						yield* sql`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,previous_secret_until,refresh_before,verified_at,position,attempts,next_attempt,last_error,event_name,topic,subtopics,incarnation) VALUES(${id},${caller.clientId},${agent},${instance},${target.href},${input.delivery.secret},NULL,NULL,${refreshBefore},${verifiedAt},${start.position},0,0,NULL,${name},${topic},${subtopics ? 1 : 0},${incarnation})`;
 						return start;
 					}),
 				);
@@ -614,7 +643,6 @@ export const installEvents = (api: Api, origin: string) =>
 				if (!target) return invalid("delivery.url must be an https URL without credentials");
 				const id = subscriptionId(caller.clientId, target.href, name, filter.value);
 				yield* ctx.mutate(ctx.db`DELETE FROM example_mcp_events WHERE id=${id} AND client_id=${caller.clientId}`);
-				yield* Ref.update(scanned, (map) => new Map([...map].filter(([key]) => key !== id)));
 				return { result: {} };
 			});
 
@@ -713,9 +741,10 @@ export const installEvents = (api: Api, origin: string) =>
 					);
 					return { wake: Infinity, backlog: false };
 				}
+				// A read point counts only for the row incarnation it was made for; a re-created row starts at its own position.
 				const mark = (yield* Ref.get(scanned)).get(row.id);
 				const page = yield* ctx.messages.query({
-					since: Math.max(row.position, mark?.through ?? 0),
+					since: Math.max(row.position, mark !== undefined && mark.incarnation === row.incarnation ? mark.through : 0),
 					...selection(row.event_name, row.agent, row.topic, row.subtopics === 1),
 					exclude: row.instance,
 					limit: 16,
@@ -755,9 +784,10 @@ export const installEvents = (api: Api, origin: string) =>
 						yield* checkpoint(ctx, row.id, row.agent, position, page.cursor, 0, 0, null);
 					}
 				}
-				// Remember how far this page read, unless a subscribe replaced the subscription meanwhile.
+				// Remember how far this page read. A drain of a replaced row ends in an earlier cycle than the first drain of
+				// its replacement, which ignores this entry because the incarnation differs.
 				yield* Ref.update(scanned, (map) =>
-					map.get(row.id) === mark ? new Map(map).set(row.id, { through: page.cursor }) : map,
+					new Map(map).set(row.id, { incarnation: row.incarnation, through: page.cursor }),
 				);
 				return { wake: now + 60_000, backlog: page.items.length === 16 };
 			});
@@ -804,7 +834,12 @@ export const installEvents = (api: Api, origin: string) =>
 						const now = yield* Clock.currentTimeMillis;
 						yield* ctx.mutate(ctx.db`DELETE FROM example_mcp_events WHERE refresh_before<=${now}`);
 						// Subscriptions drain concurrently so one slow callback cannot hold up the others.
-						const results = yield* Effect.forEach(yield* rows(ctx), (row) => isolated(ctx, row, now), {
+						const current = yield* rows(ctx);
+						// Entries for subscriptions that expired, lost their grant or were unsubscribed go with them.
+						const ids = new Set(current.map((row) => row.id));
+						yield* Ref.update(scanned, (map) => new Map([...map].filter(([id]) => ids.has(id))));
+						yield* Ref.update(failures, (map) => new Map([...map].filter(([id]) => ids.has(id))));
+						const results = yield* Effect.forEach(current, (row) => isolated(ctx, row, now), {
 							concurrency: 8,
 						});
 						if (results.some((result) => result.backlog)) return;
