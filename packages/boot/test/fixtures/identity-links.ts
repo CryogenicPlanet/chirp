@@ -279,6 +279,25 @@ const run = Effect.gen(function* () {
 			yield* refuse(octocat, expected);
 		}
 		issuer.modes.token = "ok";
+		// Boot always names a provider the issuer accepts; a request without one comes back as invalid_request with
+		// no code, and that callback spends the state like any other refusal.
+		const declined = yield* auth.startOidc({ intent: "login", provider: "github" }, primary, null);
+		const withoutProvider = new URL(declined.authorizationUrl);
+		withoutProvider.searchParams.delete("provider");
+		const answer = issuer.issue(withoutProvider.href, octocat);
+		assert.equal(answer.code, undefined);
+		assert.equal(new URL(answer.callback).searchParams.get("error"), "invalid_request");
+		yield* refused(
+			auth.finishOidc({
+				state: answer.state,
+				code: undefined,
+				iss: issuer.issuer,
+				binding: declined.binding,
+				refused: true,
+			}),
+			"oidc_invalid",
+		);
+		assert.equal((yield* sql`SELECT id FROM auth_challenges WHERE id=${answer.state}`).length, 0);
 		// A code the issuer bound to another redirect is refused by its token endpoint.
 		const misdirected = yield* auth.startOidc({ intent: "login", provider: "github" }, primary, null);
 		const elsewhereUrl = new URL(misdirected.authorizationUrl);

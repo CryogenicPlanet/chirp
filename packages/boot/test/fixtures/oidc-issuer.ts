@@ -178,9 +178,11 @@ export const fakeIssuer = async () => {
 				server.closeAllConnections();
 				server.close(() => resolve());
 			}),
-		/** What /authorize and consent would do: check the request and hand back the callback the browser follows. */
+		/** What signin's /authorize and consent would do: check the request and hand back the callback the browser
+		 * follows. As there, once the redirect is the board's, a bad request goes back to it as invalid_request. */
 		issue: (authorizationUrl: string, grant: Grant) => {
 			const request = new URL(authorizationUrl);
+			const names = [...request.searchParams.keys()];
 			const parameter = (name: string) => {
 				const value = request.searchParams.get(name);
 				if (value === null) throw new Error(`Missing ${name}`);
@@ -189,11 +191,28 @@ export const fakeIssuer = async () => {
 			if (
 				request.origin !== base ||
 				request.pathname !== "/authorize" ||
+				new Set(names).size !== names.length ||
 				parameter("response_type") !== "code" ||
-				parameter("scope") !== "openid" ||
-				parameter("code_challenge_method") !== "S256"
+				parameter("scope") !== "openid"
 			)
 				throw new Error(`Unexpected authorization request ${authorizationUrl}`);
+			const state = parameter("state");
+			const provider = request.searchParams.get("provider");
+			const callback = new URL(parameter("redirect_uri"));
+			callback.searchParams.set("state", state);
+			callback.searchParams.set("iss", base);
+			const reply = { state, provider, clientId: parameter("client_id") };
+			if (
+				request.searchParams.get("code_challenge_method") !== "S256" ||
+				!/^[A-Za-z0-9_-]{43}$/.test(request.searchParams.get("code_challenge") ?? "") ||
+				(request.searchParams.get("nonce") ?? "").length === 0 ||
+				(request.searchParams.get("nonce") ?? "").length > 256 ||
+				state.length > 256 ||
+				(provider !== "github" && provider !== "google")
+			) {
+				callback.searchParams.set("error", "invalid_request");
+				return { ...reply, code: undefined, callback: callback.href };
+			}
 			const code = randomBytes(24).toString("base64url");
 			codes.set(code, {
 				clientId: parameter("client_id"),
@@ -202,17 +221,8 @@ export const fakeIssuer = async () => {
 				nonce: parameter("nonce"),
 				grant,
 			});
-			const callback = new URL(parameter("redirect_uri"));
 			callback.searchParams.set("code", code);
-			callback.searchParams.set("state", parameter("state"));
-			callback.searchParams.set("iss", base);
-			return {
-				code,
-				state: parameter("state"),
-				provider: request.searchParams.get("provider"),
-				clientId: parameter("client_id"),
-				callback: callback.href,
-			};
+			return { ...reply, code, callback: callback.href };
 		},
 	};
 };
