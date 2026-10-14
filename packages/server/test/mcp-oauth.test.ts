@@ -382,6 +382,18 @@ it("refuses metadata documents that do not describe the client", async (test) =>
 			headers: { vary: "*", "cache-control": "public, max-age=3600" },
 			body: metadataDocument(`${base}/vary-star.json`),
 		},
+		"/quoted-zero.json": {
+			headers: { "cache-control": 'public, s-maxage="0"' },
+			body: metadataDocument(`${base}/quoted-zero.json`),
+		},
+		"/quoted-age.json": {
+			headers: { "cache-control": 'public, max-age="0", s-maxage="60"' },
+			body: metadataDocument(`${base}/quoted-age.json`),
+		},
+		"/heuristic-age.json": {
+			headers: { age: "600" },
+			body: metadataDocument(`${base}/heuristic-age.json`),
+		},
 	}));
 	const { challenge } = pkce("refusals");
 	const ask = (path: string, fields: Readonly<Record<string, string>> = {}) =>
@@ -462,6 +474,17 @@ it("refuses metadata documents that do not describe the client", async (test) =>
 	expect((await ask("/vary-star.json")).status).toBe(200);
 	expect((await ask("/vary-star.json")).status).toBe(200);
 	expect(host.hits("/vary-star.json")).toBe(2);
+	// Quoted s-maxage/max-age are accepted (RFC 9111 §5.2). Zero is not stored; a positive quoted s-maxage is.
+	expect((await ask("/quoted-zero.json")).status).toBe(200);
+	expect((await ask("/quoted-zero.json")).status).toBe(200);
+	expect(host.hits("/quoted-zero.json")).toBe(2);
+	expect((await ask("/quoted-age.json")).status).toBe(200);
+	expect((await ask("/quoted-age.json")).status).toBe(200);
+	expect(host.hits("/quoted-age.json")).toBe(1);
+	// Current age applies to the five-minute fallback too (RFC 9111 §4.2).
+	expect((await ask("/heuristic-age.json")).status).toBe(200);
+	expect((await ask("/heuristic-age.json")).status).toBe(200);
+	expect(host.hits("/heuristic-age.json")).toBe(2);
 }, 60000);
 
 it("never fetches client metadata from private addresses on a public board", async (test) => {
