@@ -45,15 +45,15 @@ const none: Editing = {
 const scopesOf = (value: string) =>
 	value.split(" ").filter((scope): scope is typeof GrantScope.Type => Schema.is(GrantScope)(scope));
 /**
- * Whose grant: the MCP connection, the client surface calling through it, the human who approved it and the name it
- * acts as. A grant is used, collected and reported only for the identity it was requested for, so a client
- * re-authorized by another human or under another posting name never acts through an earlier approval.
- */
-/**
  * Said wherever a grant is requested or reported. Every client of a connection holds its token and chooses its own
  * User-Agent, so a grant per label splits approvals and attribution, not authority.
  */
 export const labelNote = "The label is reported by the client; any client of this connection can use this grant.";
+/**
+ * Whose grant: the MCP connection, the client surface calling through it, the human who approved it and the name it
+ * acts as. A grant is used, collected and reported only for the identity it was requested for, so a client
+ * re-authorized by another human or under another posting name never acts through an earlier approval.
+ */
 export interface GrantHolder {
 	readonly clientId: string;
 	/** The label of the client calling, such as chatgpt or codex: each surface of a connection holds its own grant. */
