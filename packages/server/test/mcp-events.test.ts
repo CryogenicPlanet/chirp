@@ -159,11 +159,14 @@ const authorize = async (
 		}),
 	});
 	const access = decode(Schema.Struct({ access_token: Schema.String }), await exchanged.json()).access_token;
-	return { clientId, ...client(app, access) };
+	return { clientId, access, ...client(app, access) };
 };
 
-/** MCP 2.0 requests for one connection: version and capabilities travel in `_meta`, mirrored by the headers. */
-const client = (app: App, token: string) => {
+/**
+ * MCP 2.0 requests for one connection: version and capabilities travel in `_meta`, mirrored by the headers. A
+ * `userAgent` names another client sharing the connection.
+ */
+const client = (app: App, token: string, userAgent?: string) => {
 	let id = 0;
 	const call = async (method: string, params: Readonly<Record<string, unknown>>): Promise<unknown> => {
 		const response = await fetch(`${app.url}/mcp`, {
@@ -175,6 +178,7 @@ const client = (app: App, token: string) => {
 				"mcp-protocol-version": "2026-07-28",
 				"mcp-method": method,
 				...(method === "tools/call" ? { "mcp-name": String(params.name) } : {}),
+				...(userAgent === undefined ? {} : { "user-agent": userAgent }),
 			},
 			body: JSON.stringify({
 				jsonrpc: "2.0",
@@ -465,6 +469,38 @@ it("never delivers posts the connection made through its editing grant, while ot
 	expect(new Set(same.map((event) => event.eventId))).toEqual(
 		new Set([`evt_${mentions.id}_${same[0]?.cursor}`, `evt_${watch.id}_${same[0]?.cursor}`]),
 	);
+}, 120000);
+
+it("never delivers posts the connection made through any of its clients' grants", async (test) => {
+	const { app, cookie, post } = await installed(test);
+	await post("plans", "kickoff");
+	// Consent approved the grant of the client named at registration; Codex, sharing the connection, holds its own.
+	const granted = await authorize(app, cookie, "Surface client", "surface-bot", true);
+	const codex = client(app, granted.access, "openai-mcp/1.0.0 (Codex)");
+	const requested = decode(
+		Schema.Struct({ result: Schema.Struct({ structuredContent: Schema.Struct({ approve_url: Schema.String }) }) }),
+		await codex.edit("request_editing"),
+	).result.structuredContent;
+	await approveEditing(app, requested.approve_url);
+	// Both grants are collected before the subscription exists, so it learns their families from the grant rows alone.
+	expect(await codex.edit("connection_info")).toMatchObject({
+		result: { structuredContent: { label: "codex", editing: { status: "active" } } },
+	});
+	const other = await authorize(app, cookie, "Surface other", "surface-other", false);
+	const hook = await receiver(test);
+	const watch = await granted.subscribe(hook.url, "message.created", { topic: "plans" });
+	const Instance = Schema.Struct({
+		result: Schema.Struct({ structuredContent: Schema.Struct({ instance: Schema.String }) }),
+	});
+	const named = decode(Instance, await granted.post("plans", "through the named client's grant", "surface-1"));
+	const coded = decode(Instance, await codex.post("plans", "through codex's grant", "surface-2"));
+	expect(named.result.structuredContent.instance).toMatch(/^f_/);
+	expect(coded.result.structuredContent.instance).toMatch(/^f_/);
+	expect(coded.result.structuredContent.instance).not.toBe(named.result.structuredContent.instance);
+	await other.post("plans", "from another connection", "surface-other");
+	await post("plans", "last");
+	await eventually(() => hook.texts(watch.id).includes("last"));
+	expect(hook.texts(watch.id)).toEqual(["from another connection", "last"]);
 }, 120000);
 
 it("does not replay posts from a replaced editing grant", async (test) => {

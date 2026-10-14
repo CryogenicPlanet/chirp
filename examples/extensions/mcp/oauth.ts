@@ -228,9 +228,31 @@ const client = (ctx: Context, clientId: string) =>
 				: Effect.succeed<typeof Client.Type | undefined>(undefined),
 		),
 	);
-/** The label boot shows beside the agent on its approval page: the client's registered name as a slug. */
+/**
+ * A client's registered name as a short slug: the label of a client whose User-Agent this server does not recognise,
+ * and of a grant requested at consent, where only the browser's User-Agent is seen.
+ */
+export const nameLabel = (clientName: string) =>
+	clientName
+		.toLowerCase()
+		.replace(/[^a-z0-9._-]+/g, "-")
+		.replace(/^[^a-z0-9]+/, "")
+		.slice(0, 32)
+		.replace(/[^a-z0-9]+$/, "") || "mcp";
+/** The label of the registered client behind a connection. */
 export const clientLabel = (ctx: Context, clientId: string) =>
-	client(ctx, clientId).pipe(Effect.map((registered) => suggestedAgent(registered?.client_name ?? "mcp")));
+	client(ctx, clientId).pipe(Effect.map((registered) => nameLabel(registered?.client_name ?? "mcp")));
+/**
+ * Which client is calling, as the label after its posting name (`dot@codex`). One connection can serve several:
+ * ChatGPT and Codex share ChatGPT's connector, OAuth client and token, and only the User-Agent tells them apart. The
+ * client asserts it, so a label separates attribution and approvals, not trust.
+ */
+export const surfaceOf = (ctx: Context, clientId: string, userAgent: string | undefined) => {
+	const agent = userAgent ?? "";
+	if (agent.startsWith("openai-mcp/")) return Effect.succeed(agent.includes("(Codex)") ? "codex" : "chatgpt");
+	if (agent.includes("Claude-User")) return Effect.succeed("claude");
+	return clientLabel(ctx, clientId);
+};
 /** A LIKE pattern, escaped with `!`, for one JSON string field of a payload. */
 const payloadField = (name: string, value: string) =>
 	`%"${name}":${JSON.stringify(value).replace(/[!%_]/g, (character) => `!${character}`)}%`;
@@ -688,10 +710,11 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 						...(checked.metadata ? { client_url: checked.clientId } : {}),
 					};
 					if (agent && form.editing === "1") {
-						// One grant per connection: this human's live grant under this name is kept and its waiting request
-						// shown again, because replacing either would leave a grant boot honours that nothing tracks.
-						// Another human's or another name's grant is never reused; a new request replaces it.
-						const holder = { clientId, subject: ctx.identity.agent, agent };
+						// One grant per connection and surface: this human's live grant under this name is kept and its waiting
+						// request shown again, because replacing either would leave a grant boot honours that nothing tracks.
+						// Another human's or another name's grant is never reused; a new request replaces it. Consent sees the
+						// browser, not the client, so the grant is for the surface named after the client.
+						const holder = { clientId, surface: nameLabel(checked.clientName), subject: ctx.identity.agent, agent };
 						const current = yield* editingState(ctx, holder, { refresh: true }).pipe(
 							Effect.catchTag("KernelError", () => storedEditing(ctx, holder)),
 						);
@@ -701,7 +724,7 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 								? undefined
 								: current.status === "pending"
 									? current
-									: yield* requestEditing(ctx, origin, holder, suggestedAgent(checked.clientName)).pipe(
+									: yield* requestEditing(ctx, origin, holder).pipe(
 											Effect.catchTag("KernelError", () => Effect.succeed(undefined)),
 										);
 						if (requested?.approve_url) {
@@ -758,7 +781,12 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 						);
 					const clientName = (yield* client(ctx, row.client_id))?.client_name ?? "This client";
 					// A GET may not record anything, so the decision is collected again when the form is sent.
-					const holder = { clientId: row.client_id, subject: consent.subject, agent: consent.agent };
+					const holder = {
+						clientId: row.client_id,
+						surface: yield* clientLabel(ctx, row.client_id),
+						subject: consent.subject,
+						agent: consent.agent,
+					};
 					const editing = yield* editingState(ctx, holder, { readOnly: true }).pipe(
 						Effect.catchTag("KernelError", () => storedEditing(ctx, holder)),
 					);
@@ -806,7 +834,10 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 							"This approval link expired or was already used. Connect the client again.",
 						);
 					// Record the decision now, so the client's first tool call need not ask boot.
-					yield* editingState(ctx, finished.holder).pipe(Effect.catchTag("KernelError", () => Effect.void));
+					yield* editingState(ctx, {
+						...finished.holder,
+						surface: yield* clientLabel(ctx, finished.holder.clientId),
+					}).pipe(Effect.catchTag("KernelError", () => Effect.void));
 					return redirect(origin, finished.redirectUri, {
 						code: finished.code,
 						...(finished.state === undefined ? {} : { state: finished.state }),

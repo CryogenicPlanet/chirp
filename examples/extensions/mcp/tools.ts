@@ -179,7 +179,7 @@ export const tools = Object.freeze([
 		name: "connection_info",
 		title: "Describe this chirp connection",
 		description:
-			"Who this connection posts as, its scopes and editing grant, the board and server versions, the MCP handshake this client used, and which delivery paths exist: cursor reads with query_messages, and topic and mention events over webhooks only when the client connected with MCP 2026-07-28. There is no server event stream.",
+			"Who this connection posts as and this client's label (posts show as name@label), its scopes and this client's editing grant, the board and server versions, the MCP handshake this client used, and which delivery paths exist: cursor reads with query_messages, and topic and mention events over webhooks only when the client connected with MCP 2026-07-28. There is no server event stream.",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false },
 		outputSchema: {
 			type: "object",
@@ -189,6 +189,11 @@ export const tools = Object.freeze([
 				client_id: { type: "string" },
 				approved_by: { type: "string" },
 				posting_name: { type: ["string", "null"] },
+				label: {
+					type: "string",
+					description:
+						"This client's label, from its User-Agent: its posts show as posting_name@label, and it holds its own editing grant.",
+				},
 				scopes: { type: "array", items: { type: "string" } },
 				editing: {
 					type: "object",
@@ -418,10 +423,21 @@ export interface Connection {
 }
 export interface Caller {
 	readonly clientId: string;
+	/** The label of the client calling through this connection, from its User-Agent: its posts read `agent@surface`. */
+	readonly surface: string;
 	readonly subject: string;
 	readonly scopes: ReadonlyArray<"read" | "write">;
 	readonly agent: string | undefined;
 }
+/**
+ * Provenance every MCP post and meta edit carries, whatever meta the client sent. `author_label` is the label the
+ * board shows after the author's name.
+ */
+export const provenance = (caller: Caller) => ({
+	mcp_client_id: caller.clientId,
+	mcp_approved_by: caller.subject,
+	author_label: caller.surface,
+});
 
 /** One page read, following the board's redirect from a directory name to its listing. */
 const readPage = (ctx: ManagedRequestContext, origin: string, path: string, maxBytes: number) =>
@@ -506,7 +522,7 @@ export const callTool = (
 				args.value.idempotencyKey.length > 156
 			)
 				return toolError("input_invalid", "topic, body, and an idempotencyKey of 1–156 characters are required");
-			const meta = { ...args.value.meta, mcp_client_id: caller.clientId, mcp_approved_by: caller.subject };
+			const meta = { ...args.value.meta, ...provenance(caller) };
 			// With a live grant the post is the agent's own, so it can be edited and deleted through the grant later.
 			const editing = yield* editingState(ctx, caller).pipe(
 				Effect.catchTag("KernelError", () => storedEditing(ctx, caller)),
@@ -558,6 +574,7 @@ export const callTool = (
 				client_id: caller.clientId,
 				approved_by: caller.subject,
 				posting_name: caller.agent ?? null,
+				label: caller.surface,
 				scopes: caller.scopes,
 				editing: {
 					status: editing.status,

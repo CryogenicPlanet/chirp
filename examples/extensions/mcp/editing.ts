@@ -2,7 +2,6 @@ import { baseVersionHeader } from "@comms/protocol/headers";
 import { type Crypto, Data, Effect, Option, Schema } from "effect";
 import type { ManagedRequestContext } from "../../../packages/server/src/kernel/extension-api.ts";
 import { asAgent, type BoardReply, editingState, grantEnded, requestEditing } from "./grants.ts";
-import { clientLabel } from "./oauth.ts";
 import {
 	boardError,
 	type Caller,
@@ -11,6 +10,7 @@ import {
 	editingError,
 	messageSchema,
 	pageUrl,
+	provenance,
 	reading,
 	type ToolCall,
 	toolError,
@@ -85,7 +85,7 @@ export const editingTools = Object.freeze([
 		name: "request_editing",
 		title: "Request editing access",
 		description:
-			"Ask the board owner to let this connection act as its posting name: edit and delete its own messages, manage topics, read threads, and with fs publish pages and edit app source. Returns approve_url and code: give both to the user, who checks the code and approves with their passkey (fs is a separate box there, unticked by default). Reports the current grant instead when one is live or waiting. Grants last 90 days.",
+			"Ask the board owner to let this client act as its posting name: edit and delete its own messages, manage topics, read threads, and with fs publish pages and edit app source. Returns approve_url and code: give both to the user, who checks the code and approves with their passkey (fs is a separate box there, unticked by default). Reports the current grant instead when one is live or waiting. Each client sharing a connection, such as ChatGPT and Codex, holds its own grant. Grants last 90 days.",
 		inputSchema: object({}, []),
 		outputSchema: {
 			type: "object",
@@ -356,12 +356,7 @@ export const callEditing = (
 			const tracked =
 				current.status === "active" || current.status === "pending"
 					? current
-					: yield* requestEditing(
-							ctx,
-							origin,
-							{ ...caller, agent: caller.agent },
-							yield* clientLabel(ctx, caller.clientId),
-						);
+					: yield* requestEditing(ctx, origin, { ...caller, agent: caller.agent });
 			if (tracked.status !== "active" && tracked.status !== "pending")
 				return toolError(
 					"editing_busy",
@@ -377,7 +372,7 @@ export const callEditing = (
 				expires_at: tracked.expires_at,
 				message:
 					tracked.status === "active"
-						? `This connection can already edit as ${tracked.agent ?? caller.agent}. To change what it may do, the user revokes it in the board's token list (held by mcp), then call request_editing again.`
+						? `This client can already edit as ${tracked.agent ?? caller.agent}@${caller.surface}. To change what it may do, the user revokes it in the board's token list (held by mcp), then call request_editing again.`
 						: "Give the user approve_url and code. They check the code on that page and approve with their passkey; pages and app source need its fs box ticked. The link lasts ten minutes. Then retry the editing tool.",
 			});
 		}
@@ -467,11 +462,9 @@ export const callEditing = (
 			)
 				return toolError("input_invalid", "seq and at least one of a nonempty body, tags or meta are required");
 			const { seq, ...patch } = args.value;
-			// meta is replaced whole, so keep the provenance post_message records.
-			const body =
-				patch.meta === undefined
-					? patch
-					: { ...patch, meta: { ...patch.meta, mcp_client_id: caller.clientId, mcp_approved_by: caller.subject } };
+			// meta is replaced whole, so keep the provenance post_message records. Only the grant that posted a message can
+			// edit it, so the label stays the poster's.
+			const body = patch.meta === undefined ? patch : { ...patch, meta: { ...patch.meta, ...provenance(caller) } };
 			const reply = yield* board(`/api/messages/${seq}`, { method: "PATCH", body: JSON.stringify(body) });
 			return toolResult(jsonObject(reply.json));
 		}
