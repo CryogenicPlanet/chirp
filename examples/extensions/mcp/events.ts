@@ -32,6 +32,8 @@ const verificationWindow = 10 * 60 * 1000;
 const excerpt = 4000;
 /** A replay delivers at most this many of the newest missed messages; `truncated` says an older one was skipped. */
 const replayLimit = 100;
+/** How many candidates a replay checks, the board's largest query page, so posts it would not deliver leave headroom. */
+const replayScan = 200;
 /**
  * An idle subscription moves its cursor to the board's head only once it trails by this many sequence numbers. Every
  * board request advances the head, so moving on each one would cost a write per subscription per request.
@@ -225,8 +227,8 @@ const subscriptionId = (clientId: string, url: string, name: string, filter: Fil
 const selection = (name: EventName, agent: string, topic: string | null, subtopics: boolean) =>
 	name === messageEvent && topic !== null ? { topic, recursive: subtopics } : { mentions: [`@${agent}`, "@here"] };
 /** Whether a message's topic is the subscription's topic, or under it when subtopics are included. */
-const within = (row: typeof Row.Type, topic: string) =>
-	row.topic === null || topic === row.topic || (row.subtopics === 1 && topic.startsWith(`${row.topic}/`));
+const within = (topic: string | null, subtopics: boolean, candidate: string) =>
+	topic === null || candidate === topic || (subtopics && candidate.startsWith(`${topic}/`));
 
 type Sent =
 	| { readonly status: "sent"; readonly code: number; readonly body: string }
@@ -337,6 +339,13 @@ export const installEvents = (api: Api, origin: string) =>
 		// Verification makes the board contact a client-chosen host, and a replay re-sends history to it, so each client
 		// gets a small budget for both.
 		const verifications = yield* Ref.make<ReadonlyMap<string, ReadonlyArray<number>>>(new Map());
+		// How far each subscription has read in this generation. Kept in memory so an idle subscription need not write
+		// its position on every board request, yet never reads a message twice: an edit or topic move keeps a message's
+		// sequence number, and a second read would deliver it as new. A subscribe that creates a row puts a fresh entry
+		// here, so a drain still holding the previous one cannot write it back over the new row.
+		const scanned = yield* Ref.make<ReadonlyMap<string, { readonly through: number }>>(new Map());
+		// Consecutive drain failures per subscription in this generation, for its back-off.
+		const failures = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
 		const random = (size: number) =>
 			crypto.randomBytes(size).pipe(Effect.map((bytes) => Buffer.from(bytes).toString("hex")));
 
@@ -488,9 +497,9 @@ export const installEvents = (api: Api, origin: string) =>
 					);
 					if (missing === "input_invalid" || missing === "page_path_invalid")
 						return invalid("topic must be a board topic path that can be read");
-					if (missing === "pages_unavailable")
-						return failure(-32603, "Internal error", { retriable: true, reason: "pages_unavailable" });
-					if (missing !== null) return failure(-32011, "NotFound", { kind: "topic", topic });
+					if (missing === "topic_not_found") return failure(-32011, "NotFound", { kind: "topic", topic });
+					// The page store was unavailable or changed under the read, so the topic may exist: the client retries.
+					if (missing !== null) return failure(-32603, "Internal error", { retriable: true, reason: missing });
 				}
 				const id = subscriptionId(caller.clientId, target.href, name, filter.value);
 				const now = yield* Clock.currentTimeMillis;
@@ -505,6 +514,7 @@ export const installEvents = (api: Api, origin: string) =>
 				const fence = yield* ctx.read((value) => Effect.succeed(value));
 				// A new subscription starts now, or after the client's cursor; a cursor beyond the board starts now.
 				const since = cursor === null ? fence : Math.min(cursor, fence);
+				// Only a replay that creates a row spends the budget below; a refresh keeps its position.
 				const replaying = since < fence && !owned.some((row) => row.id === id && row.refresh_before > now);
 				if (!cached || replaying) {
 					const allowed = yield* Ref.modify(verifications, (budget) => {
@@ -521,20 +531,32 @@ export const installEvents = (api: Api, origin: string) =>
 					if (reason !== null) return failure(-32015, "CallbackEndpointError", { reason });
 				}
 				const verifiedAt = cached?.verified_at ?? now;
-				// A replay is bounded by the messages the subscription's own query matches, not by board sequence numbers:
-				// past the newest replayLimit, it starts after the one just older and says it skipped some.
-				const newest = replaying
-					? yield* ctx.messages.query({
-							since,
-							newest: true,
-							limit: replayLimit + 1,
-							exclude: instance,
-							...selection(name, agent, topic, filter.value.recursive !== false),
-						})
-					: undefined;
-				const cut = newest !== undefined && newest.items.length > replayLimit ? newest.items[0] : undefined;
-				// Only a replay starts below the fence; anything else that turns out to need a row starts now.
-				const start = { position: replaying ? (cut?.seq ?? since) : fence, truncated: cut !== undefined };
+				// A replay is bounded by the messages it would deliver, not by board sequence numbers. It is worked out
+				// whenever the client is behind, even on a refresh, because the row can expire before the mutation below.
+				const subtopics = filter.value.recursive !== false;
+				const window =
+					since < fence
+						? yield* ctx.messages.query({
+								since,
+								newest: true,
+								limit: replayScan,
+								exclude: instance,
+								...selection(name, agent, topic, subtopics),
+							})
+						: undefined;
+				const family =
+					window === undefined || window.items.length === 0 ? null : yield* grantFamily(ctx, caller.clientId);
+				const matched = (window?.items ?? []).filter(
+					(item) => item.instance !== family && within(topic, subtopics, item.topic),
+				);
+				// Past the newest replayLimit matches, or a full window of candidates, it starts after the one just older.
+				const cut =
+					matched.length > replayLimit
+						? matched[matched.length - replayLimit - 1]
+						: window !== undefined && window.items.length === replayScan
+							? window.items[0]
+							: undefined;
+				const start = { position: cut?.seq ?? since, truncated: cut !== undefined };
 				const sql = ctx.db;
 				// Mutations serialize on the board's writer lock, so the existence and limit checks cannot race.
 				const outcome = yield* ctx.mutate(
@@ -562,7 +584,8 @@ export const installEvents = (api: Api, origin: string) =>
 							Effect.flatMap(decodeCount),
 						);
 						if (boardCount >= perBoard) return { limit: perBoard };
-						yield* sql`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,previous_secret_until,refresh_before,verified_at,position,attempts,next_attempt,last_error,event_name,topic,subtopics) VALUES(${id},${caller.clientId},${agent},${instance},${target.href},${input.delivery.secret},NULL,NULL,${refreshBefore},${verifiedAt},${start.position},0,0,NULL,${name},${topic},${filter.value.recursive === false ? 0 : 1})`;
+						yield* sql`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,previous_secret_until,refresh_before,verified_at,position,attempts,next_attempt,last_error,event_name,topic,subtopics) VALUES(${id},${caller.clientId},${agent},${instance},${target.href},${input.delivery.secret},NULL,NULL,${refreshBefore},${verifiedAt},${start.position},0,0,NULL,${name},${topic},${subtopics ? 1 : 0})`;
+						yield* Ref.update(scanned, (map) => new Map(map).set(id, { through: start.position }));
 						return start;
 					}),
 				);
@@ -591,6 +614,7 @@ export const installEvents = (api: Api, origin: string) =>
 				if (!target) return invalid("delivery.url must be an https URL without credentials");
 				const id = subscriptionId(caller.clientId, target.href, name, filter.value);
 				yield* ctx.mutate(ctx.db`DELETE FROM example_mcp_events WHERE id=${id} AND client_id=${caller.clientId}`);
+				yield* Ref.update(scanned, (map) => new Map([...map].filter(([key]) => key !== id)));
 				return { result: {} };
 			});
 
@@ -689,8 +713,9 @@ export const installEvents = (api: Api, origin: string) =>
 					);
 					return { wake: Infinity, backlog: false };
 				}
+				const mark = (yield* Ref.get(scanned)).get(row.id);
 				const page = yield* ctx.messages.query({
-					since: row.position,
+					since: Math.max(row.position, mark?.through ?? 0),
 					...selection(row.event_name, row.agent, row.topic, row.subtopics === 1),
 					exclude: row.instance,
 					limit: 16,
@@ -698,7 +723,9 @@ export const installEvents = (api: Api, origin: string) =>
 				const family = page.items.length === 0 ? null : yield* grantFamily(ctx, row.client_id);
 				let position = row.position;
 				let attempts = row.attempts;
-				for (const message of page.items.filter((item) => item.instance !== family && within(row, item.topic))) {
+				for (const message of page.items.filter(
+					(item) => item.instance !== family && within(row.topic, row.subtopics === 1, item.topic),
+				)) {
 					const at = yield* Clock.currentTimeMillis;
 					const current = yield* live(ctx, row.id, position, at);
 					// Stop if unsubscribe, expiry, grant loss, agent change, or another drain moved the cursor.
@@ -728,20 +755,40 @@ export const installEvents = (api: Api, origin: string) =>
 						yield* checkpoint(ctx, row.id, row.agent, position, page.cursor, 0, 0, null);
 					}
 				}
+				// Remember how far this page read, unless a subscribe replaced the subscription meanwhile.
+				yield* Ref.update(scanned, (map) =>
+					map.get(row.id) === mark ? new Map(map).set(row.id, { through: page.cursor }) : map,
+				);
 				return { wake: now + 60_000, backlog: page.items.length === 16 };
 			});
 
-		/** One subscription's failure backs off only that subscription for a minute; the others keep delivering. */
+		/**
+		 * One subscription's failure backs off only that subscription, from two seconds doubling to a minute, so a
+		 * transient board error delays it briefly while the others keep delivering.
+		 */
 		const isolated = (ctx: BackgroundContext, row: typeof Row.Type, now: number) =>
 			drain(ctx, row, now).pipe(
 				Effect.exit,
 				Effect.flatMap((exit) =>
 					Effect.gen(function* () {
-						if (exit._tag === "Success") return exit.value;
+						if (exit._tag === "Success") {
+							// A drain still waiting out its back-off returned early, so only one that ran clears the count.
+							if (row.next_attempt <= now)
+								yield* Ref.update(failures, (map) =>
+									map.has(row.id) ? new Map([...map].filter(([key]) => key !== row.id)) : map,
+								);
+							return exit.value;
+						}
 						if (Cause.hasInterruptsOnly(exit.cause)) return yield* Effect.interrupt;
-						const wake = (yield* Clock.currentTimeMillis) + 60_000;
+						const failed = yield* Ref.modify(failures, (map) => {
+							const count = (map.get(row.id) ?? 0) + 1;
+							return [count, new Map(map).set(row.id, count)] as const;
+						});
+						const wake = (yield* Clock.currentTimeMillis) + Math.min(60_000, 2_000 * 2 ** (failed - 1));
 						yield* ctx
-							.mutate(ctx.db`UPDATE example_mcp_events SET next_attempt=${wake} WHERE id=${row.id}`)
+							.mutate(
+								ctx.db`UPDATE example_mcp_events SET next_attempt=${wake},last_error='drain_failed' WHERE id=${row.id} AND position=${row.position} AND agent=${row.agent}`,
+							)
 							.pipe(Effect.ignore);
 						return { wake, backlog: false };
 					}),

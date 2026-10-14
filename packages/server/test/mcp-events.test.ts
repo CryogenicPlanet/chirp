@@ -12,7 +12,7 @@ import { conversation } from "./fixtures/conversation.ts";
 type App = Awaited<ReturnType<Awaited<ReturnType<typeof conversation>>["launch"]>>;
 const decode = <A>(schema: Schema.Decoder<A>, value: unknown) => Schema.decodeUnknownSync(schema)(value);
 const secret = `whsec_${Buffer.alloc(32, 21).toString("base64")}`;
-const Posted = Schema.Struct({ seq: Schema.Int, created_at: Schema.Int });
+const Posted = Schema.Struct({ id: Schema.String, seq: Schema.Int, created_at: Schema.Int });
 const Subscribed = Schema.Struct({
 	result: Schema.Struct({
 		id: Schema.String,
@@ -409,7 +409,7 @@ it("narrows mention events to a topic while the whole-board subscription keeps i
 }, 60000);
 
 it("resumes from a cursor with exactly the missed messages, in order and without duplicates", async (test) => {
-	const { app, cookie, post } = await installed(test);
+	const { fixture, app, cookie, post } = await installed(test);
 	const resumer = await authorize(app, cookie, "Replay client", "replay-bot", false);
 	const hook = await receiver(test);
 	await post("replay", "setup");
@@ -435,6 +435,16 @@ it("resumes from a cursor with exactly the missed messages, in order and without
 	expect(delivered.map((event) => event.cursor)).toEqual(
 		[first, ...missed, live].map((message) => String(message.seq)),
 	);
+
+	// The board drops the row, as expiry or a lost grant would. Created again from the first cursor, the subscription
+	// replays everything after it, even though delivery had already read that far for the row it replaces.
+	await fixture.sql("DELETE FROM example_mcp_events");
+	expect(await resumer.subscribe(hook.url, "message.created", { topic: "replay" }, started.cursor)).toMatchObject({
+		cursor: started.cursor,
+		truncated: false,
+	});
+	await eventually(() => hook.texts(started.id).length === 10);
+	expect(hook.texts(started.id)).toEqual(["m1", "m2", "m3", "m4", "m5", "m1", "m2", "m3", "m4", "m5"]);
 }, 60000);
 
 it("bounds a replay by the messages it matches and reports truncated only when it skipped some", async (test) => {
@@ -557,7 +567,10 @@ it("keeps delivering mention subscriptions created before events took arguments"
 }, 60000);
 
 it("pages of the connection's own grant posts neither stall the cursor nor skip other agents' messages", async (test) => {
-	const { fixture, app, cookie, post } = await installed(test);
+	// With the cap at three, the connection's 48 own posts would cut the three real matches if they counted toward it.
+	const { fixture, app, cookie, post } = await installed(test, (source) =>
+		source.replace("const replayLimit = 100;", "const replayLimit = 3;"),
+	);
 	const kickoff = await post("plans", "kickoff");
 	const granted = await authorize(app, cookie, "Granted client", "grant-bot", true);
 	const other = await authorize(app, cookie, "Other client", "other-bot", false);
@@ -602,8 +615,14 @@ it("leaves idle cursors alone between board requests and backs off only a subscr
 	const mentions = await client.subscribe(hook.url, "mention.created", {});
 	const stored = async (id: string) =>
 		decode(
-			Schema.Array(Schema.Struct({ position: Schema.Finite, next_attempt: Schema.Finite })),
-			await fixture.sql(`SELECT position,next_attempt FROM example_mcp_events WHERE id='${id}'`),
+			Schema.Array(
+				Schema.Struct({
+					position: Schema.Finite,
+					next_attempt: Schema.Finite,
+					last_error: Schema.NullOr(Schema.String),
+				}),
+			),
+			await fixture.sql(`SELECT position,next_attempt,last_error FROM example_mcp_events WHERE id='${id}'`),
 		)[0];
 	// Board requests advance the head and wake delivery, but an idle subscription does not write on each one.
 	for (let n = 0; n < 20; n++) await fetch(`${app.url}/api/messages?since=0`, { headers: { cookie } });
@@ -622,5 +641,35 @@ it("leaves idle cursors alone between board requests and backs off only a subscr
 			hook.texts(mentions.id).includes("@iso-bot still delivered") &&
 			hook.texts(later.id).includes("@iso-bot still delivered"),
 	);
-	expect((await stored("sub_broken"))?.next_attempt).toBeGreaterThan(Date.now());
+	// It backs off briefly at first and doubles on the next failure, recording why.
+	const first = await stored("sub_broken");
+	expect(first?.last_error).toBe("drain_failed");
+	expect(first?.next_attempt).toBeLessThanOrEqual(Date.now() + 2_000);
+	const firstAttempt = first?.next_attempt ?? 0;
+	let second = first;
+	for (let attempt = 0; attempt < 100 && second?.next_attempt === firstAttempt; attempt++) {
+		await delay(100);
+		second = await stored("sub_broken");
+	}
+	expect((second?.next_attempt ?? 0) - firstAttempt).toBeGreaterThanOrEqual(3_500);
+}, 60000);
+
+it("never delivers again a message that an edit made match after delivery had read it", async (test) => {
+	const { app, cookie, post } = await installed(test);
+	const editor = await authorize(app, cookie, "Edit client", "edit-bot", false);
+	const hook = await receiver(test);
+	await post("plans", "setup");
+	const mentions = await editor.subscribe(hook.url, "mention.created", {});
+	// Delivery reads past the draft with nothing to send, so the stored cursor stays behind it.
+	const draft = await post("plans", "draft without a mention");
+	await delay(1000);
+	const edited = await fetch(`${app.url}/api/messages/${draft.id}`, {
+		method: "PATCH",
+		headers: { cookie, origin: "https://comms.test", "content-type": "application/json" },
+		body: JSON.stringify({ body: "draft for @edit-bot" }),
+	});
+	expect(edited.status).toBe(200);
+	await post("plans", "@edit-bot after the edit");
+	await eventually(() => hook.texts(mentions.id).includes("@edit-bot after the edit"));
+	expect(hook.texts(mentions.id)).toEqual(["@edit-bot after the edit"]);
 }, 60000);
