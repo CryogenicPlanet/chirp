@@ -1,7 +1,8 @@
 name: Deploy Signin
 
 # auth.chirp.wiki follows master. Once master's Signin workflow passes, deploy it to Fly. It runs as exactly
-# one machine: codes are single-use within one process.
+# one machine: codes are single-use within one process. Until the FLY_SIGNIN_API_TOKEN secret exists (owner
+# setup, packages/signin/docs/README.md), the run succeeds without deploying.
 on:
   workflow_run:
     workflows: [Signin]
@@ -16,10 +17,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Deploy sign-in issuer
+  token:
+    name: Check deploy token
     # Push events only: never deploy a pull request's code with production credentials.
     if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      present: ${{ steps.check.outputs.present }}
+    steps:
+      # A job-level if cannot read secrets, so this step reports only whether the secret is set.
+      - id: check
+        env:
+          TOKEN: ${{ secrets.FLY_SIGNIN_API_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::FLY_SIGNIN_API_TOKEN not set; skipping deploy (see packages/signin/docs/README.md)"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    name: Deploy sign-in issuer
+    needs: token
+    if: needs.token.outputs.present == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
