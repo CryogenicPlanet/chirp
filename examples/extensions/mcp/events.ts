@@ -135,6 +135,8 @@ const Row = Schema.Struct({
 	topic: Schema.NullOr(Schema.String),
 	subtopics: Schema.Finite,
 	grant_family: Schema.NullOr(Schema.String),
+	client_url: Schema.NullOr(Schema.String),
+	subject: Schema.NullOr(Schema.String),
 });
 const Count = Schema.Array(Schema.Struct({ count: Schema.Finite }));
 const Family = Schema.Array(
@@ -341,6 +343,26 @@ export const installEvents = (api: Api, origin: string) =>
 				mysql: () => "ALTER TABLE example_mcp_events ADD COLUMN grant_family LONGTEXT",
 			}),
 			{ skipIfColumnExists: { table: "example_mcp_events", column: "grant_family" } },
+		);
+		// A reconnect through a client document takes over its earlier connection's subscriptions, so each row records
+		// the document and the approving human. Rows from before have neither and are never taken over.
+		yield* api.migrate(
+			"event_client_url",
+			on(sql, {
+				sqlite: () => "ALTER TABLE example_mcp_events ADD COLUMN client_url TEXT",
+				pg: () => "ALTER TABLE example_mcp_events ADD COLUMN client_url TEXT",
+				mysql: () => "ALTER TABLE example_mcp_events ADD COLUMN client_url LONGTEXT",
+			}),
+			{ skipIfColumnExists: { table: "example_mcp_events", column: "client_url" } },
+		);
+		yield* api.migrate(
+			"event_subject",
+			on(sql, {
+				sqlite: () => "ALTER TABLE example_mcp_events ADD COLUMN subject TEXT",
+				pg: () => "ALTER TABLE example_mcp_events ADD COLUMN subject TEXT",
+				mysql: () => "ALTER TABLE example_mcp_events ADD COLUMN subject VARCHAR(64)",
+			}),
+			{ skipIfColumnExists: { table: "example_mcp_events", column: "subject" } },
 		);
 		const rows = (ctx: Store, clientId?: string) =>
 			ctx.read(() =>
@@ -596,7 +618,8 @@ export const installEvents = (api: Api, origin: string) =>
 					}
 				}
 				const sql = ctx.db;
-				// Mutations serialize on the board's writer lock, so the existence and limit checks cannot race.
+				const clientUrl = caller.clientUrl ?? null;
+				// Mutations serialize on the board's writer lock, so the existence, takeover and limit checks cannot race.
 				const outcome = yield* ctx.mutate(
 					Effect.gen(function* () {
 						yield* sql`DELETE FROM example_mcp_events WHERE refresh_before<=${now}`;
@@ -611,7 +634,7 @@ export const installEvents = (api: Api, origin: string) =>
 							const previousUntil = rotating ? now + secretOverlap : existing.previous_secret_until;
 							const resetRetries = existing.agent !== agent ? 0 : existing.attempts;
 							const storedFamily = storedFamilies(existing.grant_family, ...families);
-							yield* sql`UPDATE example_mcp_events SET agent=${agent},previous_secret=${previous},previous_secret_until=${previousUntil},secret=${input.delivery.secret},refresh_before=${refreshBefore},verified_at=${verifiedAt},attempts=${resetRetries},next_attempt=0,grant_family=${storedFamily} WHERE id=${id}`;
+							yield* sql`UPDATE example_mcp_events SET agent=${agent},previous_secret=${previous},previous_secret_until=${previousUntil},secret=${input.delivery.secret},refresh_before=${refreshBefore},verified_at=${verifiedAt},attempts=${resetRetries},next_attempt=0,grant_family=${storedFamily},client_url=${clientUrl},subject=${caller.subject} WHERE id=${id}`;
 							return { position: existing.position, truncated: false };
 						}
 						const clientCount =
@@ -619,12 +642,28 @@ export const installEvents = (api: Api, origin: string) =>
 								Effect.flatMap(decodeCount),
 							);
 						if (clientCount >= perClient) return { limit: perClient };
-						const boardCount = yield* sql`SELECT COUNT(*) AS count FROM example_mcp_events`.pipe(
-							Effect.flatMap(decodeCount),
-						);
-						if (boardCount >= perBoard) return { limit: perBoard };
-						yield* sql`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,previous_secret_until,refresh_before,verified_at,position,attempts,next_attempt,last_error,event_name,topic,subtopics,grant_family) VALUES(${id},${caller.clientId},${agent},${instance},${target.href},${input.delivery.secret},NULL,NULL,${refreshBefore},${verifiedAt},${start.position},0,0,NULL,${name},${topic},${subtopics ? 1 : 0},${storedFamilies(...families)})`;
-						return start;
+						// A reconnect through the same client document, approved by the same human, is a new connection for
+						// the same client. It takes over the live subscriptions an earlier connection holds for this callback,
+						// event and arguments, so the client does not get every event twice. Each delivered to this callback
+						// up to its own position, so starting at the furthest misses nothing and repeats nothing.
+						const previous: Rows =
+							clientUrl === null
+								? []
+								: yield* sql`SELECT * FROM example_mcp_events WHERE url=${target.href} AND event_name=${name} AND ${topic === null ? sql`topic IS NULL` : sql`topic=${topic}`} AND subtopics=${subtopics ? 1 : 0} AND client_url=${clientUrl} AND subject=${caller.subject} AND client_id<>${caller.clientId} ORDER BY position DESC`.pipe(
+										Effect.flatMap(decodeRows),
+									);
+						const taken = previous[0];
+						if (taken === undefined) {
+							const boardCount = yield* sql`SELECT COUNT(*) AS count FROM example_mcp_events`.pipe(
+								Effect.flatMap(decodeCount),
+							);
+							if (boardCount >= perBoard) return { limit: perBoard };
+						} else yield* sql`DELETE FROM example_mcp_events WHERE id IN ${sql.in(previous.map((row) => row.id))}`;
+						// Posts made through a connection that was taken over still count as this client's own.
+						const own = storedFamilies(...previous.flatMap((row) => [row.grant_family, row.instance]), ...families);
+						const begin = taken === undefined ? start : { position: taken.position, truncated: false };
+						yield* sql`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,previous_secret_until,refresh_before,verified_at,position,attempts,next_attempt,last_error,event_name,topic,subtopics,grant_family,client_url,subject) VALUES(${id},${caller.clientId},${agent},${instance},${target.href},${input.delivery.secret},NULL,NULL,${refreshBefore},${verifiedAt},${begin.position},0,0,NULL,${name},${topic},${subtopics ? 1 : 0},${own},${clientUrl},${caller.subject})`;
+						return begin;
 					}),
 				);
 				if ("limit" in outcome)

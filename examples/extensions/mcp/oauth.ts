@@ -69,6 +69,8 @@ export interface OAuthIdentity {
 	readonly scopes: ReadonlyArray<"read" | "write">;
 	/** The name approved at consent for posting; absent on read-only grants. */
 	readonly agent: string | undefined;
+	/** The metadata document URL a metadata-document client presents; undefined for a registered client. */
+	readonly clientUrl: string | undefined;
 }
 const bodyLimit = 16384;
 const escape = (value: string) =>
@@ -993,6 +995,7 @@ const authenticate = (crypto: Crypto.Crypto, resource: string, ctx: Context, aut
 					subject: payload.success.subject,
 					scopes: payload.success.scopes,
 					agent: payload.success.agent,
+					clientUrl: payload.success.client_url,
 				} satisfies OAuthIdentity)
 			: null;
 	});
