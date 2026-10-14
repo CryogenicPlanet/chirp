@@ -367,6 +367,17 @@ it("refuses metadata documents that do not describe the client", async (test) =>
 			},
 			body: metadataDocument(`${base}/expires-fresh.json`),
 		},
+		"/expires-zero.json": {
+			headers: { expires: "0" },
+			body: metadataDocument(`${base}/expires-zero.json`),
+		},
+		"/apparent-age.json": {
+			headers: {
+				"cache-control": "public, s-maxage=60",
+				date: new Date(Date.now() - 60_000).toUTCString(),
+			},
+			body: metadataDocument(`${base}/apparent-age.json`),
+		},
 	}));
 	const { challenge } = pkce("refusals");
 	const ask = (path: string, fields: Readonly<Record<string, string>> = {}) =>
@@ -435,6 +446,14 @@ it("refuses metadata documents that do not describe the client", async (test) =>
 	expect((await ask("/expires-fresh.json")).status).toBe(200);
 	expect((await ask("/expires-fresh.json")).status).toBe(200);
 	expect(host.hits("/expires-fresh.json")).toBe(1);
+	// Invalid Expires (including 0) is already stale (RFC 9111 §5.3), not a five-minute fallback.
+	expect((await ask("/expires-zero.json")).status).toBe(200);
+	expect((await ask("/expires-zero.json")).status).toBe(200);
+	expect(host.hits("/expires-zero.json")).toBe(2);
+	// Apparent age from Date counts even without Age (RFC 9111 §4.2.3).
+	expect((await ask("/apparent-age.json")).status).toBe(200);
+	expect((await ask("/apparent-age.json")).status).toBe(200);
+	expect(host.hits("/apparent-age.json")).toBe(2);
 }, 60000);
 
 it("never fetches client metadata from private addresses on a public board", async (test) => {
