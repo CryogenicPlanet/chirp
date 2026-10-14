@@ -90,9 +90,23 @@ export const installGrants = (api: Api) =>
 		);
 	});
 
-const listed = (value: string | null) => (value ?? "").split(" ").filter((item) => item.length > 0);
-const retained = (...values: ReadonlyArray<string | null | undefined>) =>
-	[...new Set(values.flatMap((value) => (value == null || value === "" ? [] : listed(value))))].join(" ") || null;
+/** The kernel excludes at most 64 instances per query, and the connection's own instance is one of them. */
+const familyCap = 63;
+/**
+ * Grant families from stored space-separated lists and single families, oldest first: each once, keeping only the
+ * newest familyCap. Events and grants both store this list joined by spaces.
+ */
+export const familyList = (...values: ReadonlyArray<string | null | undefined>): ReadonlyArray<string> =>
+	[
+		...new Set(
+			values.flatMap((value) =>
+				value === undefined || value === null ? [] : value.split(" ").filter((item) => item.length > 0),
+			),
+		),
+	].slice(-familyCap);
+/** The stored form of familyList: the families joined by spaces, or null when there are none. */
+export const storedFamilies = (...values: ReadonlyArray<string | null | undefined>) =>
+	familyList(...values).join(" ") || null;
 const EventFamily = Schema.Array(Schema.Struct({ id: Schema.String, grant_family: Schema.NullOr(Schema.String) }));
 /** Union retained families onto live subscriptions for this client and posting name, without shrinking what they already store. */
 const remember = (ctx: Context, clientId: string, agent: string, families: string | null) =>
@@ -103,7 +117,7 @@ const remember = (ctx: Context, clientId: string, agent: string, families: strin
 				Effect.flatMap(Schema.decodeUnknownEffect(EventFamily)),
 			);
 		for (const row of rows) {
-			const next = retained(row.grant_family, families);
+			const next = storedFamilies(row.grant_family, families);
 			if (next !== null && next !== row.grant_family)
 				yield* ctx.db`UPDATE example_mcp_events SET grant_family=${next} WHERE id=${row.id} AND agent=${agent}`;
 		}
@@ -130,7 +144,7 @@ const collected = (ctx: Context, row: Row) =>
 					...row,
 					status: "active",
 					family: result.family,
-					families: retained(row.families, row.family, result.family),
+					families: storedFamilies(row.families, row.family, result.family),
 					scopes: result.scopes.join(" "),
 					expires_at: result.expires_at,
 				};
@@ -138,7 +152,7 @@ const collected = (ctx: Context, row: Row) =>
 				...row,
 				status: result.status,
 				family: result.family ?? row.family,
-				families: retained(row.families, row.family, result.family),
+				families: storedFamilies(row.families, row.family, result.family),
 			};
 		}),
 		Effect.catchTag("KernelError", (error) =>
@@ -179,16 +193,16 @@ export const editingState = (
 					const current = yield* connectionRow(ctx, holder.clientId);
 					if (current !== undefined && current.request_id === row.request_id) {
 						yield* ctx.db`UPDATE example_mcp_grants SET status=${next.status},family=${next.family},families=${next.families},scopes=${next.scopes},expires_at=${next.expires_at},updated_at=${now} WHERE client_id=${holder.clientId} AND request_id=${row.request_id}`;
-						yield* remember(ctx, holder.clientId, row.agent, retained(next.families, next.family));
+						yield* remember(ctx, holder.clientId, row.agent, storedFamilies(next.families, next.family));
 						return;
 					}
 					if (current !== undefined && current.agent === row.agent) {
-						const families = retained(current.families, current.family, next.families, next.family);
+						const families = storedFamilies(current.families, current.family, next.families, next.family);
 						yield* ctx.db`UPDATE example_mcp_grants SET families=${families},updated_at=${now} WHERE client_id=${holder.clientId} AND request_id=${current.request_id}`;
 						yield* remember(ctx, holder.clientId, current.agent, families);
 						return;
 					}
-					yield* remember(ctx, holder.clientId, row.agent, retained(next.families, next.family));
+					yield* remember(ctx, holder.clientId, row.agent, storedFamilies(next.families, next.family));
 				}),
 			);
 		return view(next);
@@ -234,8 +248,9 @@ export const requestEditing = (
 			Effect.gen(function* () {
 				const current = yield* connectionRow(ctx, row.client_id);
 				if ((current?.request_id ?? null) !== (prior?.request_id ?? null)) return current;
-				if (current) yield* remember(ctx, current.client_id, current.agent, retained(current.families, current.family));
-				const families = retained(current?.families, current?.family);
+				if (current)
+					yield* remember(ctx, current.client_id, current.agent, storedFamilies(current.families, current.family));
+				const families = storedFamilies(current?.families, current?.family);
 				const next = { ...row, families };
 				yield* ctx.db`DELETE FROM example_mcp_grants WHERE client_id=${next.client_id}`;
 				yield* ctx.db`INSERT INTO example_mcp_grants(client_id,subject,request_id,approve_url,code,agent,family,families,scopes,status,expires_at,created_at,updated_at) VALUES(${next.client_id},${next.subject},${next.request_id},${next.approve_url},${next.code},${next.agent},${next.family},${next.families},${next.scopes},${next.status},${next.expires_at},${next.created_at},${next.updated_at})`;

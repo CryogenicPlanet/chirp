@@ -18,6 +18,21 @@ const stringField = (value: unknown, name: string) => {
 	return field;
 };
 
+/** A JSON-RPC answer and its HTTP status. A body that is not JSON fails with that status, so an empty answer is legible. */
+const rpc = async (response: Response) => {
+	const text = await response.text();
+	try {
+		return { status: response.status, body: JSON.parse(text) };
+	} catch (cause) {
+		throw new Error(
+			`MCP answered ${response.status} with a body that is not JSON: ${JSON.stringify(text.slice(0, 200))}`,
+			{
+				cause,
+			},
+		);
+	}
+};
+
 it("keeps MCP absent until its extension package is installed", async (test) => {
 	const fixture = await conversation(test);
 	const app = await fixture.launch(join(import.meta.dirname, "../src/server.ts"));
@@ -626,7 +641,6 @@ it("serves MCP 2.0 discovery and delivers signed mention events to a verified we
 	const { access } = await connect(app.url, cookie, "Event client", "gpt-bot");
 	const secret = `whsec_${Buffer.alloc(32, 7).toString("base64")}`;
 	const hook = await hookReceiver(test);
-	const rpc = async (response: Response) => ({ status: response.status, body: await response.json() });
 
 	const discovered = await rpc(await modern(app.url, access, 1, "server/discover"));
 	expect(discovered.status).toBe(200);
@@ -989,8 +1003,6 @@ it("stops delivering pending mentions when unsubscribe is called during drain", 
 	if (!address || typeof address === "string") throw new Error("receiver has no address");
 	const hookUrl = `http://127.0.0.1:${address.port}/hook`;
 
-	const rpc = async (response: Response) => ({ status: response.status, body: await response.json() });
-
 	const subscription = {
 		name: "mention.created",
 		arguments: {},
@@ -1079,7 +1091,6 @@ it("signs deliveries with both secrets while a refresh rotates the webhook key",
 	const address = slowServer.address();
 	if (!address || typeof address === "string") throw new Error("receiver has no address");
 	const hookUrl = `http://127.0.0.1:${address.port}/hook`;
-	const rpc = async (response: Response) => ({ status: response.status, body: await response.json() });
 	const params = (secret: string) => ({
 		name: "mention.created",
 		arguments: {},
@@ -1136,7 +1147,6 @@ it("retires the previous webhook secret after the overlap window", async (test) 
 	const address = slowServer.address();
 	if (!address || typeof address === "string") throw new Error("receiver has no address");
 	const hookUrl = `http://127.0.0.1:${address.port}/hook`;
-	const rpc = async (response: Response) => ({ status: response.status, body: await response.json() });
 	const params = (secret: string) => ({
 		name: "mention.created",
 		arguments: {},
@@ -1202,7 +1212,6 @@ it("preserves previous secret overlap during same-secret refreshes", async (test
 	const address = slowServer.address();
 	if (!address || typeof address === "string") throw new Error("receiver has no address");
 	const hookUrl = `http://127.0.0.1:${address.port}/hook`;
-	const rpc = async (response: Response) => ({ status: response.status, body: await response.json() });
 	const params = (secret: string) => ({
 		name: "mention.created",
 		arguments: {},
@@ -1362,7 +1371,6 @@ it("stops drain when subscription agent filter changes", async (test) => {
 	const address = slowServer.address();
 	if (!address || typeof address === "string") throw new Error("receiver has no address");
 	const hookUrl = `http://127.0.0.1:${address.port}/hook`;
-	const rpc = async (response: Response) => ({ status: response.status, body: await response.json() });
 	const params = (agent: string) => ({
 		name: "mention.created",
 		arguments: {},
@@ -1407,7 +1415,6 @@ it("rejects malformed unsubscribe callback URLs", async (test) => {
 	const address = receiver.address();
 	if (!address || typeof address === "string") throw new Error("receiver has no address");
 	const validUrl = `http://127.0.0.1:${address.port}/hook`;
-	const rpc = async (response: Response) => ({ status: response.status, body: await response.json() });
 	const subscribed = await rpc(
 		await modern(app.url, access, 1, "events/subscribe", {
 			name: "mention.created",

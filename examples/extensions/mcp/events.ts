@@ -12,6 +12,7 @@ import type {
 	ManagedRequestContext,
 } from "../../../packages/server/src/kernel/extension-api.ts";
 import { makeAddressPolicy } from "./addresses.ts";
+import { familyList, storedFamilies } from "./grants.ts";
 import type { OAuthIdentity } from "./oauth.ts";
 import { messageUrl } from "./tools.ts";
 
@@ -234,15 +235,6 @@ const selection = (name: EventName, agent: string, topic: string | null, subtopi
 /** Whether a message's topic is the subscription's topic, or under it when subtopics are included. */
 const within = (topic: string | null, subtopics: boolean, candidate: string) =>
 	topic === null || candidate === topic || (subtopics && candidate.startsWith(`${topic}/`));
-/** Grant families this subscription must treat as its own, including ones retained after a replacement. */
-const familiesOf = (...values: ReadonlyArray<string | null | undefined>) => [
-	...new Set(
-		values.flatMap((value) =>
-			value == null || value === "" ? [] : value.split(" ").filter((item) => item.length > 0),
-		),
-	),
-];
-const storedFamilies = (...values: ReadonlyArray<string | null | undefined>) => familiesOf(...values).join(" ") || null;
 /** The subscription's full delivery predicate: not this connection's grant posts, and inside its topic filter. */
 const matches = (topic: string | null, subtopics: boolean, families: ReadonlyArray<string>, item: Message) =>
 	!families.includes(item.instance) && within(topic, subtopics, item.topic);
@@ -346,17 +338,9 @@ export const installEvents = (api: Api, origin: string) =>
 			on(sql, {
 				sqlite: () => "ALTER TABLE example_mcp_events ADD COLUMN grant_family TEXT",
 				pg: () => "ALTER TABLE example_mcp_events ADD COLUMN grant_family TEXT",
-				mysql: () => "ALTER TABLE example_mcp_events ADD COLUMN grant_family VARCHAR(64)",
+				mysql: () => "ALTER TABLE example_mcp_events ADD COLUMN grant_family LONGTEXT",
 			}),
 			{ skipIfColumnExists: { table: "example_mcp_events", column: "grant_family" } },
-		);
-		yield* api.migrate(
-			"event_grant_families",
-			on(sql, {
-				sqlite: () => "UPDATE example_mcp_events SET grant_family=grant_family WHERE 0",
-				pg: () => "ALTER TABLE example_mcp_events ALTER COLUMN grant_family TYPE TEXT",
-				mysql: () => "ALTER TABLE example_mcp_events MODIFY grant_family LONGTEXT",
-			}),
 		);
 		const rows = (ctx: Store, clientId?: string) =>
 			ctx.read(() =>
@@ -451,7 +435,12 @@ export const installEvents = (api: Api, origin: string) =>
 						Effect.exit,
 					);
 				if (outcome._tag === "Failure") {
-					if (Cause.hasInterruptsOnly(outcome.cause)) return yield* Effect.interrupt;
+					// A freeze (backup or reload) closing the extension's scope interrupts the fetch, not its caller: a
+					// subscribe then answers with a retriable failure. A caller that was itself interrupted stops here.
+					if (Cause.hasInterruptsOnly(outcome.cause)) {
+						yield* Effect.yieldNow;
+						return { status: "failed", reason: "timeout" } satisfies Sent;
+					}
 					return {
 						status: "failed",
 						reason: /cert|tls|ssl/i.test(Cause.pretty(outcome.cause)) ? "tls_error" : "connection_refused",
@@ -581,43 +570,22 @@ export const installEvents = (api: Api, origin: string) =>
 						if (over !== undefined) return { position: over.seq, truncated: true };
 						const oldest = window.items.length === replayScan ? window.items[0] : undefined;
 						if (oldest === undefined) return { position: since, truncated: false };
-						// One existence page uses the subscription's delivery filters over the whole skipped range, so a
-						// topic mention past three broad candidate pages is still found without walking mention history.
-						const exists = (from: number) =>
-							ctx.messages
-								.query({
-									since: from,
-									before: oldest.seq,
-									limit: replayScan,
-									exclude: [instance, ...held],
-									...(name === mentionEvent
-										? {
-												mentions: [`@${agent}`, "@here"],
-												...(topic === null ? {} : { topic, recursive: subtopics, all: true }),
-											}
-										: topic === null
-											? { mentions: [`@${agent}`, "@here"] }
-											: { topic, recursive: subtopics }),
-								})
-								.pipe(
-									Effect.map((page) => ({
-										hit: page.items.some((item) => matches(topic, subtopics, held, item)),
-										last: page.items.at(-1),
-										full: page.items.length === replayScan,
-									})),
-								);
-						let from = since;
-						let skipped = false;
-						while (true) {
-							const page = yield* exists(from);
-							if (page.hit) {
-								skipped = true;
-								break;
-							}
-							if (page.last === undefined || !page.full) break;
-							from = page.last.seq;
-						}
-						return { position: oldest.seq - 1, truncated: skipped };
+						// Every delivery filter is in the query, so the first message after the cursor is a deliverable one;
+						// the replay skipped something exactly when that message is older than the window.
+						const first = (yield* ctx.messages.query({
+							since,
+							limit: 1,
+							exclude: [instance, ...held],
+							...(name === mentionEvent
+								? {
+										mentions: [`@${agent}`, "@here"],
+										...(topic === null ? {} : { topic, recursive: subtopics, all: true }),
+									}
+								: topic === null
+									? { mentions: [`@${agent}`, "@here"] }
+									: { topic, recursive: subtopics }),
+						})).items[0];
+						return { position: oldest.seq - 1, truncated: first !== undefined && first.seq < oldest.seq };
 					});
 				let start = !replaying ? { position: fence, truncated: since < fence } : yield* replayFrom(families);
 				if (replaying) {
@@ -703,7 +671,7 @@ export const installEvents = (api: Api, origin: string) =>
 						Effect.flatMap(Schema.decodeUnknownEffect(Family)),
 					),
 				)
-				.pipe(Effect.map((found) => familiesOf(found[0]?.family, found[0]?.families)));
+				.pipe(Effect.map((found) => familyList(found[0]?.families, found[0]?.family)));
 
 		const deliver = (row: typeof Row.Type, message: Message) =>
 			Effect.gen(function* () {
@@ -786,7 +754,7 @@ export const installEvents = (api: Api, origin: string) =>
 				}
 				// After an expired live() and a refresh before the DELETE, a re-read repeats only delivered ids; a first-time match has none.
 				const held = yield* grantFamilies(ctx, row.client_id);
-				const families = familiesOf(row.grant_family, ...held);
+				const families = familyList(row.grant_family, ...held);
 				const stored = storedFamilies(row.grant_family, ...held);
 				if (stored !== null && stored !== row.grant_family)
 					yield* ctx.mutate(
@@ -806,7 +774,7 @@ export const installEvents = (api: Api, origin: string) =>
 					// Stop if unsubscribe, expiry, grant loss, agent change, or another drain moved the cursor.
 					if (!current || !(yield* granted(ctx, current.client_id, at)) || current.agent !== row.agent)
 						return { wake: Infinity, backlog: false };
-					const latest = familiesOf(current.grant_family, ...held);
+					const latest = familyList(current.grant_family, ...held);
 					if (!matches(row.topic, row.subtopics === 1, latest, message)) continue;
 					const outcome = message.deleted_at === null ? yield* deliver(current, message) : "rejected";
 					// Suppressed means this generation is no longer live; its scope is about to close.

@@ -12,19 +12,17 @@ import type { Identity } from "./identity.ts";
 
 export interface MessageQuery {
 	readonly since?: number;
-	/** Exclusive upper bound: only messages with `seq < before`. */
-	readonly before?: number;
 	readonly topic?: string;
 	readonly recursive?: boolean;
 	readonly limit: number;
-	/** One instance, or several, whose posts are omitted before the page is limited. */
+	/** One instance, or at most 64, whose posts are omitted before the page is limited. */
 	readonly exclude?: string | ReadonlyArray<string>;
 	readonly newest?: boolean;
 	readonly tag?: string;
 	readonly agent?: string;
 	readonly q?: string;
 	readonly mentions?: ReadonlyArray<string>;
-	/** When set, topic and mentions must both match instead of OR. */
+	/** When set and both topic and mentions are given, a message must match both instead of either. */
 	readonly all?: boolean;
 }
 /**

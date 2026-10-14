@@ -163,11 +163,11 @@ export const makeMessages = (
 		read((ceiling) =>
 			Effect.gen(function* () {
 				const since = input.since ?? (input.newest ? 0 : ceiling);
-				const before = input.before;
+				const excluded = typeof input.exclude === "string" ? [input.exclude] : (input.exclude ?? []);
 				if (
 					!Number.isSafeInteger(since) ||
 					since < 0 ||
-					(before !== undefined && (!Number.isSafeInteger(before) || before < 0)) ||
+					excluded.length > 64 ||
 					!Number.isSafeInteger(input.limit) ||
 					input.limit < 1 ||
 					input.limit > 200 ||
@@ -183,7 +183,6 @@ export const makeMessages = (
 				const targets = input.mentions ?? [];
 				if (targets.length > 32 || targets.some((target) => !target.startsWith("@") || !validTopic(target)))
 					return yield* new KernelError({ code: "query_invalid" });
-				const excluded = typeof input.exclude === "string" ? [input.exclude] : (input.exclude ?? []);
 				const topicMatch = sql`(topic=${input.topic ?? null} OR ${input.recursive ? 1 : 0}=1 AND ${isDescendant(sql, sql("topic"), input.topic ?? "")})`;
 				const mentions = sql`CASE WHEN mention_source.updated_seq>${ceiling} THEN mention_source.previous_mentions ELSE mention_source.mentions END`;
 				const mentionMatch =
@@ -206,7 +205,6 @@ export const makeMessages = (
 					input.q === undefined ? sql`1=1` : yield* searchMessages(sql, input.q, ceiling, folding, mysql);
 				const items =
 					yield* sql`WITH visible_messages AS (${publishedMessages(sql, ceiling)}) SELECT * FROM visible_messages WHERE deleted_at IS NULL AND seq>${since} AND seq<=${ceiling}
-   AND (${before === undefined ? 1 : 0}=1 OR seq<${before ?? 0})
    AND ${addressed}
    AND ${excluded.length === 0 ? sql`1=1` : sql`instance NOT IN ${sql.in(excluded)}`}
    AND (${nullable(sql, input.agent ?? null)} IS NULL OR agent=${input.agent ?? null})
