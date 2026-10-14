@@ -153,6 +153,56 @@ describe("real Bun boot proxy", () => {
 		expect(await (await app.fetch(app.url, { method: "HEAD" })).text()).toBe("");
 	});
 
+	it("refuses service worker scripts on every path and strips Service-Worker-Allowed and Clear-Site-Data", async (test) => {
+		const app = await launch(test);
+		await expect.poll(async () => (await app.state()).state).toBe("live");
+		// Browsers send this header, with the session cookie, when they fetch a worker's script to register or update it.
+		const worker = { "service-worker": "script" };
+		for (const refused of [
+			await app.fetch(`${app.url}/worker.js`, { headers: worker }),
+			await app.fetch(`${app.url}/_boot/auth/client.js`, { headers: worker }),
+			await fetch(`${app.url}/worker.js`, { headers: worker }),
+		]) {
+			expect(refused.status).toBe(403);
+			// Unregisters a worker installed before the refusal, and keeps cookies.
+			expect(refused.headers.get("clear-site-data")).toBe('"storage"');
+			expect((await refused.json()).error.code).toBe("service_worker_refused");
+		}
+		const script = await app.fetch(`${app.url}/worker.js`);
+		expect(script.status).toBe(200);
+		expect(script.headers.get("content-type")).toBe("text/javascript");
+		expect(script.headers.get("service-worker-allowed")).toBeNull();
+		// The app's own Clear-Site-Data would clear boot's session cookie and sign the human out.
+		expect(script.headers.get("clear-site-data")).toBeNull();
+		// updateViaCache: 'all' may reuse an ordinary cached fetch; Vary keeps that entry off the worker-script fetch.
+		expect(
+			script.headers
+				.get("vary")
+				?.split(",")
+				.map((item) => item.trim().toLowerCase()),
+		).toEqual(expect.arrayContaining(["accept-encoding", "service-worker"]));
+		expect(await script.text()).toContain("addEventListener");
+	});
+
+	it("refuses a service-worker fetch from the pre-runtime public route", async () => {
+		const { stdout } = await promisify(execFile)("bun", [
+			join(import.meta.dirname, "fixtures/service-worker-public.ts"),
+		]);
+		const { status, headers, body } = JSON.parse(stdout);
+		expect(status).toBe(403);
+		expect(headers["clear-site-data"]).toBe('"storage"');
+		expect(body.error.code).toBe("service_worker_refused");
+	});
+
+	it("refuses service worker scripts while the child is not live", async (test) => {
+		const app = await launch(test, "silent");
+		const refused = await fetch(`${app.url}/worker.js`, { headers: { "service-worker": "script" } });
+		expect(refused.status).toBe(403);
+		expect(refused.headers.get("clear-site-data")).toBe('"storage"');
+		expect((await refused.json()).error.code).toBe("service_worker_refused");
+		expect((await app.fetch(app.url)).status).toBe(503);
+	});
+
 	it("reports no revision for a build that was not stamped, whatever the environment says", async (test) => {
 		const revision = null;
 		const app = await launch(test, "normal", false, { CHIRP_REVISION: "0123456789abcdef0123456789abcdef01234567" });
