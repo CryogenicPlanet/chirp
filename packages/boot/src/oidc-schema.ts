@@ -9,7 +9,7 @@ export type OidcProvider = typeof OidcProvider.Type;
 
 export const OidcStart = Schema.Struct({
 	intent: Schema.Literals(["login", "link"]),
-	provider: Schema.optionalKey(OidcProvider),
+	provider: OidcProvider,
 	next: Schema.optionalKey(Schema.String),
 });
 export type OidcStart = typeof OidcStart.Type;

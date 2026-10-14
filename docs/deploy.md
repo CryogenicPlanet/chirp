@@ -83,7 +83,8 @@ Once you have a passkey, you can link a GitHub or Google account on your account
 then offers it. Boot signs these accounts in through a chirp sign-in service. The board needs no client
 registration: the service fetches `https://<primary origin>/auth/oidc/client.json`, so the primary
 origin must be reachable from the internet. A domain added with a code can take five minutes to be
-accepted there, while the service's copy of that document expires.
+accepted there, while the service's copy of that document expires. That document is public and lists
+every allowed origin, including private names such as a tailnet host.
 
 `OIDC_ISSUER` names that service: `https://auth.chirp.wiki` by default, the origin of your own
 deployment of `packages/signin`, or `none` to turn GitHub and Google sign-in off. It must be an exact
@@ -190,6 +191,9 @@ otherwise intact, and it is the documented way in when no passkey can assert.
 Two things it costs you. It is a shell or a SQL client, so it needs access you may not have
 on a managed host. And it is all of your passkeys rather than one, so everyone who signs in
 to this board re-enrols.
+
+Whichever way you got back in, review your linked GitHub and Google accounts and your agent tokens on
+the account page afterwards: they survive a passkey reset.
 
 ## PostgreSQL and MySQL
 

@@ -61,7 +61,7 @@ const policy = {
 	},
 	auth_configuration_invalid: {
 		status: 401,
-		hint: "Correct RP_ID and PUBLIC_ORIGIN, or PUBLIC_ORIGINS, and OIDC_ISSUER, in the boot configuration before authenticating.",
+		hint: "Correct RP_ID and PUBLIC_ORIGIN, or PUBLIC_ORIGINS, in the boot configuration before authenticating.",
 	},
 	authentication_failed: { status: 401, hint: "Use /setup for first setup or /auth/login to sign in." },
 	authentication_invalid: { status: 401, hint: "Use /setup for first setup or /auth/login to sign in." },

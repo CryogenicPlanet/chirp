@@ -297,7 +297,7 @@ const routes = [
 		"post",
 		["/_boot/auth/oidc/start"],
 		"action-dependent",
-		"Start GitHub or Google sign-in with {intent:login|link, provider?:github|google, next?} and exact Origin; link requires a human session, and bearer or grant credentials are refused. Returns {authorization_url} and sets a 10-minute __Host-chirp_oidc cookie binding the round trip to this browser; the page then navigates to the issuer itself.",
+		"Start GitHub or Google sign-in with {intent:login|link, provider:github|google, next?} and exact Origin; login requires an identity already linked for that provider (identity_not_linked otherwise), link requires a human session, and bearer or grant credentials are refused. Returns {authorization_url} and sets a 10-minute __Host-chirp_oidc cookie binding the round trip to this browser; the page then navigates to the issuer itself.",
 	],
 	[
 		"get",

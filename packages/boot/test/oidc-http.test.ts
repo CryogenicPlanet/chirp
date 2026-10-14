@@ -186,9 +186,15 @@ it("links, signs in with and unlinks a GitHub identity through a loopback issuer
 	).toBe(403);
 	const bearer = { authorization: `Bearer ${"a".repeat(43)}` };
 	expect((await request("/_boot/auth/identities", { pending: pendingId }, { headers: bearer })).status).toBe(401);
-	expect((await request("/_boot/auth/oidc/start", { intent: "link" }, { cookie: owner, headers: bearer })).status).toBe(
-		401,
-	);
+	expect(
+		(
+			await request(
+				"/_boot/auth/oidc/start",
+				{ intent: "link", provider: "github" },
+				{ cookie: owner, headers: bearer },
+			)
+		).status,
+	).toBe(401);
 	expect((await read("/_boot/auth/identities", owner, bearer)).status).toBe(401);
 	const grant = { [grantHeader]: `f_${"a".repeat(43)}`, [grantExtensionHeader]: "mcp" };
 	for (const path of ["/_boot/auth/identities", "/_boot/auth/oidc/start", "/auth/oidc/callback"])
@@ -206,11 +212,21 @@ it("links, signs in with and unlinks a GitHub identity through a loopback issuer
 	const loginPage = await (await fetch(`${board.url}/auth/login`)).text();
 	expect(loginPage).toContain('data-provider="github"');
 	expect(loginPage).not.toContain('data-provider="google"');
-	expect((await request("/_boot/auth/oidc/start", { intent: "login" }, { origin: null })).status).toBe(403);
-	expect((await request("/_boot/auth/oidc/start", { intent: "login" }, { origin: "https://evil.test" })).status).toBe(
-		403,
+	expect(
+		(await request("/_boot/auth/oidc/start", { intent: "login", provider: "github" }, { origin: null })).status,
+	).toBe(403);
+	expect(
+		(await request("/_boot/auth/oidc/start", { intent: "login", provider: "github" }, { origin: "https://evil.test" }))
+			.status,
+	).toBe(403);
+	expect(await errorCode(await request("/_boot/auth/oidc/start", { intent: "link", provider: "github" }))).toBe(
+		"session_invalid",
 	);
-	expect(await errorCode(await request("/_boot/auth/oidc/start", { intent: "link" }))).toBe("session_invalid");
+	// A start must name a provider, and a sign-in only one with a linked identity.
+	expect(await errorCode(await request("/_boot/auth/oidc/start", { intent: "login" }))).toBe("invalid_request");
+	expect(await errorCode(await request("/_boot/auth/oidc/start", { intent: "login", provider: "google" }))).toBe(
+		"identity_not_linked",
+	);
 	const signingIn = await roundTrip({ intent: "login", provider: "github", next: "/t/design" });
 	const signedIn = await signingIn.follow();
 	expect(signedIn.status).toBe(200);
@@ -225,7 +241,7 @@ it("links, signs in with and unlinks a GitHub identity through a loopback issuer
 	// An attacker starts a sign-in and gets the owner to approve it. The code lands in the owner's browser, which
 	// has no binding cookie; that refusal spends the state, so the attacker's browser, which has it, cannot replay
 	// the callback. The refusal page sends no Referer onward and loads nothing.
-	const lured = await roundTrip({ intent: "login" });
+	const lured = await roundTrip({ intent: "login", provider: "github" });
 	const owners = await lured.follow(false);
 	expect(owners.status).toBe(401);
 	expect(owners.headers.get("referrer-policy")).toBe("no-referrer");
@@ -279,7 +295,7 @@ it("links, signs in with and unlinks a GitHub identity through a loopback issuer
 	for (const record of records) expect(record.payload).not.toHaveProperty("query");
 
 	// A real restart: a sign-in started before it finishes after it, through a link that survived.
-	const beforeRestart = await roundTrip({ intent: "login" });
+	const beforeRestart = await roundTrip({ intent: "login", provider: "github" });
 	await board.stop();
 	board = await launch(test, directory, issuer.issuer);
 	const resumed = await beforeRestart.follow();
@@ -290,6 +306,8 @@ it("links, signs in with and unlinks a GitHub identity through a loopback issuer
 
 	// Unlink with the passkey: every other session ends, and the identity no longer signs in.
 	const passkey = await passkeySession();
+	// A sign-in already under way when the identity is unlinked is refused at its callback.
+	const underWay = await roundTrip({ intent: "login", provider: "github" });
 	expect(
 		(
 			await request(
@@ -312,7 +330,10 @@ it("links, signs in with and unlinks a GitHub identity through a loopback issuer
 	expect((await read("/_boot/auth/passkeys", resumedSession)).status).toBe(200);
 	for (const ended of [passkey, github]) expect((await read("/_boot/auth/passkeys", ended)).status).toBe(401);
 	expect(await (await fetch(`${board.url}/auth/login`)).text()).not.toContain("data-provider");
-	const refusedLogin = await (await roundTrip({ intent: "login" })).follow();
+	expect(await errorCode(await request("/_boot/auth/oidc/start", { intent: "login", provider: "github" }))).toBe(
+		"identity_not_linked",
+	);
+	const refusedLogin = await underWay.follow();
 	expect(refusedLogin.status).toBe(403);
 	expect(await refusedLogin.text()).toContain("not linked");
 	expect(cookieNamed(refusedLogin, "__Host-comms_session")).toBe("");

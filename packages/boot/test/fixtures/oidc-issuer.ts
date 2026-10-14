@@ -28,17 +28,17 @@ export interface Grant {
 export const fakeIssuer = async () => {
 	const key = await signingKey("k1");
 	const published: JWK[] = [key.publicJwk];
-	const counts = { discovery: 0, jwks: 0, token: 0 };
+	const counts = { discovery: 0, jwks: 0, token: 0, moved: 0 };
 	const modes: {
-		discovery: "ok" | "stall";
+		discovery: "ok" | "stall" | "mismatch" | "offorigin" | "userinfo" | "redirect" | "large" | "html";
+		jwks: "ok" | "large" | "html";
 		token: "ok" | "stall" | "error" | "html" | "refuse";
 		reuse: boolean;
-		providers: ReadonlyArray<string>;
 	} = {
 		discovery: "ok",
+		jwks: "ok",
 		token: "ok",
 		reuse: false,
-		providers: ["github", "google"],
 	};
 	const codes = new Map<
 		string,
@@ -56,29 +56,56 @@ export const fakeIssuer = async () => {
 		response.writeHead(status, { "content-type": "application/json" });
 		response.end(JSON.stringify(value));
 	};
+	const html = (response: ServerResponse) => {
+		response.writeHead(200, { "content-type": "text/html" });
+		response.end("<html>maintenance</html>");
+	};
+	// Valid JSON, but past the 64 KiB a relying party should ever read.
+	const padding = "x".repeat(70 * 1024);
+	const discovery = () => {
+		const port = new URL(base).port;
+		return {
+			issuer: modes.discovery === "mismatch" ? "https://auth.chirp.wiki" : base,
+			authorization_endpoint: `${base}/authorize`,
+			token_endpoint:
+				modes.discovery === "offorigin"
+					? "https://evil.test/token"
+					: modes.discovery === "userinfo"
+						? `http://user:secret@localhost:${port}/token`
+						: `${base}/token`,
+			jwks_uri: `${base}/jwks.json`,
+			response_types_supported: ["code"],
+			grant_types_supported: ["authorization_code"],
+			code_challenge_methods_supported: ["S256"],
+			token_endpoint_auth_methods_supported: ["none"],
+			id_token_signing_alg_values_supported: ["ES256"],
+			authorization_response_iss_parameter_supported: true,
+			client_id_metadata_document_supported: true,
+			chirp_providers: ["github", "google"],
+			...(modes.discovery === "large" ? { padding } : {}),
+		};
+	};
 	const server = createServer((request, response) => {
 		const url = new URL(request.url ?? "/", base);
 		if (request.method === "GET" && url.pathname === "/.well-known/openid-configuration") {
 			counts.discovery++;
 			if (modes.discovery === "stall") return void held.push(response);
-			return json(response, 200, {
-				issuer: base,
-				authorization_endpoint: `${base}/authorize`,
-				token_endpoint: `${base}/token`,
-				jwks_uri: `${base}/jwks.json`,
-				response_types_supported: ["code"],
-				grant_types_supported: ["authorization_code"],
-				code_challenge_methods_supported: ["S256"],
-				token_endpoint_auth_methods_supported: ["none"],
-				id_token_signing_alg_values_supported: ["ES256"],
-				authorization_response_iss_parameter_supported: true,
-				client_id_metadata_document_supported: true,
-				chirp_providers: modes.providers,
-			});
+			if (modes.discovery === "html") return html(response);
+			if (modes.discovery === "redirect") {
+				response.writeHead(302, { location: `${base}/moved/.well-known/openid-configuration` });
+				return void response.end();
+			}
+			return json(response, 200, discovery());
+		}
+		// Where a redirected discovery would lead, if a relying party followed it.
+		if (request.method === "GET" && url.pathname === "/moved/.well-known/openid-configuration") {
+			counts.moved++;
+			return json(response, 200, { ...discovery(), issuer: base });
 		}
 		if (request.method === "GET" && url.pathname === "/jwks.json") {
 			counts.jwks++;
-			return json(response, 200, { keys: published });
+			if (modes.jwks === "html") return html(response);
+			return json(response, 200, { keys: published, ...(modes.jwks === "large" ? { padding } : {}) });
 		}
 		if (request.method === "POST" && url.pathname === "/token") {
 			counts.token++;
@@ -89,10 +116,7 @@ export const fakeIssuer = async () => {
 			request.on("end", () => {
 				if (modes.token === "stall") return void held.push(response);
 				if (modes.token === "error") return json(response, 503, { error: "temporarily_unavailable" });
-				if (modes.token === "html") {
-					response.writeHead(200, { "content-type": "text/html" });
-					return void response.end("<html>maintenance</html>");
-				}
+				if (modes.token === "html") return html(response);
 				const form = new URLSearchParams(body);
 				const code = codes.get(form.get("code") ?? "");
 				const verifier = form.get("code_verifier") ?? "";

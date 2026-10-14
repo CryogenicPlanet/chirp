@@ -13,7 +13,7 @@ import { layer as lockLayer } from "../../src/edit-lock.ts";
 import { layer as eventsLayer } from "../../src/events.ts";
 import type { OidcConfig } from "../../src/oidc-client.ts";
 import { authenticator } from "./authenticator.ts";
-import { fakeIssuer, sign, signingKey, type FakeIssuer, type Grant } from "./oidc-issuer.ts";
+import { fakeIssuer, sign, signingKey, type Grant } from "./oidc-issuer.ts";
 
 const filename = process.argv[2],
 	scenario = process.argv[3];
@@ -82,20 +82,28 @@ const run = Effect.gen(function* () {
 			readonly session?: string;
 			readonly next?: string;
 			readonly party?: RelyingParty;
-			readonly via?: FakeIssuer;
 		} = {},
 	) =>
 		Effect.gen(function* () {
-			const via = options.via ?? issuer;
 			const started = yield* auth.startOidc(
-				{ intent: options.intent ?? "login", ...(options.next === undefined ? {} : { next: options.next }) },
+				{
+					intent: options.intent ?? "login",
+					provider: grant.provider,
+					...(options.next === undefined ? {} : { next: options.next }),
+				},
 				options.party ?? primary,
 				options.session ?? null,
 			);
-			const issued = via.issue(started.authorizationUrl, grant);
+			const issued = issuer.issue(started.authorizationUrl, grant);
 			return {
 				issued,
-				callback: { state: issued.state, code: issued.code, iss: via.issuer, binding: started.binding, refused: false },
+				callback: {
+					state: issued.state,
+					code: issued.code,
+					iss: issuer.issuer,
+					binding: started.binding,
+					refused: false,
+				},
 			};
 		});
 	const signIn = (auth: Boot, grant: Grant) =>
@@ -104,9 +112,9 @@ const run = Effect.gen(function* () {
 			assert.equal(result._tag, "session");
 			return result;
 		});
-	const pendingLink = (auth: Boot, session: string, grant: Grant, via?: FakeIssuer) =>
+	const pendingLink = (auth: Boot, session: string, grant: Grant) =>
 		Effect.gen(function* () {
-			const { callback } = yield* begin(auth, grant, { intent: "link", session, ...(via ? { via } : {}) });
+			const { callback } = yield* begin(auth, grant, { intent: "link", session });
 			const result = yield* auth.finishOidc(callback);
 			assert.equal(result._tag, "pending");
 			const id = new URL(result.next, primary.expectedOrigin).searchParams.get("link");
@@ -272,7 +280,7 @@ const run = Effect.gen(function* () {
 		}
 		issuer.modes.token = "ok";
 		// A code the issuer bound to another redirect is refused by its token endpoint.
-		const misdirected = yield* auth.startOidc({ intent: "login" }, primary, null);
+		const misdirected = yield* auth.startOidc({ intent: "login", provider: "github" }, primary, null);
 		const elsewhereUrl = new URL(misdirected.authorizationUrl);
 		elsewhereUrl.searchParams.set("redirect_uri", "https://x.test/auth/oidc/callback");
 		const foreign = issuer.issue(elsewhereUrl.href, octocat);
@@ -316,7 +324,7 @@ const run = Effect.gen(function* () {
 		const fresh = yield* build();
 		issuer.modes.discovery = "stall";
 		const [starting, during] = yield* Effect.all(
-			[timed(fresh.startOidc({ intent: "login" }, primary, null)), passkeyLogin(fresh)],
+			[timed(fresh.startOidc({ intent: "login", provider: "github" }, primary, null)), passkeyLogin(fresh)],
 			{ concurrency: "unbounded" },
 		);
 		issuer.release();
@@ -327,10 +335,37 @@ const run = Effect.gen(function* () {
 		yield* refused(Effect.fromResult(starting.result), "oidc_unavailable");
 		// The service recovering needs nothing but a new attempt.
 		assert.equal((yield* signIn(fresh, octocat))._tag, "session");
+	} else if (scenario === "discovery") {
+		const auth = yield* build();
+		yield* setup(auth);
+		const owner = yield* passkeySession(auth);
+		yield* confirm(auth, owner.id, yield* pendingLink(auth, owner.id, octocat));
+		// A discovery document naming another issuer, an endpoint off the issuer's origin or with credentials in it,
+		// a redirect, more than 64 KiB, or no JSON at all is the service being unavailable. Each is tried by a process
+		// with nothing cached, and passkey sign-in carries on.
+		for (const mode of ["mismatch", "offorigin", "userinfo", "redirect", "large", "html"] as const) {
+			issuer.modes.discovery = mode;
+			const fresh = yield* build();
+			yield* refused(fresh.startOidc({ intent: "login", provider: "github" }, primary, null), "oidc_unavailable");
+			assert.ok((yield* passkeySession(fresh)).id, mode);
+		}
+		issuer.modes.discovery = "ok";
+		assert.equal(issuer.counts.moved, 0, "A discovery redirect is never followed");
+		// Keys that are too large or not JSON fail the same way, at the callback that needs them.
+		for (const mode of ["large", "html"] as const) {
+			const fresh = yield* build();
+			const { callback } = yield* begin(fresh, octocat);
+			issuer.modes.jwks = mode;
+			yield* refused(fresh.finishOidc(callback), "oidc_unavailable");
+			issuer.modes.jwks = "ok";
+			assert.ok((yield* passkeySession(fresh)).id, mode);
+		}
+		// A sound service needs nothing but a new attempt.
+		assert.equal((yield* signIn(yield* build(), octocat))._tag, "session");
 	} else if (scenario === "assertions") {
 		const auth = yield* build();
-		// Before the first passkey nothing starts and no identity action can be proven.
-		yield* refused(auth.startOidc({ intent: "login" }, primary, null), "setup_required");
+		// Before the first passkey nothing can be linked, so no sign-in starts and no identity action can be proven.
+		yield* refused(auth.startOidc({ intent: "login", provider: "github" }, primary, null), "identity_not_linked");
 		yield* refused(auth.startIdentityLinkAssertion({ id: "a".repeat(43) }, "session"), "setup_required");
 		yield* setup(auth);
 		const first = yield* passkeySession(auth);
@@ -372,7 +407,7 @@ const run = Effect.gen(function* () {
 		);
 		yield* auth.logout(second.token);
 		yield* refused(auth.finishOidc(ending.callback), "session_invalid");
-		yield* refused(auth.startOidc({ intent: "link" }, primary, second.id), "session_invalid");
+		yield* refused(auth.startOidc({ intent: "link", provider: "github" }, primary, second.id), "session_invalid");
 		// Unlinking needs a proof for that identity, and ends every session but the one that proved it.
 		const third = yield* passkeySession(auth);
 		const github = yield* identityOf(auth, first.id, "github");
@@ -384,6 +419,14 @@ const run = Effect.gen(function* () {
 		assert.ok((yield* auth.authenticateSession(first.token)).id);
 		yield* refused(unlink(auth, first.id, github), "identity_not_found");
 		assert.deepEqual(yield* auth.linkedProviders, ["google"]);
+		// A sign-in for a provider with nothing linked writes no row and asks the issuer nothing, even with nothing
+		// cached, so starting without a credential costs the board one settings read.
+		const cold = yield* build();
+		const rows = (yield* sql`SELECT id FROM auth_challenges`).length;
+		const asked = { ...issuer.counts };
+		yield* refused(cold.startOidc({ intent: "login", provider: "github" }, primary, null), "identity_not_linked");
+		assert.equal((yield* sql`SELECT id FROM auth_challenges`).length, rows);
+		assert.deepEqual(issuer.counts, asked);
 		// The board's client document names a redirect for every allowed origin.
 		yield* sql`INSERT INTO auth_origins (origin, rp_id, created_at) VALUES ('https://added.test', 'added.test', 0)`;
 		assert.deepEqual(yield* auth.oidcClientDocument, {
@@ -402,24 +445,16 @@ const run = Effect.gen(function* () {
 		// While no stored passkey can sign in, a linked account cannot either: it is never the way back in.
 		const stranding = yield* begin(auth, human);
 		yield* sql`UPDATE passkeys SET rp_id='elsewhere.test'`;
-		yield* refused(auth.startOidc({ intent: "login" }, primary, null), "passkey_origin_mismatch");
+		yield* refused(auth.startOidc({ intent: "login", provider: "google" }, primary, null), "passkey_origin_mismatch");
 		yield* refused(auth.finishOidc(stranding.callback), "passkey_origin_mismatch");
 		yield* sql`UPDATE passkeys SET rp_id='comms.test'`;
 		// Starting needs no credential, so live round trips are capped; passkey sign-in is untouched by the flood.
 		for (let index = 0; index < 256; index++)
 			yield* sql`INSERT INTO auth_challenges (id, challenge, ceremony, setup_generation, expires_at)
 				VALUES (${`flood-${index}`}, '{}', 'oidc.login', NULL, ${Number.MAX_SAFE_INTEGER})`;
-		yield* refused(auth.startOidc({ intent: "login" }, primary, null), "oidc_unavailable");
+		yield* refused(auth.startOidc({ intent: "login", provider: "google" }, primary, null), "oidc_unavailable");
 		assert.ok((yield* passkeySession(auth)).id);
 		yield* sql`DELETE FROM auth_challenges WHERE id LIKE 'flood-%'`;
-		// Listing offers only providers the issuer listed when last asked, without asking it again.
-		issuer.modes.providers = ["github"];
-		const recent = yield* build();
-		assert.deepEqual((yield* recent.listIdentities(first.id)).providers, ["github", "google"]);
-		yield* recent.startOidc({ intent: "login" }, primary, null);
-		assert.deepEqual((yield* recent.listIdentities(first.id)).providers, ["github"]);
-		yield* refused(recent.startOidc({ intent: "login", provider: "google" }, primary, null), "invalid_request");
-		issuer.modes.providers = ["github", "google"];
 		const late = yield* begin(auth, human);
 		yield* sql`DELETE FROM passkeys`;
 		yield* refused(auth.finishOidc(late.callback), "setup_required");
@@ -510,8 +545,7 @@ const run = Effect.gen(function* () {
 				["google", issuer.issuer, false],
 			],
 		);
-		const foreign = yield* begin(moved, octocat, { via: elsewhere });
-		yield* refused(moved.finishOidc(foreign.callback), "identity_not_linked");
+		yield* refused(moved.startOidc({ intent: "login", provider: "github" }, primary, null), "identity_not_linked");
 		yield* refused(moved.finishOidc(stale.callback), "oidc_invalid");
 		yield* refused(confirm(moved, owner.id, orphan), "oidc_invalid");
 		const github = listed.identities.find((identity) => identity.provider === "github");
@@ -520,7 +554,7 @@ const run = Effect.gen(function* () {
 		assert.equal((yield* moved.listIdentities(owner.id)).identities.length, 1);
 		// With OIDC off nothing starts or finishes, there is no client document, and links stay removable.
 		const off = yield* build(null);
-		yield* refused(off.startOidc({ intent: "login" }, primary, null), "oidc_disabled");
+		yield* refused(off.startOidc({ intent: "login", provider: "github" }, primary, null), "oidc_disabled");
 		yield* refused(off.finishOidc(started.callback), "oidc_disabled");
 		assert.equal(yield* off.oidcClientDocument, null);
 		const offList = yield* off.listIdentities(owner.id);

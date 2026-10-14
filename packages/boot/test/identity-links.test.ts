@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { expect, test } from "vitest";
 
-for (const scenario of ["refusals", "stall", "assertions", "concurrency", "restart"]) {
+for (const scenario of ["refusals", "stall", "discovery", "assertions", "concurrency", "restart"]) {
 	test(`GitHub and Google identities: ${scenario}`, async ({ onTestFinished }) => {
 		const directory = await mkdtemp(join(tmpdir(), "comms-identity-links-"));
 		onTestFinished(() => rm(directory, { recursive: true, force: true }));

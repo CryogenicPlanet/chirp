@@ -157,6 +157,13 @@ export const makeIdentityLinks = <E, R, S extends { readonly id: string }, SE, S
 			};
 		});
 
+		/** Providers the sign-in page offers: only those with an identity linked through the configured issuer. */
+		const linkedProviders = Effect.map(linked, (identities) =>
+			oidcProviders.filter((provider) =>
+				identities.some((identity) => identity.issuer === issuer && identity.provider === provider),
+			),
+		);
+
 		/** Discovery runs first and with no lock held; only the state row is written under the mutex. The browser
 		 * keeps the binding in a cookie, so only the browser that started can finish. */
 		const startOidc = (input: OidcStart, party: RelyingParty, sessionId: string | null) =>
@@ -164,9 +171,9 @@ export const makeIdentityLinks = <E, R, S extends { readonly id: string }, SE, S
 				const client = yield* enabled;
 				const link = input.intent === "link";
 				if (link && sessionId === null) return yield* refuse("session_invalid");
-				const offered = yield* client.providers;
-				if (input.provider !== undefined && offered !== null && !offered.includes(input.provider))
-					return yield* refuse("invalid_request");
+				// Signing in needs no credential, so it must name a provider with a linked identity before it writes a
+				// row or asks the issuer anything: a board with nothing linked never starts a sign-in.
+				if (!link && !(yield* linkedProviders).includes(input.provider)) return yield* refuse("identity_not_linked");
 				const state = yield* random;
 				const verifier = yield* random;
 				const nonce = yield* random;
@@ -183,7 +190,7 @@ export const makeIdentityLinks = <E, R, S extends { readonly id: string }, SE, S
 					nonce,
 					code_challenge: challenge,
 					code_challenge_method: "S256",
-					...(input.provider === undefined ? {} : { provider: input.provider }),
+					provider: input.provider,
 				});
 				const record = yield* Schema.encodeEffect(Schema.fromJsonString(OidcState))({
 					verifier,
@@ -328,13 +335,7 @@ export const makeIdentityLinks = <E, R, S extends { readonly id: string }, SE, S
 							.toSorted((left, right) => left.created_at - right.created_at)
 							.map(({ subject: _subject, ...identity }) => ({ ...identity, active: identity.issuer === issuer })),
 						pending: pending ?? null,
-						// The providers the issuer listed when last asked; listing never waits on the issuer itself.
-						providers:
-							oidc === null
-								? []
-								: yield* Effect.map(oidc.cachedProviders, (offered) =>
-										oidcProviders.filter((provider) => offered === null || offered.includes(provider)),
-									),
+						providers: issuer === null ? [] : [...oidcProviders],
 					};
 				}),
 			);
@@ -397,13 +398,6 @@ export const makeIdentityLinks = <E, R, S extends { readonly id: string }, SE, S
 					}).pipe(captureRefusal(Schema.is(AuthError))),
 				),
 			);
-
-		/** Providers the sign-in page offers: only those with an identity linked through the configured issuer. */
-		const linkedProviders = Effect.map(linked, (identities) =>
-			oidcProviders.filter((provider) =>
-				identities.some((identity) => identity.issuer === issuer && identity.provider === provider),
-			),
-		);
 
 		return {
 			oidcClientDocument,

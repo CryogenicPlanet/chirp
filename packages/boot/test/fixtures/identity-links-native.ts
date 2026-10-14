@@ -93,7 +93,11 @@ const main = Effect.gen(function* () {
 		const owner = yield* auth.finishLogin(login.id, proof(login).response);
 		const begin = (instance: typeof auth, grant: Grant, intent: "login" | "link" = "login") =>
 			Effect.gen(function* () {
-				const started = yield* instance.startOidc({ intent }, primary, intent === "link" ? owner.id : null);
+				const started = yield* instance.startOidc(
+					{ intent, provider: grant.provider },
+					primary,
+					intent === "link" ? owner.id : null,
+				);
 				const issued = issuer.issue(started.authorizationUrl, grant);
 				return { state: issued.state, code: issued.code, iss: issuer.issuer, binding: started.binding, refused: false };
 			});
@@ -162,7 +166,7 @@ const main = Effect.gen(function* () {
 			owner.id,
 		);
 		assert.equal(yield* sessions, 1);
-		const refused = yield* Effect.result(auth.finishOidc(yield* begin(auth, octocat)));
+		const refused = yield* Effect.result(auth.startOidc({ intent: "login", provider: "github" }, primary, null));
 		assert.ok(Result.isFailure(refused) && "code" in refused.failure && refused.failure.code === "identity_not_linked");
 		// A new process on the same store still signs the remaining identity in.
 		const restarted = yield* build;

@@ -3,6 +3,13 @@ import { BunHttpServer } from "@effect/platform-bun";
 import { Config, Effect, Layer, Option, Path } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
+/** The chirp sign-in issuer for linked GitHub and Google identities: auth.chirp.wiki unless OIDC_ISSUER names
+ * another, and off for none. Boot refuses to start on anything but an exact origin. */
+export const oidcSetting = Config.String("OIDC_ISSUER").pipe(
+	Config.withDefault("https://auth.chirp.wiki"),
+	Config.map((issuer) => (issuer === "none" ? undefined : { issuer })),
+);
+
 /** Launches the editable app through boot.
  * The child uses a separate entry to avoid recursively launching boot. */
 export const startServer = (browserOrigin?: string) =>
@@ -37,9 +44,7 @@ export const startServer = (browserOrigin?: string) =>
 		]);
 		// Two spellings of the same setting are ambiguous; an invalid RP ID makes boot refuse the configuration.
 		const ambiguous = Option.isSome(origins) && (Option.isSome(configuredRpId) || Option.isSome(configuredOrigin));
-		// The chirp sign-in issuer for linked GitHub and Google identities; none turns it off. Boot refuses anything
-		// but an exact origin.
-		const oidcIssuer = yield* Config.String("OIDC_ISSUER").pipe(Config.withDefault("https://auth.chirp.wiki"));
+		const oidc = yield* oidcSetting;
 		return yield* boot({
 			dataDirectory: path.resolve(dataDirectory),
 			seedDirectory,
@@ -52,7 +57,7 @@ export const startServer = (browserOrigin?: string) =>
 				expectedOrigin: primary?.expectedOrigin ?? "",
 				additionalOrigins,
 				originList: Option.isSome(origins),
-				...(oidcIssuer === "none" ? {} : { oidc: { issuer: oidcIssuer } }),
+				...(oidc === undefined ? {} : { oidc }),
 			},
 		}).pipe(
 			Effect.provide(

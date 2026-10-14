@@ -20,18 +20,11 @@ export const validIssuer = (issuer: string) => {
 		(url.protocol === "https:" || (url.protocol === "http:" && url.hostname === "localhost"))
 	);
 };
-/** Discovery may name endpoints elsewhere, but plain http only when the issuer itself is a localhost issuer, so a
- * hostile document cannot send the code and verifier to a service on the board's own host. */
+/** Every endpoint discovery names lives on the issuer's own origin, so a hostile document cannot send the code and
+ * verifier anywhere else, including a service on the board's own host. */
 const validEndpoint = (endpoint: string, issuer: string) => {
 	const url = URL.parse(endpoint);
-	return (
-		url !== null &&
-		(url.protocol === "https:" ||
-			(url.protocol === "http:" && url.hostname === "localhost" && issuer.startsWith("http:"))) &&
-		!url.username &&
-		!url.password &&
-		!url.hash
-	);
+	return url !== null && url.origin === issuer && !url.username && !url.password && !url.hash;
 };
 
 const Discovery = Schema.Struct({
@@ -39,7 +32,6 @@ const Discovery = Schema.Struct({
 	authorization_endpoint: Schema.String,
 	token_endpoint: Schema.String,
 	jwks_uri: Schema.String,
-	chirp_providers: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 type Discovery = typeof Discovery.Type;
 // Only public members reach the verifier; jose refuses anything that is not a public key.
@@ -198,10 +190,6 @@ export const makeOidcClient = (config: OidcConfig, clientId: string) =>
 			});
 		return {
 			clientId,
-			/** The providers the service lists, or null when it lists none, which leaves every provider boot knows. */
-			providers: Effect.map(discovery, (published) => published.chirp_providers ?? null),
-			/** The same from the last discovery, without asking the service again; null when nothing is cached. */
-			cachedProviders: Effect.map(Ref.get(cache), (cached) => cached?.discovery.chirp_providers ?? null),
 			authorizationUrl: (params: Readonly<Record<string, string>>) =>
 				Effect.map(discovery, (published) => {
 					const url = new URL(published.authorization_endpoint);
