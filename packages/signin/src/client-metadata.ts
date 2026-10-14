@@ -33,7 +33,8 @@ const Document = Schema.Struct({
 });
 
 /**
- * Globally routable unicast only, per the IANA special-purpose registries; IPv4-mapped IPv6 is refused.
+ * Globally routable unicast only, per the IANA special-purpose registries, which also refuses the globally reachable
+ * special-use blocks (AS112, AMT); IPv4-mapped IPv6 is refused.
  * Everything outside 2000::/3 is refused, which covers ULA and so Fly's private 6PN network (fdaa::/16).
  */
 export const makeAddressPolicy = () => {
@@ -47,8 +48,11 @@ export const makeAddressPolicy = () => {
 		["172.16.0.0", 12],
 		["192.0.0.0", 24],
 		["192.0.2.0", 24],
+		["192.31.196.0", 24],
+		["192.52.193.0", 24],
 		["192.88.99.0", 24],
 		["192.168.0.0", 16],
+		["192.175.48.0", 24],
 		["198.18.0.0", 15],
 		["198.51.100.0", 24],
 		["203.0.113.0", 24],
@@ -60,6 +64,7 @@ export const makeAddressPolicy = () => {
 		["2001:db8::", 32],
 		["2002::", 16],
 		["3fff::", 20],
+		["2620:4f:8000::", 48],
 	] as const)
 		reserved.addSubnet(network, prefix, "ipv6");
 	const global = new BlockList();
