@@ -660,9 +660,10 @@ it("never delivers again a message that an edit made match after delivery had re
 	const hook = await receiver(test);
 	await post("plans", "setup");
 	const mentions = await editor.subscribe(hook.url, "mention.created", {});
-	// Delivery reads past the draft with nothing to send, so the stored cursor stays behind it.
+	// Several idle cycles read past the draft with nothing to send, so the stored cursor stays behind it.
 	const draft = await post("plans", "draft without a mention");
-	await delay(1000);
+	for (let n = 0; n < 5; n++) await fetch(`${app.url}/api/messages?since=0`, { headers: { cookie } });
+	await delay(1500);
 	const edited = await fetch(`${app.url}/api/messages/${draft.id}`, {
 		method: "PATCH",
 		headers: { cookie, origin: "https://comms.test", "content-type": "application/json" },
