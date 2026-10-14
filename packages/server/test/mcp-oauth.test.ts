@@ -336,6 +336,14 @@ it("refuses metadata documents that do not describe the client", async (test) =>
 			headers: { "cache-control": "private, max-age=3600" },
 			body: metadataDocument(`${base}/private.json`),
 		},
+		"/shared-zero.json": {
+			headers: { "cache-control": "public, max-age=3600, s-maxage=0" },
+			body: metadataDocument(`${base}/shared-zero.json`),
+		},
+		"/shared-age.json": {
+			headers: { "cache-control": "public, max-age=0, s-maxage=60" },
+			body: metadataDocument(`${base}/shared-age.json`),
+		},
 	}));
 	const { challenge } = pkce("refusals");
 	const ask = (path: string, fields: Readonly<Record<string, string>> = {}) =>
@@ -377,6 +385,13 @@ it("refuses metadata documents that do not describe the client", async (test) =>
 	expect((await ask("/private.json")).status).toBe(200);
 	expect((await ask("/private.json")).status).toBe(200);
 	expect(host.hits("/private.json")).toBe(2);
+	// s-maxage overrides max-age for this shared cache. Zero is not stored; a positive s-maxage is.
+	expect((await ask("/shared-zero.json")).status).toBe(200);
+	expect((await ask("/shared-zero.json")).status).toBe(200);
+	expect(host.hits("/shared-zero.json")).toBe(2);
+	expect((await ask("/shared-age.json")).status).toBe(200);
+	expect((await ask("/shared-age.json")).status).toBe(200);
+	expect(host.hits("/shared-age.json")).toBe(1);
 }, 60000);
 
 it("never fetches client metadata from private addresses on a public board", async (test) => {

@@ -145,15 +145,16 @@ const metadataUrl = (clientId: string) => {
 };
 const metadataLimit = 5120;
 const cachedDocuments = 64;
-/** How long a fetched document is reused: its Cache-Control max-age (CIMD §5.2), at most an hour, five minutes if unset. private, no-store and no-cache stay out of this shared cache (RFC 9111). */
+/** How long a fetched document is reused. This shared cache uses Cache-Control s-maxage, then max-age (CIMD §5.2, RFC 9111), at most an hour, five minutes if neither is set. private, no-store and no-cache are not stored. */
 const cacheLifetime = (header: string | undefined) => {
 	const directives = (header ?? "")
 		.toLowerCase()
 		.split(",")
 		.map((directive) => directive.trim());
 	if (directives.includes("no-store") || directives.includes("no-cache") || directives.includes("private")) return 0;
-	const maxAge = directives.flatMap((directive) => /^max-age=(\d+)$/.exec(directive)?.[1] ?? []).at(0);
-	return Math.min(maxAge === undefined ? 300 : Number(maxAge), 3600) * 1000;
+	const seconds = (pattern: RegExp) => directives.flatMap((directive) => pattern.exec(directive)?.[1] ?? []).at(0);
+	const shared = seconds(/^s-maxage=(\d+)$/) ?? seconds(/^max-age=(\d+)$/);
+	return Math.min(shared === undefined ? 300 : Number(shared), 3600) * 1000;
 };
 const boundedText = (
 	request: Parameters<Api["route"]>[2]["handler"] extends (request: infer R, ...rest: never[]) => unknown ? R : never,
