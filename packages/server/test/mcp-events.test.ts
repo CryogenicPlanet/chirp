@@ -245,7 +245,7 @@ const eventually = async (check: () => boolean) => {
 };
 
 it("watches a topic with or without its subtopics and never delivers the connection's own posts", async (test) => {
-	const { app, cookie, post } = await installed(test);
+	const { fixture, app, cookie, post } = await installed(test);
 	const watcher = await authorize(app, cookie, "Watch client", "watch-bot", false);
 	const hook = await receiver(test);
 
@@ -323,6 +323,14 @@ it("watches a topic with or without its subtopics and never delivers the connect
 	await eventually(() => hook.texts(subtree.id).includes("after"));
 	await delay(500);
 	expect(hook.texts(exact.id)).toEqual(["top level", "last"]);
+
+	// Default values do not count toward identity, so the other spelling refreshes, and then removes, the same row.
+	expect((await watcher.subscribe(hook.url, "message.created", { topic: "plans", recursive: true })).id).toBe(
+		subtree.id,
+	);
+	expect(await fixture.sql("SELECT COUNT(*) AS count FROM example_mcp_events")).toEqual([{ count: 1 }]);
+	await watcher.unsubscribe(hook.url, "message.created", { recursive: true, topic: "plans" });
+	expect(await fixture.sql("SELECT COUNT(*) AS count FROM example_mcp_events")).toEqual([{ count: 0 }]);
 }, 60000);
 
 it("never delivers posts the connection made through its editing grant, while other agents' @here arrives", async (test) => {
@@ -371,6 +379,7 @@ it("narrows mention events to a topic while the whole-board subscription keeps i
 			.slice(0, 32)}`,
 	);
 	expect((await mentioned.subscribe(hook.url, "mention.created", undefined)).id).toBe(board.id);
+	expect((await mentioned.subscribe(hook.url, "mention.created", { recursive: false })).id).toBe(board.id);
 	const scoped = await mentioned.subscribe(hook.url, "mention.created", { topic: "plans" });
 	const exact = await mentioned.subscribe(hook.url, "mention.created", { topic: "plans", recursive: false });
 	expect(new Set([board.id, scoped.id, exact.id]).size).toBe(3);
@@ -420,35 +429,70 @@ it("resumes from a cursor with exactly the missed messages, in order and without
 	);
 }, 60000);
 
-it("cuts a replay that reaches past the replay window and reports truncated", async (test) => {
+it("bounds a replay by the messages it matches and reports truncated only when it skipped some", async (test) => {
 	const { app, cookie, post } = await installed(test, (source) =>
-		source.replace("const replayWindow = 1000;", "const replayWindow = 3;"),
+		source.replace("const replayLimit = 100;", "const replayLimit = 3;"),
 	);
 	const resumer = await authorize(app, cookie, "Truncated client", "trunc-bot", false);
 	const hook = await receiver(test);
 	await post("trunc", "setup");
-	const started = await resumer.subscribe(hook.url, "message.created", { topic: "trunc" });
-	await resumer.unsubscribe(hook.url, "message.created", { topic: "trunc" });
-	const missed: Array<{ readonly text: string; readonly seq: number }> = [];
-	for (let n = 1; n <= 6; n++) missed.push({ text: `t${n}`, seq: (await post("trunc", `t${n}`)).seq });
-	const resumed = await resumer.subscribe(hook.url, "message.created", { topic: "trunc" }, started.cursor);
-	expect(resumed.truncated).toBe(true);
-	expect(Number(resumed.cursor)).toBeGreaterThan(Number(started.cursor));
-	// Delivery starts at the returned cursor, so the oldest missed messages are skipped and the newest arrive.
-	const kept = missed.filter((message) => message.seq > Number(resumed.cursor)).map((message) => message.text);
-	expect(kept.length).toBeGreaterThan(0);
-	expect(kept).not.toContain("t1");
+	const watch = { topic: "trunc" };
+	const started = await resumer.subscribe(hook.url, "message.created", watch);
+	await resumer.unsubscribe(hook.url, "message.created", watch);
+	// Messages the watch does not match never count against the cap, however many board sequence numbers they use.
+	for (let n = 1; n <= 8; n++) await post("elsewhere", `noise ${n}`);
+	await post("trunc", "a1");
+	await post("trunc", "a2");
+	expect(await resumer.subscribe(hook.url, "message.created", watch, started.cursor)).toMatchObject({
+		cursor: started.cursor,
+		truncated: false,
+	});
+	await eventually(() => hook.texts(started.id).includes("a2"));
+	const cursor = hook.events().at(-1)?.cursor ?? null;
+	await resumer.unsubscribe(hook.url, "message.created", watch);
+	const missed: Array<number> = [];
+	for (let n = 1; n <= 5; n++) missed.push((await post("trunc", `b${n}`)).seq);
+	// Past the newest three matches, the replay starts after the one just older and says it skipped some.
+	expect(await resumer.subscribe(hook.url, "message.created", watch, cursor)).toMatchObject({
+		cursor: String(missed[1]),
+		truncated: true,
+	});
 	await post("trunc", "after");
 	await eventually(() => hook.texts(started.id).includes("after"));
-	expect(hook.texts(started.id)).toEqual([...kept, "after"]);
+	expect(hook.texts(started.id)).toEqual(["a1", "a2", "b3", "b4", "b5", "after"]);
 
 	// A cursor beyond the board's head, as after a restore, starts from the head rather than refusing or stalling.
-	await resumer.unsubscribe(hook.url, "message.created", { topic: "trunc" });
-	const ahead = await resumer.subscribe(hook.url, "message.created", { topic: "trunc" }, "999999999");
+	await resumer.unsubscribe(hook.url, "message.created", watch);
+	const ahead = await resumer.subscribe(hook.url, "message.created", watch, "999999999");
 	expect(ahead.truncated).toBe(false);
 	expect(Number(ahead.cursor)).toBeLessThan(999999999);
 	await post("trunc", "after the head");
 	await eventually(() => hook.texts(started.id).includes("after the head"));
+}, 60000);
+
+it("charges replays to the verification budget even when the callback is already verified", async (test) => {
+	const { app, cookie, post } = await installed(test);
+	const client = await authorize(app, cookie, "Budget client", "budget-bot", false);
+	const hook = await receiver(test);
+	await post("budget", "setup");
+	// The live mention subscription keeps this callback verified, so below only the replays spend the budget.
+	const anchor = await client.subscribe(hook.url, "mention.created", {});
+	await post("budget", "missed");
+	const watch = { topic: "budget" };
+	for (let n = 1; n < 10; n++) {
+		expect(await client.subscribe(hook.url, "message.created", watch, anchor.cursor)).toMatchObject({
+			cursor: anchor.cursor,
+		});
+		await client.unsubscribe(hook.url, "message.created", watch);
+	}
+	expect(hook.verifications()).toHaveLength(1);
+	expect(await client.refused(hook.url, "message.created", watch, anchor.cursor)).toEqual({
+		code: -32013,
+		message: "ResourceExhausted",
+		data: { limit: "verifications", max: 10 },
+	});
+	// Starting from now replays nothing, so it is not charged.
+	expect(await client.subscribe(hook.url, "message.created", watch)).toMatchObject({ truncated: false });
 }, 60000);
 
 it("keeps delivering mention subscriptions created before events took arguments", async (test) => {

@@ -576,7 +576,7 @@ export const callTool = (
 					events: connection.events,
 					events_transport:
 						connection.events.length > 0
-							? "Signed webhooks via events/subscribe. message.created watches a topic (arguments topic and recursive); mention.created takes an optional topic. Every event and subscribe result carries a cursor: pass the last one to events/subscribe to resume after a lapse; replay reaches a bounded distance back and returns truncated when cut."
+							? "Signed webhooks via events/subscribe. message.created watches a topic (arguments topic and recursive); mention.created takes an optional topic. Every event and subscribe result carries a cursor: pass the last one to events/subscribe to resume after a lapse; replay delivers a bounded number of the newest missed messages and returns truncated when it skipped older ones."
 							: "None on this connection: the client used the initialize handshake, and events need MCP 2026-07-28 (server/discover).",
 					server_stream: false,
 				},

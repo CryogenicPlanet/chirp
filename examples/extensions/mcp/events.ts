@@ -30,8 +30,8 @@ const perBoard = 64;
 const verificationsPerWindow = 10;
 const verificationWindow = 10 * 60 * 1000;
 const excerpt = 4000;
-/** A replay starts at most this many board sequence numbers before the current one; `truncated` says when it was cut. */
-const replayWindow = 1000;
+/** A replay delivers at most this many of the newest missed messages; `truncated` says an older one was skipped. */
+const replayLimit = 100;
 
 const payloadSchema = {
 	type: "object",
@@ -141,11 +141,20 @@ const usage: Readonly<Record<EventName, string>> = {
 	[mentionEvent]: `${mentionEvent} takes an optional topic and recursive`,
 	[messageEvent]: `${messageEvent} takes a topic and an optional recursive`,
 };
-/** message.created watches one topic; mention.created may narrow to one. Absent arguments are `{}`. */
+/**
+ * message.created watches one topic; mention.created may narrow to one. Absent arguments are `{}`, and defaults are
+ * dropped (recursive true, or recursive without a topic) so every spelling of one filter is one subscription.
+ */
 const filterOf = (name: EventName, value: unknown) =>
-	Option.filter(
-		Schema.decodeUnknownOption(Filter, { onExcessProperty: "error" })(value === undefined ? {} : value),
-		(filter) => filter.topic !== "" && (name === mentionEvent || filter.topic !== undefined),
+	Schema.decodeUnknownOption(Filter, { onExcessProperty: "error" })(value === undefined ? {} : value).pipe(
+		Option.filter((filter) => filter.topic !== "" && (name === mentionEvent || filter.topic !== undefined)),
+		Option.map((filter): Filter =>
+			filter.topic === undefined
+				? {}
+				: filter.recursive === false
+					? { topic: filter.topic, recursive: false }
+					: { topic: filter.topic },
+		),
 	);
 /** A cursor is the board sequence number delivery has passed, sent as a decimal string. */
 const positionOf = (cursor: string) =>
@@ -207,6 +216,9 @@ const subscriptionId = (clientId: string, url: string, name: string, filter: Fil
 		)
 		.digest("hex")
 		.slice(0, 32)}`;
+/** The board query a subscription reads. The board ORs topic with mentions, so a mention filter's topic is applied after. */
+const selection = (name: EventName, agent: string, topic: string | null, subtopics: boolean) =>
+	name === messageEvent && topic !== null ? { topic, recursive: subtopics } : { mentions: [`@${agent}`, "@here"] };
 /** Whether a message's topic is the subscription's topic, or under it when subtopics are included. */
 const within = (row: typeof Row.Type, topic: string) =>
 	row.topic === null || topic === row.topic || (row.subtopics === 1 && topic.startsWith(`${row.topic}/`));
@@ -317,7 +329,8 @@ export const installEvents = (api: Api, origin: string) =>
 		const decodeRows = Schema.decodeUnknownEffect(Schema.Array(Row));
 		const decodeCount = (result: ReadonlyArray<unknown>) =>
 			Schema.decodeUnknownEffect(Count)(result).pipe(Effect.map((items) => items[0]?.count ?? 0));
-		// Verification makes the board contact a client-chosen host, so each client gets a small budget.
+		// Verification makes the board contact a client-chosen host, and a replay re-sends history to it, so each client
+		// gets a small budget for both.
 		const verifications = yield* Ref.make<ReadonlyMap<string, ReadonlyArray<number>>>(new Map());
 		const random = (size: number) =>
 			crypto.randomBytes(size).pipe(Effect.map((bytes) => Buffer.from(bytes).toString("hex")));
@@ -430,7 +443,7 @@ export const installEvents = (api: Api, origin: string) =>
 			});
 
 		const subscribe = (
-			ctx: Store & Pick<ManagedRequestContext, "extension" | "topics">,
+			ctx: Store & Pick<ManagedRequestContext, "extension" | "topics" | "messages">,
 			caller: OAuthIdentity,
 			params: unknown,
 		) =>
@@ -473,11 +486,17 @@ export const installEvents = (api: Api, origin: string) =>
 				const now = yield* Clock.currentTimeMillis;
 				const ttl = input.ttlMs === undefined || input.ttlMs === null ? defaultTtl : input.ttlMs;
 				const refreshBefore = now + Math.min(defaultTtl, Math.max(minimumTtl, ttl));
+				const instance = `extension:${ctx.extension}:${caller.clientId}`;
+				const owned = yield* rows(ctx, caller.clientId);
 				// Verification is cached per client and callback, so differing arguments cannot multiply challenges.
-				const cached = (yield* rows(ctx, caller.clientId))
+				const cached = owned
 					.filter((row) => row.url === target.href && row.refresh_before > now && row.verified_at > now - verifiedFor)
 					.toSorted((left, right) => right.verified_at - left.verified_at)[0];
-				if (!cached) {
+				const fence = yield* ctx.read((value) => Effect.succeed(value));
+				// A new subscription starts now, or after the client's cursor; a cursor beyond the board starts now.
+				const since = cursor === null ? fence : Math.min(cursor, fence);
+				const replaying = since < fence && !owned.some((row) => row.id === id && row.refresh_before > now);
+				if (!cached || replaying) {
 					const allowed = yield* Ref.modify(verifications, (budget) => {
 						const recent = (budget.get(caller.clientId) ?? []).filter((at) => at > now - verificationWindow);
 						const next = new Map(budget);
@@ -486,17 +505,26 @@ export const installEvents = (api: Api, origin: string) =>
 					});
 					if (!allowed)
 						return failure(-32013, "ResourceExhausted", { limit: "verifications", max: verificationsPerWindow });
+				}
+				if (!cached) {
 					const reason = yield* verify(target, id, input.delivery.secret);
 					if (reason !== null) return failure(-32015, "CallbackEndpointError", { reason });
 				}
 				const verifiedAt = cached?.verified_at ?? now;
-				const fence = yield* ctx.read((value) => Effect.succeed(value));
-				// A new subscription starts now, or resumes after the client's cursor, never further back than replayWindow.
-				const floor = Math.max(0, fence - replayWindow);
-				const start =
-					cursor === null
-						? { position: fence, truncated: false }
-						: { position: Math.min(fence, Math.max(floor, cursor)), truncated: cursor < floor };
+				// A replay is bounded by the messages the subscription's own query matches, not by board sequence numbers:
+				// past the newest replayLimit, it starts after the one just older and says it skipped some.
+				const newest = replaying
+					? yield* ctx.messages.query({
+							since,
+							newest: true,
+							limit: replayLimit + 1,
+							exclude: instance,
+							...selection(name, agent, topic, filter.value.recursive !== false),
+						})
+					: undefined;
+				const cut = newest !== undefined && newest.items.length > replayLimit ? newest.items[0] : undefined;
+				// Only a replay starts below the fence; anything else that turns out to need a row starts now.
+				const start = { position: replaying ? (cut?.seq ?? since) : fence, truncated: cut !== undefined };
 				const sql = ctx.db;
 				// Mutations serialize on the board's writer lock, so the existence and limit checks cannot race.
 				const outcome = yield* ctx.mutate(
@@ -524,7 +552,7 @@ export const installEvents = (api: Api, origin: string) =>
 							Effect.flatMap(decodeCount),
 						);
 						if (boardCount >= perBoard) return { limit: perBoard };
-						yield* sql`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,previous_secret_until,refresh_before,verified_at,position,attempts,next_attempt,last_error,event_name,topic,subtopics) VALUES(${id},${caller.clientId},${agent},${`extension:${ctx.extension}:${caller.clientId}`},${target.href},${input.delivery.secret},NULL,NULL,${refreshBefore},${verifiedAt},${start.position},0,0,NULL,${name},${topic},${filter.value.recursive === false ? 0 : 1})`;
+						yield* sql`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,previous_secret_until,refresh_before,verified_at,position,attempts,next_attempt,last_error,event_name,topic,subtopics) VALUES(${id},${caller.clientId},${agent},${instance},${target.href},${input.delivery.secret},NULL,NULL,${refreshBefore},${verifiedAt},${start.position},0,0,NULL,${name},${topic},${filter.value.recursive === false ? 0 : 1})`;
 						return start;
 					}),
 				);
@@ -651,12 +679,9 @@ export const installEvents = (api: Api, origin: string) =>
 					);
 					return { wake: Infinity, backlog: false };
 				}
-				// The board ORs topic with mentions, so a mention filter's topic is applied here instead.
 				const page = yield* ctx.messages.query({
 					since: row.position,
-					...(row.event_name === messageEvent && row.topic !== null
-						? { topic: row.topic, recursive: row.subtopics === 1 }
-						: { mentions: [`@${row.agent}`, "@here"] }),
+					...selection(row.event_name, row.agent, row.topic, row.subtopics === 1),
 					exclude: row.instance,
 					limit: 16,
 				});
