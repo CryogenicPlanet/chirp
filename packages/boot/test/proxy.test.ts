@@ -153,6 +153,29 @@ describe("real Bun boot proxy", () => {
 		expect(await (await app.fetch(app.url, { method: "HEAD" })).text()).toBe("");
 	});
 
+	it("refuses service worker scripts on every path and strips Service-Worker-Allowed", async (test) => {
+		const app = await launch(test);
+		await expect.poll(async () => (await app.state()).state).toBe("live");
+		// Browsers send this header, with the session cookie, when they fetch a worker's script to register or update it.
+		const worker = { "service-worker": "script" };
+		for (const refused of [
+			await app.fetch(`${app.url}/worker.js`, { headers: worker }),
+			await app.fetch(`${app.url}/_boot/auth/client.js`, { headers: worker }),
+			await fetch(`${app.url}/worker.js`, { headers: worker }),
+		]) {
+			expect(refused.status).toBe(403);
+			// Unregisters a worker installed before the refusal, and keeps cookies.
+			expect(refused.headers.get("clear-site-data")).toBe('"storage"');
+			expect((await refused.json()).error.code).toBe("service_worker_refused");
+		}
+		const script = await app.fetch(`${app.url}/worker.js`);
+		expect(script.status).toBe(200);
+		expect(script.headers.get("content-type")).toBe("text/javascript");
+		expect(script.headers.get("service-worker-allowed")).toBeNull();
+		expect(script.headers.get("clear-site-data")).toBeNull();
+		expect(await script.text()).toContain("addEventListener");
+	});
+
 	it("reports no revision for a build that was not stamped, whatever the environment says", async (test) => {
 		const revision = null;
 		const app = await launch(test, "normal", false, { CHIRP_REVISION: "0123456789abcdef0123456789abcdef01234567" });

@@ -144,6 +144,11 @@ export function serve(mode: string) {
 				headers.append("set-cookie", "app-preference=dark; Path=/");
 				return new Response("cookies", { headers });
 			}
+			// App content offering itself as a service worker for the whole origin.
+			if (url.pathname === "/worker.js")
+				return new Response("self.addEventListener('fetch', () => {});", {
+					headers: { "content-type": "text/javascript", "service-worker-allowed": "/" },
+				});
 			if (url.pathname === "/api")
 				return new Response(Bun.gzipSync("editable discovery bytes"), {
 					headers: { "content-encoding": "gzip", "x-boot-secret": "remove" },

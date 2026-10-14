@@ -117,6 +117,20 @@ const hopHeaders: readonly string[] = Object.freeze([
 	"transfer-encoding",
 	"upgrade",
 ]);
+// Browsers fetch a worker's script with `Service-Worker: script`, to register it and at the update check after each
+// navigation in its scope. Clearing storage there unregisters a worker installed before this refusal; cookies stay.
+const serviceWorkerRefused = () =>
+	HttpServerResponse.jsonUnsafe(
+		{
+			error: {
+				code: "service_worker_refused",
+				message: "Boot refuses service workers on the board origin.",
+				hint: "A worker here could answer boot's own sign-in, setup and approval pages. Serve app content without one.",
+				retriable: false,
+			},
+		},
+		{ status: 403, headers: { "cache-control": "no-store", "clear-site-data": '"storage"' } },
+	);
 
 export const proxy = Effect.gen(function* () {
 	const { child, authConfig, editing, requests, backups, restores, captures, phase, restart, storeIdentity, ingress } =
@@ -399,7 +413,9 @@ export const proxy = Effect.gen(function* () {
 										!connection.has(name) &&
 										name !== "x-boot-secret" &&
 										(!name.startsWith(headerPrefix) || [initVersionHeader, initStaleHeader].includes(name)) &&
-										name !== "set-cookie",
+										name !== "set-cookie" &&
+										// It would let a worker script widen its scope over boot's paths.
+										name !== "service-worker-allowed",
 								),
 							);
 							if (converted.body._tag !== "Stream")
@@ -455,6 +471,8 @@ export const proxy = Effect.gen(function* () {
 			}),
 		);
 	const routed = Effect.gen(function* () {
+		// A worker scoped to the board origin would answer boot's own pages, so no path may serve one, boot's included.
+		if (request.headers["service-worker"] !== undefined) return serviceWorkerRefused();
 		if (grant) {
 			// A grant never falls through to another credential path, the secret branch or managed ingress.
 			const publicResponse = yield* publicRoute;
