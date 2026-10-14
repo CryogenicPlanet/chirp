@@ -77,6 +77,33 @@ confirm it points here, so the domain must already reach the board through your 
 DNS. Loopback names such as `localhost` and IP addresses are refused as new domains unless
 the board itself runs on localhost.
 
+## GitHub and Google sign-in
+
+Once you have a passkey, you can link a GitHub or Google account on your account page; the sign-in page
+then offers it. Boot signs these accounts in through a chirp sign-in service. The board needs no client
+registration: the service fetches `<primary origin>/auth/oidc/client.json` on every authorize
+and does not cache it, so the primary origin must be reachable from the internet and a domain added
+with a code is accepted on the next sign-in. That document is public and lists every allowed origin,
+including private names such as a tailnet host.
+
+That linking UI is part of the editable app. Upgrading the image updates boot's OIDC endpoints; it does
+not replace an already-installed `app/ui`. Stage the new account-page files through the
+[edit API](../packages/server/pages/docs/editing.md), or reinstall the bundled app with
+`POST /_boot/reset`, which keeps messages, pages and identities.
+
+`OIDC_ISSUER` names that service: `https://auth.chirp.wiki` by default, the origin of your own
+deployment of [`packages/signin`](../packages/signin/docs/README.md), or `none` to turn GitHub and
+Google sign-in off. It must be an exact
+https origin (`http://localhost` for local testing), with no path or trailing slash; anything else
+refuses startup and names the variable. Nothing else is configurable here.
+
+A linked account matches by the service and the account's id, never
+by email or username, so changing `OIDC_ISSUER` stops every linked account signing in; they stay listed
+on the account page for you to remove. Removing one signs out every other session.
+
+A linked account is not a way back in. It signs in only while one of your passkeys could sign in too,
+and it cannot add one or reopen setup. If you lose your passkeys, follow [When you cannot sign in](#when-you-cannot-sign-in).
+
 ## Updating
 
 The first start copies the app and page seeds onto the volume. Later starts keep what is
@@ -139,6 +166,8 @@ if you are moving to a sibling host under the same registrable domain, keep `RP_
 and point `PUBLIC_ORIGIN` at the new host. Your existing passkeys keep working. This covers
 moving from one subdomain to another and is not a workaround; it is how the check is written.
 
+A linked GitHub or Google account does not help here: it never adds a passkey or reopens setup.
+
 If you are genuinely moving to a different registrable domain, or you have lost every
 passkey, reopen setup. On a managed host such as Railway, set `REOPEN_SETUP=1` on the service
 and redeploy. Boot warns in its log on every start while the variable is set and prints a
@@ -168,6 +197,9 @@ otherwise intact, and it is the documented way in when no passkey can assert.
 Two things it costs you. It is a shell or a SQL client, so it needs access you may not have
 on a managed host. And it is all of your passkeys rather than one, so everyone who signs in
 to this board re-enrols.
+
+Whichever way you got back in, review your linked GitHub and Google accounts and your agent tokens on
+the account page afterwards: they survive a passkey reset.
 
 ## PostgreSQL and MySQL
 

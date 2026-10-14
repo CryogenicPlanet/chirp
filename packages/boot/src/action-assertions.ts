@@ -33,6 +33,13 @@ import { canonicalMint, validMint, type MintBinding } from "./token-mint-schema.
 import { canonicalLockBreak, validLockId, type BreakLock } from "./lock-break.ts";
 import { canonicalRevocation, validFamily, type RevokeFamily } from "./refresh-schema.ts";
 import { canonicalDecision, validDecision, type EnrollmentDecision } from "./enrollment-schema.ts";
+import {
+	canonicalIdentityLink,
+	canonicalIdentityUnlink,
+	validIdentityId,
+	validPendingId,
+	type IdentityAction,
+} from "./oidc-schema.ts";
 
 export type AssertionAction =
 	| "enrollment.decide"
@@ -47,7 +54,9 @@ export type AssertionAction =
 	| "generation.restore"
 	| "boot.restart"
 	| "app.reset"
-	| "settings.change";
+	| "settings.change"
+	| "identity.link"
+	| "identity.unlink";
 
 export const restartBinding = (sessionId: string) => JSON.stringify({ session: sessionId });
 
@@ -132,6 +141,14 @@ export const makeActionAssertions = <E, R, RandomError>(
 				startSourceResetAssertion: (seedDigest: string, sessionId: string) =>
 					validSeedDigest(seedDigest)
 						? start("app.reset", canonicalSourceReset(seedDigest, sessionId))
+						: refuse("invalid_request"),
+				startIdentityLinkAssertion: (params: IdentityAction, sessionId: string) =>
+					validPendingId(params.id)
+						? start("identity.link", canonicalIdentityLink(params, sessionId))
+						: refuse("invalid_request"),
+				startIdentityUnlinkAssertion: (params: IdentityAction, sessionId: string) =>
+					validIdentityId(params.id)
+						? start("identity.unlink", canonicalIdentityUnlink(params, sessionId))
 						: refuse("invalid_request"),
 			};
 		};

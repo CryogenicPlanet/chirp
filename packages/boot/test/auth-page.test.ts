@@ -1,7 +1,7 @@
 import { requestIdHeader } from "@comms/protocol/headers";
 import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
-import { authClient } from "../src/auth-page.ts";
+import { authClient, authPage } from "../src/auth-page.ts";
 
 it.each([
 	["network", "options request", "could not reach"],
@@ -36,6 +36,7 @@ it.each([
 	};
 	runInNewContext(authClient, {
 		document: {
+			querySelectorAll: () => [],
 			getElementById: (id: string) =>
 				id === "status"
 					? status
@@ -113,6 +114,7 @@ it("returns to a safe requested page after sign-in or standalone setup", async (
 		};
 		runInNewContext(authClient, {
 			document: {
+				querySelectorAll: () => [],
 				getElementById: (id: string) =>
 					id === "status"
 						? status
@@ -163,6 +165,69 @@ it("returns to a safe requested page after sign-in or standalone setup", async (
 	expect(await run("?next=//evil.example")).toBe("/");
 	expect(await run("")).toBe("/");
 	expect(await run("?next=/\\evil.example")).toBe("/");
+	// A dot segment collapses into a protocol-relative path once parsed.
+	expect(await run("?next=/.//evil.example")).toBe("/");
 	expect(await run("?next=/t/design", true)).toBe("/auth/login?next=%2Ft%2Fdesign");
 	expect(await run("", true)).toBe("/auth/login?next=%2F");
+});
+
+it("offers only linked providers, and starts their sign-in with JSON before navigating itself", async () => {
+	expect(authPage("login", ["github"])).toContain('data-provider="github">Continue with GitHub');
+	expect(authPage("login", ["github"])).not.toContain("google");
+	expect(authPage("login", ["github"])).toContain("Use your passkey, or the GitHub account you linked, to sign in");
+	expect(authPage("login")).toContain("Use your passkey to sign in to your board.");
+	expect(authPage("login")).not.toContain("data-provider");
+	expect(authPage("setup", ["github"])).not.toContain("data-provider");
+	const run = async (response: Response) => {
+		const status = { textContent: "" };
+		const choice = { disabled: false, dataset: { provider: "github" }, click: async () => {} };
+		const choiceListener = (_name: string, callback: () => Promise<void>) => {
+			choice.click = callback;
+		};
+		const requests: { path: string; body: unknown }[] = [];
+		let assigned = "";
+		runInNewContext(authClient, {
+			document: {
+				querySelectorAll: (selector: string) =>
+					selector === "button[data-provider]" ? [{ ...choice, addEventListener: choiceListener }] : [],
+				getElementById: (id: string) =>
+					id === "status"
+						? status
+						: id === "auth"
+							? { dataset: { mode: "login" }, querySelector: () => ({ disabled: false }), addEventListener: () => {} }
+							: null,
+			},
+			window: {
+				isSecureContext: true,
+				location: {
+					origin: "https://comms.test",
+					search: "?next=/t/design",
+					assign: (value: string) => {
+						assigned = value;
+					},
+				},
+			},
+			URL,
+			URLSearchParams,
+			fetch: async (path: string, init: RequestInit) => {
+				requests.push({ path, body: JSON.parse(String(init.body)) });
+				expect(init.redirect).toBe("manual");
+				return response;
+			},
+		});
+		await choice.click();
+		return { assigned, requests, status: status.textContent };
+	};
+	const started = await run(Response.json({ authorization_url: "https://auth.chirp.wiki/authorize?state=x" }));
+	expect(started.assigned).toBe("https://auth.chirp.wiki/authorize?state=x");
+	expect(started.requests).toEqual([
+		{ path: "/_boot/auth/oidc/start", body: { intent: "login", provider: "github", next: "/t/design" } },
+	]);
+	const stalled = await run(Response.json({ error: { code: "oidc_unavailable" } }, { status: 503 }));
+	expect(stalled.assigned).toBe("");
+	expect(stalled.status).toContain("Sign in with your passkey");
+	const unlinked = await run(Response.json({ error: { code: "identity_not_linked" } }, { status: 403 }));
+	expect(unlinked.status).toBe("That account is no longer linked to this board. Sign in with your passkey.");
+	const elsewhere = await run(Response.json({ authorization_url: "javascript:alert(1)" }));
+	expect(elsewhere.assigned).toBe("");
 });

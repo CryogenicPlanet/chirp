@@ -16,6 +16,24 @@ it("keeps the single-origin RP_ID and PUBLIC_ORIGIN form valid", () => {
 	expect(valid({ rpId: "comms.test", expectedOrigin: "https://comms.test/path" })).toBe(false);
 });
 
+it("accepts a sign-in issuer only as an exact origin, so a near miss refuses startup instead of every sign-in", () => {
+	const board = { rpId: "comms.test", expectedOrigin: "https://comms.test" };
+	for (const issuer of ["https://auth.chirp.wiki", "http://localhost:4000", "https://signin.example.com:8443"])
+		expect(valid({ ...board, oidc: { issuer } })).toBe(true);
+	for (const issuer of [
+		"https://auth.chirp.wiki/",
+		"https://auth.chirp.wiki/issuer",
+		"https://Auth.chirp.wiki",
+		"https://auth.chirp.wiki:443",
+		"https://auth.chirp.wiki?x=1",
+		"https://user@auth.chirp.wiki",
+		"http://auth.chirp.wiki",
+		"http://127.0.0.1:4000",
+		"",
+	])
+		expect([issuer, valid({ ...board, oidc: { issuer } })]).toEqual([issuer, false]);
+});
+
 it("validates every additional origin and refuses duplicates", () => {
 	const primary = { rpId: "chirp.cryo.wtf", expectedOrigin: "https://chirp.cryo.wtf" };
 	const railway = {

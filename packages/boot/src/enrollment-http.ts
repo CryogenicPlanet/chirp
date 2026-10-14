@@ -13,6 +13,7 @@ import { DatabaseRestoreInput, databaseRestoreParams, GenerationRestoreParams } 
 import { BreakLock } from "./lock-break.ts";
 import { RevokeFamily } from "./refresh-schema.ts";
 import { EnrollmentDecision } from "./enrollment-schema.ts";
+import { IdentityAction } from "./oidc-schema.ts";
 import { approvalClient, approvalPage, approvalReturn } from "./enrollment-page.ts";
 
 const challengeInput = Schema.Union([
@@ -29,6 +30,8 @@ const challengeInput = Schema.Union([
 	Schema.Struct({ action: Schema.Literal("enrollment.decide"), params: EnrollmentDecision }),
 	Schema.Struct({ action: Schema.Literal("token.revoke"), params: RevokeFamily }),
 	Schema.Struct({ action: Schema.Literal("lock.break"), params: BreakLock }),
+	Schema.Struct({ action: Schema.Literal("identity.link"), params: IdentityAction }),
+	Schema.Struct({ action: Schema.Literal("identity.unlink"), params: IdentityAction }),
 ]);
 const decisionInput = Schema.Struct({
 	decision: Schema.Literals(["approve", "deny"]),
@@ -149,6 +152,14 @@ export const enrollmentRoute = (auth: Auth["Service"], config: AuthConfig, editi
 							yield* input.action === "passkey.add"
 								? ceremonies.startPasskeyAddAssertion(input.params, session.id)
 								: ceremonies.startPasskeyDeleteAssertion(input.params, session.id),
+						);
+					}
+					if (input.action === "identity.link" || input.action === "identity.unlink") {
+						const session = yield* humanSession(auth, request);
+						return HttpServerResponse.jsonUnsafe(
+							yield* input.action === "identity.link"
+								? ceremonies.startIdentityLinkAssertion(input.params, session.id)
+								: ceremonies.startIdentityUnlinkAssertion(input.params, session.id),
 						);
 					}
 					if (input.action === "settings.change") {

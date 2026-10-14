@@ -199,7 +199,7 @@ const routes = [
 		"post",
 		["/_boot/auth/challenge"],
 		"action-dependent",
-		`Create {action,params} challenge for enrollment.decide, token.mint, token.revoke, lock.break, db.restore, generation.restore, boot.restart, app.reset, settings.change, passkey.add, passkey.delete, passkey.code or origin.remove. Exact Origin required; all except enrollment.decide require a human session. Browser options use the RP ID of the request's origin. Complete using ${headerLabel(assertionHeader)}: base64url JSON {id,response}.`,
+		`Create {action,params} challenge for enrollment.decide, token.mint, token.revoke, lock.break, db.restore, generation.restore, boot.restart, app.reset, settings.change, passkey.add, passkey.delete, passkey.code, origin.remove, identity.link {id} or identity.unlink {id}. Exact Origin required; all except enrollment.decide require a human session. Browser options use the RP ID of the request's origin. Complete using ${headerLabel(assertionHeader)}: base64url JSON {id,response}.`,
 	],
 	[
 		"get",
@@ -286,6 +286,42 @@ const routes = [
 		["/_boot/auth/origins"],
 		"human",
 		`Remove a runtime origin with {origin}, exact Origin and a fresh origin.remove ${headerLabel(assertionHeader)}. Refuses configured origins, the request's own origin, and origins whose RP ID still has passkeys unless another allowed origin serves that RP ID. Ends sessions issued on the removed origin.`,
+	],
+	[
+		"get",
+		["/auth/oidc/client.json"],
+		"public",
+		"This board's OAuth client metadata document for its sign-in issuer (OIDC_ISSUER, auth.chirp.wiki by default): client_id, client_name and a redirect_uri for every allowed origin. 404 while OIDC_ISSUER=none.",
+	],
+	[
+		"post",
+		["/_boot/auth/oidc/start"],
+		"action-dependent",
+		"Start GitHub or Google sign-in with {intent:login|link, provider:github|google, next?} and exact Origin; login requires an identity already linked for that provider (identity_not_linked otherwise), link requires a human session, and bearer or grant credentials are refused. Returns {authorization_url} and sets a 10-minute __Host-chirp_oidc cookie binding the round trip to this browser; the page then navigates to the issuer itself.",
+	],
+	[
+		"get",
+		["/auth/oidc/callback"],
+		"public",
+		"The issuer's return with code, state and iss, from the browser that started. Claims the state before redeeming so a concurrent callback cannot spend it; any refusal has already spent that state. Login opens an ordinary human session only for an identity already linked, matched by issuer and subject; link holds the verified identity for /@rahul?link=<id> to confirm. Answers an HTML page that continues by a same-site navigation. A linked identity is not a recovery path; passkeys and REOPEN_SETUP are.",
+	],
+	[
+		"get",
+		["/_boot/auth/identities"],
+		"human",
+		"List linked GitHub and Google identities {id,issuer,provider,label,created_at,last_used_at,active}, this session's pending links newest first, and the providers this board can link. An identity from an issuer the board no longer uses is inactive and can only be removed.",
+	],
+	[
+		"post",
+		["/_boot/auth/identities"],
+		"human",
+		`Link this session's pending identity with {pending}, exact Origin and a fresh identity.link ${headerLabel(assertionHeader)} bound to {id: pending}.`,
+	],
+	[
+		"delete",
+		["/_boot/auth/identities/{id}"],
+		"human",
+		`Unlink an identity with {}, exact Origin and a fresh identity.unlink ${headerLabel(assertionHeader)} bound to {id}. Ends every other session, because sessions do not record how they were opened.`,
 	],
 ] as const satisfies ReadonlyArray<readonly [string, readonly string[], Access, string]>;
 

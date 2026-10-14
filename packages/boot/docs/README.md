@@ -6,7 +6,7 @@ Run it through the server launcher with `bun run start` at the repository root. 
 
 ## Recovery surfaces
 
-- `/setup` and `/auth/login`: passkey registration and sign-in.
+- `/setup` and `/auth/login`: passkey registration and sign-in, and GitHub or Google sign-in once an account is linked.
 - `/_boot`: recovery help, independent of the app.
 - `/_boot/status` and `/_boot/generations`: authenticated runtime and generation diagnostics.
 - `/_boot/events`: authenticated boot lifecycle, enrollment and request diagnostics. Boot records each enrollment's approval or denial and each credential collection, never an enrollment's anonymous creation: the app mirrors enrollment events into board messages, so an anonymous caller could otherwise post to the board.
@@ -39,6 +39,18 @@ The human approves at `/approve/<id>`, which names the extension, agent and labe
 A grant is a capability of everything the live app runs, not only of its extension. The family and the channel secret together act as a bearer: any app code can name any stored family, including code an fs agent reloads. Revoking that agent does not revoke grants, and the extension name separates extensions only by convention. Revoke the grant itself.
 
 Held families are ordinary `enrollments` and `tokens` rows, so listing (`held_by`), use evidence and revocation work unchanged, and no schema step was needed. An older image lists and revokes them but cannot use or collect them.
+
+## GitHub and Google sign-in
+
+A human who has a passkey can link a GitHub or Google account on the account page and then sign in with it. Boot is the relying party of one chirp sign-in issuer, `OIDC_ISSUER`: `https://auth.chirp.wiki` by default, the exact origin of another deployment of `packages/signin`, or `none` to turn it off. Any other value, including a path or trailing slash, refuses startup. Boot needs no registration there: `/auth/oidc/client.json` is the board's client metadata document, with a redirect for every allowed origin. The linking UI lives in the editable app; an image upgrade updates the OIDC endpoints without replacing installed `app/ui`.
+
+- `POST /_boot/auth/oidc/start` names `github` or `google`; a sign-in must name one with a linked identity, checked before any row or issuer request, so a board with nothing linked never starts one. It stores the state, nonce and PKCE verifier in `auth_challenges` and sets a ten-minute `__Host-chirp_oidc` cookie that binds the round trip to that browser. The page then navigates to the returned `authorization_url` itself.
+- `/auth/oidc/callback` claims the state row first, exactly once, then checks the binding, the state and the `iss` parameter, redeems the code and verifies the ID token (ES256, EdDSA or RS256; one key refetch for an unknown `kid`). Issuer I/O holds no mutex. A concurrent callback cannot spend the row while the first is still redeeming. Any refused callback that named a live state has already spent it, so a code that reached a browser without the binding cannot be replayed from the browser that holds it. Boot never records the callback's query, and its pages send no Referer. A refused link points back to the account page; a refused sign-in points to the passkey. Login opens an ordinary session. Link holds the identity until the account page confirms it with an `identity.link` assertion. The callback answers a page that continues with a same-site navigation, because the `SameSite=Strict` session cookie would not follow a redirect that continues the issuer's cross-site navigation.
+- A linked identity is the settings row `auth.identity:<sha256 of [issuer, subject]>` and matches by issuer and subject only, never by email or login. Changing `OIDC_ISSUER` orphans it: it stays listed and removable but no longer signs in. Unlinking needs an `identity.unlink` assertion and ends every other session, because sessions do not record how they were opened.
+
+Discovery must name the issuer exactly and keep every endpoint on the issuer's origin. Every issuer request runs outside the auth mutex and any SQL transaction and gives up after five seconds, so a stalled issuer never holds up passkey sign-in. Starting needs no credential, so at most 256 round trips are live at once; a flood refuses new ones rather than growing the table passkey ceremonies share. The proxy never forwards the binding cookie to the app and drops it from the app's responses, as it does the session cookie. A linked account's session has a passkey session's rights; anything that needs a fresh passkey assertion still needs one.
+
+A linked account is not a recovery path. It signs in only while a stored passkey could sign in too, and it never adds a passkey or reopens setup; passkeys, one-time codes and `REOPEN_SETUP` stay the way back in. No schema step was needed, so an older image ignores these rows.
 
 Local development runs under one OS user. The image separates boot, app and build users; see [deploying a board](../../../docs/deploy.md) for its limits. [Storage](storage.md) describes capacity admission, protected artifacts and retention. [Constraints](constraints.md) records the failures boot is built to prevent; read it before changing boot.
 

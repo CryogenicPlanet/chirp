@@ -170,11 +170,18 @@ it("creates a passkey and a protected session, forwards verified identity, and l
 	expect(echoed.instance).not.toBe("forged");
 	expect(echoed.requestId).toMatch(/^[a-f0-9]{32}$/);
 	expect(response.headers.get(tokenExpiresHeader)).toBe(session.response.headers.get(tokenExpiresHeader));
+	// Neither the session nor a sign-in binding cookie reaches the app.
+	const bound = await fetch(`${app.url}/echo`, {
+		headers: { cookie: `${session.cookie}; __Host-chirp_oidc=${"b".repeat(43)}` },
+	});
+	expect((await bound.json()).cookie).toBeNull();
 	const again = await (await fetch(`${app.url}/echo`, { headers })).json();
 	expect(again.instance).toBe(echoed.instance);
 	expect(again.requestId).not.toBe(echoed.requestId);
 	const cookies = (await fetch(`${app.url}/cookies`, { headers })).headers.getSetCookie();
 	expect(cookies.join(";")).not.toContain("__Host-comms_session");
+	// The app cannot plant a sign-in binding either.
+	expect(cookies.join(";")).not.toContain("__Host-chirp_oidc");
 	expect(cookies.join(";")).toContain("chirp_app_preference=dark");
 	expect(cookies.join(";")).toContain("app-preference=dark");
 	expect(

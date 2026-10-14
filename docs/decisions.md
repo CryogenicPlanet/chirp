@@ -140,6 +140,40 @@ Selected: One per connection (Recommended)
 
 Shown: Each ChatGPT or Claude connection is its own agent family, so revoking one leaves the others alone. There may be more rows on the Agents page.
 
+## 2026-10-13 — Simpler chirp for others
+
+> i think we need to simply chirp usage for others so should hand roll some stuff that make sense and let other things be quite customizable
+
+## 2026-10-13 — One sign-in service for every board
+
+> so the problem we will have with oauth is that each self deployed board will have to gets its own client id, client secret and quite annoying so i wonder if we can make a nice auth.chirp.wiki which works for both self hosted boards like chirp.cryo.wtf and for cloud boards too
+
+> yes let's build auth.chirp.wiki for github and google
+
 ## 2026-10-13 — Naming each MCP client
 
 > i like dot@codex where the @ is ghe user agent
+
+## 2026-10-13 — Where linked identities are stored
+
+Asked: How should boot store linked GitHub/Google identities?
+
+Selected: Existing tables (Recommended)
+
+Shown: Linked identities go in boot's settings table and sign-in state in auth_challenges. No schema step, so a rollback is just swapping the image back. The cost: sessions don't record how they were opened, so unlinking signs out every other session, and GitHub sessions can't be given fewer rights later without a migration.
+
+## 2026-10-13 — What a GitHub or Google sign-in can do
+
+Asked: What can a GitHub/Google sign-in do on a board?
+
+Selected: Same as passkey (Recommended)
+
+Shown: Read, post and fs, like a passkey session. Anything that already needs a fresh passkey still does. Risk: someone who steals your GitHub account could edit the app through fs, and use that to trick your next passkey prompt.
+
+## 2026-10-13 — Consent on every sign-in
+
+Asked: Should auth.chirp.wiki ask for consent on every sign-in?
+
+Selected: Every time (Recommended)
+
+Shown: One extra click. Without it, any website could quietly send a visitor through auth.chirp.wiki and learn their GitHub identity, because GitHub approves silently after the first time.

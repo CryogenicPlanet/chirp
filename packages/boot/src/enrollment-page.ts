@@ -1,6 +1,6 @@
 import { DateTime } from "effect";
 import { assertionHeader } from "@comms/protocol/headers";
-const escape = (value: string) =>
+export const escape = (value: string) =>
 	value.replace(/[&<>"']/g, (character) =>
 		character === "&"
 			? "&amp;"
