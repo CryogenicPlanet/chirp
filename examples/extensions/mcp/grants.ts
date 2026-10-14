@@ -132,17 +132,19 @@ export const installGrants = (api: Api) =>
 /** The kernel excludes at most 64 instances per query, and the connection's own instance is one of them. */
 const familyCap = 63;
 /**
- * Grant families from stored space-separated lists and single families, oldest first: each once, keeping only the
- * newest familyCap. Events and grants both store this list joined by spaces.
+ * Grant families from stored space-separated lists and single families. Each name is kept at its last occurrence,
+ * then only the newest familyCap remain. Passing current families after history therefore reserves them under the
+ * cap; a first-occurrence Set would leave an earlier persisted live family at the front and drop it on truncation.
+ * Events and grants both store this list joined by spaces.
  */
-export const familyList = (...values: ReadonlyArray<string | null | undefined>): ReadonlyArray<string> =>
-	[
-		...new Set(
-			values.flatMap((value) =>
-				value === undefined || value === null ? [] : value.split(" ").filter((item) => item.length > 0),
-			),
-		),
-	].slice(-familyCap);
+export const familyList = (...values: ReadonlyArray<string | null | undefined>): ReadonlyArray<string> => {
+	const items = values.flatMap((value) =>
+		value === undefined || value === null ? [] : value.split(" ").filter((item) => item.length > 0),
+	);
+	const last = new Map<string, number>();
+	for (const [index, item] of items.entries()) last.set(item, index);
+	return items.filter((item, index) => last.get(item) === index).slice(-familyCap);
+};
 /**
  * Families a connection should exclude from its own event delivery. Each surface's current `family` is reserved
  * under the cap first; historical families fill whatever slots remain. Flattening rows in creation order would

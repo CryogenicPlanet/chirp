@@ -550,6 +550,48 @@ it("keeps an earlier surface's live grant family when later surfaces exceed the 
 	expect(hook.texts(watch.id)).toEqual(["last"]);
 }, 120000);
 
+it("keeps a live grant family stored at the front of an existing subscription's full list", async (test) => {
+	const { fixture, app, cookie, post } = await installed(test);
+	await post("plans", "kickoff");
+	const granted = await authorize(app, cookie, "Drain cap client", "drain-cap", true);
+	const Instance = Schema.Struct({
+		result: Schema.Struct({ structuredContent: Schema.Struct({ instance: Schema.String }) }),
+	});
+	const live = decode(Instance, await granted.post("plans", "through the live grant", "drain-live")).result
+		.structuredContent.instance;
+	expect(live).toMatch(/^f_/);
+	const hook = await receiver(test);
+	const watch = await granted.subscribe(hook.url, "message.created", { topic: "plans" });
+	const history = Array.from({ length: 62 }, (_, n) => `hist_${String(n).padStart(2, "0")}`);
+	await fixture.sql(
+		`UPDATE example_mcp_events SET grant_family='${[live, ...history].join(" ")}' WHERE id='${watch.id}'`,
+	);
+	const [row] = decode(
+		Schema.Array(
+			Schema.Struct({
+				subject: Schema.String,
+				agent: Schema.String,
+				created_at: Schema.Finite,
+				expires_at: Schema.Finite,
+			}),
+		),
+		await fixture.sql(
+			`SELECT subject,agent,created_at,expires_at FROM example_mcp_grants WHERE client_id='${granted.clientId}'`,
+		),
+	);
+	if (!row) throw new Error("live grant row is missing");
+	const laterHistory = Array.from({ length: 63 }, (_, n) => `later_${String(n).padStart(2, "0")}`);
+	await fixture.sql(
+		`INSERT INTO example_mcp_grants(client_id,surface,subject,request_id,approve_url,code,agent,family,families,scopes,status,expires_at,created_at,updated_at) VALUES('${granted.clientId}','later-surface','${row.subject}','req_later','https://comms.test/approve/later',NULL,'${row.agent}','later_family','${laterHistory.join(" ")}','read write','active',${row.expires_at},${row.created_at + 1},${row.created_at + 1})`,
+	);
+	expect(await granted.post("plans", "own after a full stored list", "drain-own")).toMatchObject({
+		result: { structuredContent: { instance: live } },
+	});
+	await post("plans", "last");
+	await eventually(() => hook.texts(watch.id).includes("last"));
+	expect(hook.texts(watch.id)).toEqual(["last"]);
+}, 120000);
+
 it("does not replay posts from a replaced editing grant", async (test) => {
 	const { app, cookie, post } = await installed(test);
 	const kickoff = await post("plans", "kickoff");
