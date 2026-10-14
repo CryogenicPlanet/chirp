@@ -46,12 +46,12 @@ it(
 );
 
 it(
-	"asks Google for openid email with a nonce",
+	"asks Google for openid email and sends no upstream nonce",
 	withHarness(async (h) => {
 		const upstream = location(await h.request(authorizeQuery(h.clients.board(), challenge, { provider: "google" })));
 		expect(upstream.searchParams.get("scope")).toBe("openid email");
 		expect(upstream.searchParams.get("response_type")).toBe("code");
-		expect(upstream.searchParams.get("nonce")).toMatch(/^[A-Za-z0-9_-]{22}$/);
+		expect(upstream.searchParams.has("nonce")).toBe(false);
 		expect(upstream.searchParams.get("redirect_uri")).toBe(`${issuer}/callback/google`);
 	}),
 );
@@ -116,7 +116,10 @@ it(
 		expect(callback.headers.get("referrer-policy")).toBe("same-origin");
 		expect(callback.headers.get("cache-control")).toBe("no-store");
 		const page = await callback.text();
-		expect(page).toContain("Sign in to https://board.test as octocat on GitHub?");
+		// The harness serves the client document from localhost, so the page names who registered the callback.
+		const registrant = new URL(h.clients.url("/")).host;
+		expect(page).toContain(`Sign in to https://board.test (registered by ${registrant}) as octocat on GitHub?`);
+		expect(page).toContain("It will receive your GitHub account id and username.");
 		expect(page).not.toContain("<script");
 		// The upstream exchange used the verifier behind the challenge it was sent.
 		const exchange = h.upstream.requests.find((request) => request.path === "/github/token");

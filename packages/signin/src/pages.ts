@@ -35,22 +35,38 @@ export const accountLabel = (identity: Identity) =>
 		? `${identity.username ?? "your account"} on GitHub`
 		: `${identity.email ?? "your Google account"} on Google`;
 
+/** What the board receives, matching the claims the ID token will carry. */
+const shared = (identity: Identity) =>
+	identity.provider === "github"
+		? "GitHub account id and username"
+		: identity.email === undefined
+			? "Google account id"
+			: "Google account id and verified email";
+
 /**
- * Consent on every sign-in. form-action must allow the board origin because the browser checks the 303 that
- * follows the POST. The referrer policy is same-origin, not no-referrer: no-referrer makes browsers send
- * `Origin: null` on the form POST, which the consent route refuses.
+ * Consent on every sign-in. The code goes to the destination, but the ID token's audience is the client_id, and one
+ * client document may list callbacks on several origins. When the client_id is on another origin the page names
+ * its host too, so a document cannot borrow another board's name unnoticed.
+ *
+ * form-action must allow the board origin because the browser checks the 303 that follows the POST. The referrer
+ * policy is same-origin, not no-referrer: no-referrer makes browsers send `Origin: null` on the form POST, which
+ * the consent route refuses.
  */
 export const consentPage = (options: {
 	readonly destination: string;
+	readonly clientId: string;
 	readonly identity: Identity;
 	readonly csrf: string;
-}) =>
-	HttpServerResponse.text(
+}) => {
+	const client = new URL(options.clientId);
+	const registered = client.origin === options.destination ? "" : ` (registered by ${client.host})`;
+	const target = `${options.destination}${registered}`;
+	return HttpServerResponse.text(
 		document(
 			`Sign in to ${options.destination}`,
-			`<h1>Sign in to ${escapeHtml(options.destination)} as ${escapeHtml(accountLabel(options.identity))}?</h1>` +
-				`<p>Continue only if you started signing in to <strong>${escapeHtml(options.destination)}</strong>. ` +
-				`It will receive your ${options.identity.provider === "github" ? "GitHub account id and username" : "Google account id and verified email"}.</p>` +
+			`<h1>Sign in to ${escapeHtml(target)} as ${escapeHtml(accountLabel(options.identity))}?</h1>` +
+				`<p>Continue only if you started signing in to <strong>${escapeHtml(target)}</strong>. ` +
+				`It will receive your ${shared(options.identity)}.</p>` +
 				`<form method="post" action="/consent"><input type="hidden" name="csrf" value="${escapeHtml(options.csrf)}">` +
 				`<button type="submit" name="decision" value="continue">Continue</button>` +
 				`<button type="submit" name="decision" value="cancel">Cancel</button></form>`,
@@ -64,6 +80,7 @@ export const consentPage = (options: {
 			},
 		},
 	);
+};
 
 /** Errors found before the redirect_uri is trusted end here and never redirect. */
 export const errorPage = (status: number, message: string) =>

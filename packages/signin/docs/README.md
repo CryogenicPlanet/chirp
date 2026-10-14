@@ -11,7 +11,7 @@ Nothing is stored. The browser carries the sign-in in a sealed `__Host-signin.tx
 1. The board sends the browser to `/authorize` with its `client_id`, `redirect_uri`, `state`, `nonce`, an S256 `code_challenge` and `provider=github|google`.
 2. The issuer fetches the board's client document and checks the `redirect_uri` against it. Until that succeeds every error is a page here; nothing redirects to an unchecked address. After it, errors go back to the board as `error`, `state` and `iss`.
 3. The browser signs in at GitHub or Google. The issuer uses its own `state` and PKCE upstream, never the board's.
-4. On return, the issuer reads the account and asks, every time: "Sign in to `<board origin>` as `<account>`?" GitHub accounts are identified by numeric id, with the login as a label. Google accounts are identified by `sub`, with the email only when Google reports it verified.
+4. On return, the issuer reads the account and asks, every time: "Sign in to `<board origin>` as `<account>`?" When the `client_id` is on another origin than the `redirect_uri`, the question also names it: "Sign in to `<board origin>` (registered by `<client_id host>`) as `<account>`?", because the ID token's audience is the `client_id`. GitHub accounts are identified by numeric id, with the login as a label. Google accounts are identified by `sub`, with the email only when Google reports it verified.
 5. Continue redirects to the board with `code`, `state` and `iss`. Cancel redirects with `error=access_denied`.
 6. The board posts the code and its PKCE verifier to `/token` and receives an ES256 ID token valid for 5 minutes, verifiable against `/jwks.json`.
 
@@ -75,7 +75,8 @@ Run these once, from the repository root, as the Fly account that owns `chirp-cl
 
 - One machine. A second machine, or a restart within a code's 60 seconds, could let a code be redeemed twice; it would still need the board's PKCE verifier, and the board consumes its own state once.
 - No rate limiting, issuer sessions or remembered consent.
-- A local board on `http://localhost` cannot use auth.chirp.wiki: the issuer only fetches public `https` client documents. Tests reach a loopback document server through `loopbackLayerForTests` in `src/client-metadata.ts`, which `main.ts` never uses.
+- Boards under `*.boards.chirp.wiki` are same-site with auth.chirp.wiki and can set `Domain=chirp.wiki` cookies. `__Host-` stops them from replacing the transaction cookie but not from crowding the cookie header; the Public Suffix List entry that would end this is deferred.
+- A local board on `http://localhost` cannot use auth.chirp.wiki: the issuer only fetches public `https` client documents. Tests reach loopback `http://localhost` and `https://localhost` document servers through `loopbackLayerForTests` in `src/client-metadata.ts`, which `main.ts` never uses.
 
 ## Tests
 
@@ -83,7 +84,7 @@ Run these once, from the repository root, as the Fly account that owns `chirp-cl
 bun run --filter @comms/signin test
 ```
 
-They run the service in process against fake GitHub and Google servers and a loopback client document server, and launch `src/main.ts` under Bun once to check the production wiring and that secrets stay out of its output.
+They run the service in process against fake GitHub and Google servers and a loopback client document server. Two parts run under Bun, because vitest runs on Node and Node ignores Bun's fetch `tls` options and `Host` override: `src/main.ts` is launched once to check the production wiring and that secrets stay out of its output, and the pinned client-document fetch runs against `https://localhost` servers whose certificates come from a throwaway CA trusted through `NODE_EXTRA_CA_CERTS`. Those certificates are made with `openssl` during the test.
 
 ## Specifications
 

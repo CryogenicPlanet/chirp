@@ -36,7 +36,7 @@ const Document = Schema.Struct({
  * Globally routable unicast only, per the IANA special-purpose registries; IPv4-mapped IPv6 is refused.
  * Everything outside 2000::/3 is refused, which covers ULA and so Fly's private 6PN network (fdaa::/16).
  */
-const makeAddressPolicy = () => {
+export const makeAddressPolicy = () => {
 	const reserved = new BlockList();
 	for (const [network, prefix] of [
 		["0.0.0.0", 8],
@@ -81,8 +81,9 @@ const makeAddressPolicy = () => {
 };
 
 /**
- * Client ID Metadata Document resolution. `allowLoopback` additionally accepts `http://localhost` documents served
- * from a loopback address; it exists only for tests and is never enabled by the production layer.
+ * Client ID Metadata Document resolution. `allowLoopback` additionally accepts `http://localhost` and
+ * `https://localhost` documents served from a loopback address; it exists only for tests and is never enabled by
+ * the production layer.
  */
 const make = (options: { readonly allowLoopback: boolean }) =>
 	Effect.gen(function* () {
@@ -94,7 +95,10 @@ const make = (options: { readonly allowLoopback: boolean }) =>
 		const clientIdUrl = (value: string) => {
 			const url = URL.parse(value);
 			if (!url || value.length > maxUrl || url.href !== value) return undefined;
-			const local = options.allowLoopback && url.protocol === "http:" && url.hostname === "localhost";
+			const local =
+				options.allowLoopback &&
+				url.hostname === "localhost" &&
+				(url.protocol === "http:" || url.protocol === "https:");
 			return (url.protocol === "https:" || local) &&
 				!url.username &&
 				!url.password &&
@@ -197,5 +201,5 @@ export class ClientMetadata extends Context.Service<ClientMetadata, Effect.Succe
 
 export const layer = Layer.effect(ClientMetadata, make({ allowLoopback: false }));
 
-/** Tests only: also resolves `http://localhost` client documents. Never wire this into main.ts. */
+/** Tests only: also resolves `http(s)://localhost` client documents. Never wire this into main.ts. */
 export const loopbackLayerForTests = Layer.effect(ClientMetadata, make({ allowLoopback: true }));

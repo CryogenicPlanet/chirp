@@ -1,8 +1,15 @@
+import { execFile } from "node:child_process";
+import { lookup } from "node:dns/promises";
+import { createServer } from "node:https";
+import { TLSSocket } from "node:tls";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { Effect, Layer } from "effect";
 import { FetchHttpClient, type HttpClient } from "effect/unstable/http";
 import { expect, it } from "vitest";
 import * as ClientMetadata from "../src/client-metadata.ts";
 import { boardRedirect, documentServer, serve } from "./fixtures/signin.ts";
+import { testCertificates } from "./fixtures/tls.ts";
 
 type Clients = Awaited<ReturnType<typeof documentServer>>;
 
@@ -73,8 +80,10 @@ it(
 		expect(
 			await resolve(ClientMetadata.layer, `https://localhost:${new URL(clients.url("/")).port}/auth/oidc/client.json`),
 		).toBe("private_address");
-		// The test-only mode does not widen https: only http://localhost documents.
-		expect(await loopback("https://localhost/auth/oidc/client.json")).toBe("private_address");
+		// The test-only mode still refuses IP literals.
+		expect(await loopback(`http://[::1]:${new URL(clients.url("/")).port}/auth/oidc/client.json`)).toBe(
+			"invalid_client_id",
+		);
 	}),
 );
 
@@ -153,3 +162,110 @@ it("gives up on a document server that stalls past three seconds", async () => {
 		await stalled.close();
 	}
 }, 10_000);
+
+it.each([
+	["8.8.8.8", true],
+	["172.32.0.1", true],
+	["2001:4860::", true],
+	["2001:200::1", true],
+	["10.0.0.1", false],
+	["10.255.255.255", false],
+	["100.64.0.1", false],
+	["100.127.255.255", false],
+	["169.254.169.254", false],
+	["172.16.0.1", false],
+	["172.31.255.255", false],
+	["192.168.1.1", false],
+	["192.0.0.1", false],
+	["192.0.2.1", false],
+	["192.88.99.1", false],
+	["198.18.0.1", false],
+	["198.19.255.255", false],
+	["198.51.100.1", false],
+	["203.0.113.1", false],
+	["224.0.0.1", false],
+	["255.255.255.255", false],
+	["0.0.0.0", false],
+	["127.0.0.1", false],
+	["::", false],
+	["::1", false],
+	["::ffff:127.0.0.1", false],
+	["::ffff:8.8.8.8", false],
+	["::127.0.0.1", false],
+	["64:ff9b::808:808", false],
+	["2002::1", false],
+	["2001::1", false],
+	["2001:db8::1", false],
+	["fc00::1", false],
+	["fdaa::3", false],
+	["fe80::1", false],
+	["ff02::1", false],
+	["3fff::1", false],
+	["localhost", false],
+] as const)("classifies %s as public: %s", (address, expected) => {
+	expect(ClientMetadata.makeAddressPolicy().public(address)).toBe(expected);
+});
+
+it.each([
+	["127.0.0.1", true],
+	["127.255.0.1", true],
+	["::1", true],
+	["::2", false],
+	["10.0.0.1", false],
+	["8.8.8.8", false],
+] as const)("classifies %s as loopback for the test-only mode: %s", (address, expected) => {
+	expect(ClientMetadata.makeAddressPolicy().loopback(address)).toBe(expected);
+});
+
+it("under Bun, connects to the checked address with the hostname for SNI, Host and the certificate", async () => {
+	const certificates = await testCertificates(["localhost", "other.test"]);
+	const { address } = await lookup("localhost", { verbatim: true });
+	const seen: Array<{ host: string | undefined; servername: string | false | null; path: string | undefined }> = [];
+	const listen = async (name: string) => {
+		const server = createServer(certificates.leaf(name), (request, response) => {
+			const port = request.socket.localPort;
+			seen.push({
+				host: request.headers.host,
+				servername: request.socket instanceof TLSSocket ? request.socket.servername : false,
+				path: request.url,
+			});
+			const clientId = `https://localhost:${port}/client.json`;
+			if (request.url === "/moved.json") response.writeHead(302, { location: clientId }).end();
+			else
+				response
+					.writeHead(200, { "content-type": "application/json" })
+					.end(
+						JSON.stringify({ client_id: clientId, redirect_uris: [boardRedirect], token_endpoint_auth_method: "none" }),
+					);
+		});
+		await new Promise<void>((resolve) => server.listen(0, address, resolve));
+		const bound = server.address();
+		if (bound === null || typeof bound === "string") throw new Error("Expected a TCP listener");
+		return { port: bound.port, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
+	};
+	const right = await listen("localhost");
+	const wrong = await listen("other.test");
+	try {
+		const { stdout } = await promisify(execFile)(
+			"bun",
+			[
+				fileURLToPath(new URL("./fixtures/resolve-clients.ts", import.meta.url)),
+				boardRedirect,
+				`https://localhost:${right.port}/client.json`,
+				`https://localhost:${right.port}/moved.json`,
+				`https://localhost:${wrong.port}/client.json`,
+			],
+			{ env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", NODE_EXTRA_CA_CERTS: certificates.ca } },
+		);
+		expect(JSON.parse(stdout)).toEqual(["https://board.test", "redirected", "unreachable"]);
+		// Both requests to the right server carried the hostname; the wrong certificate never got a request.
+		expect(seen).toEqual([
+			{ host: `localhost:${right.port}`, servername: "localhost", path: "/client.json" },
+			{ host: `localhost:${right.port}`, servername: "localhost", path: "/moved.json" },
+		]);
+	} finally {
+		await right.close();
+		await wrong.close();
+		await certificates.remove();
+	}
+}, 20_000);

@@ -181,7 +181,6 @@ export const authorizeRoute = finish(
 		const location = (yield* Upstream).authorizeUrl(provider, {
 			state: upstreamState,
 			challenge: yield* s256(upstreamVerifier),
-			nonce: yield* randomToken(16),
 		});
 		return HttpServerResponse.redirect(location, {
 			status: 303,
@@ -228,7 +227,9 @@ export const callbackRoute = (provider: Provider) =>
 				csrf,
 				exp: now + Duration.toMillis(transactionLifetime),
 			});
-			return consentPage({ destination: board.redirect_origin, identity, csrf }).pipe(transactionCookie(sealed));
+			return consentPage({ destination: board.redirect_origin, clientId: board.client_id, identity, csrf }).pipe(
+				transactionCookie(sealed),
+			);
 		}),
 	);
 
