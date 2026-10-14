@@ -163,6 +163,8 @@ it("returns to a safe requested page after sign-in or standalone setup", async (
 	expect(await run("?next=//evil.example")).toBe("/");
 	expect(await run("")).toBe("/");
 	expect(await run("?next=/\\evil.example")).toBe("/");
+	// A dot segment collapses into a protocol-relative path once parsed.
+	expect(await run("?next=/.//evil.example")).toBe("/");
 	expect(await run("?next=/t/design", true)).toBe("/auth/login?next=%2Ft%2Fdesign");
 	expect(await run("", true)).toBe("/auth/login?next=%2F");
 });

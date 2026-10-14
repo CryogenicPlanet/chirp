@@ -29,7 +29,8 @@ export const authClient = `(() => {
  const status = document.getElementById("status");
  const safeNext = value => {
   if (!value || !value.startsWith("/") || value.startsWith("//")) return "/";
-  try { const target = new URL(value, window.location.origin); return target.origin === window.location.origin ? target.pathname + target.search + target.hash : "/"; }
+  // Dot segments can collapse "/.//host" into the protocol-relative "//host".
+  try { const target = new URL(value, window.location.origin); return target.origin === window.location.origin && !target.pathname.startsWith("//") ? target.pathname + target.search + target.hash : "/"; }
   catch { return "/"; }
  };
  if (!form) return;
