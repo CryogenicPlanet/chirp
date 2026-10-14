@@ -93,6 +93,21 @@ export const installGrants = (api: Api) =>
 const listed = (value: string | null) => (value ?? "").split(" ").filter((item) => item.length > 0);
 const retained = (...values: ReadonlyArray<string | null | undefined>) =>
 	[...new Set(values.flatMap((value) => (value == null || value === "" ? [] : listed(value))))].join(" ") || null;
+const EventFamily = Schema.Array(Schema.Struct({ id: Schema.String, grant_family: Schema.NullOr(Schema.String) }));
+/** Union retained families onto live subscriptions for this client and posting name, without shrinking what they already store. */
+const remember = (ctx: Context, clientId: string, agent: string, families: string | null) =>
+	Effect.gen(function* () {
+		if (families === null) return;
+		const rows =
+			yield* ctx.db`SELECT id,grant_family FROM example_mcp_events WHERE client_id=${clientId} AND agent=${agent}`.pipe(
+				Effect.flatMap(Schema.decodeUnknownEffect(EventFamily)),
+			);
+		for (const row of rows) {
+			const next = retained(row.grant_family, families);
+			if (next !== null && next !== row.grant_family)
+				yield* ctx.db`UPDATE example_mcp_events SET grant_family=${next} WHERE id=${row.id} AND agent=${agent}`;
+		}
+	});
 /** The connection's row, whichever identity it was requested for. */
 const connectionRow = (ctx: Context, clientId: string) =>
 	ctx.db`SELECT client_id,subject,request_id,approve_url,code,agent,family,families,scopes,status,expires_at,created_at,updated_at FROM example_mcp_grants WHERE client_id=${clientId}`.pipe(
@@ -160,7 +175,10 @@ export const editingState = (
 				next.expires_at !== row.expires_at)
 		)
 			yield* ctx.mutate(
-				ctx.db`UPDATE example_mcp_grants SET status=${next.status},family=${next.family},families=${next.families},scopes=${next.scopes},expires_at=${next.expires_at},updated_at=${now} WHERE client_id=${holder.clientId} AND request_id=${row.request_id}`,
+				Effect.gen(function* () {
+					yield* ctx.db`UPDATE example_mcp_grants SET status=${next.status},family=${next.family},families=${next.families},scopes=${next.scopes},expires_at=${next.expires_at},updated_at=${now} WHERE client_id=${holder.clientId} AND request_id=${row.request_id}`;
+					yield* remember(ctx, holder.clientId, row.agent, retained(next.families, next.family));
+				}),
 			);
 		return view(next);
 	});
@@ -205,6 +223,7 @@ export const requestEditing = (
 			Effect.gen(function* () {
 				const now = yield* connectionRow(ctx, row.client_id);
 				if ((now?.request_id ?? null) !== (prior?.request_id ?? null)) return now;
+				if (prior) yield* remember(ctx, prior.client_id, prior.agent, retained(prior.families, prior.family));
 				yield* ctx.db`DELETE FROM example_mcp_grants WHERE client_id=${row.client_id}`;
 				yield* ctx.db`INSERT INTO example_mcp_grants(client_id,subject,request_id,approve_url,code,agent,family,families,scopes,status,expires_at,created_at,updated_at) VALUES(${row.client_id},${row.subject},${row.request_id},${row.approve_url},${row.code},${row.agent},${row.family},${row.families},${row.scopes},${row.status},${row.expires_at},${row.created_at},${row.updated_at})`;
 				return row;

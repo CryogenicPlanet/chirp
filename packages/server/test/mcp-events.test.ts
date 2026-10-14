@@ -509,6 +509,62 @@ it("persists every retained grant family on the subscription after the grant row
 	expect(hook.texts(mentions.id)).toEqual(["@here from another connection", "@here after the grant identity changed"]);
 }, 120000);
 
+it("copies a replacement grant family onto live subscriptions before the next drain", async (test) => {
+	const { fixture, app, cookie, post } = await installed(test);
+	const granted = await authorize(app, cookie, "Live family client", "live-fam", true);
+	const other = await authorize(app, cookie, "Live other client", "live-other", false);
+	const hook = await receiver(test);
+	const first = decode(
+		Schema.Struct({ result: Schema.Struct({ structuredContent: Schema.Struct({ instance: Schema.String }) }) }),
+		await granted.post("plans", "@here from the first live family", "live-1"),
+	).result.structuredContent.instance;
+	const mentions = await granted.subscribe(hook.url, "mention.created", {});
+	await revokeGrant(app, cookie, "live-fam");
+	const requested = decode(
+		Schema.Struct({
+			result: Schema.Struct({
+				structuredContent: Schema.Struct({ status: Schema.String, approve_url: Schema.String }),
+			}),
+		}),
+		await granted.edit("request_editing"),
+	).result.structuredContent;
+	await approveEditing(app, requested.approve_url);
+	expect(await granted.edit("request_editing")).toMatchObject({
+		result: { structuredContent: { status: "active" } },
+	});
+	const second = decode(
+		Schema.Struct({
+			items: Schema.Array(
+				Schema.Struct({
+					family: Schema.String,
+					agent: Schema.String,
+					held_by: Schema.NullOr(Schema.String),
+					revoked: Schema.Boolean,
+				}),
+			),
+		}),
+		await (await fetch(`${app.url}/_boot/tokens`, { headers: { cookie } })).json(),
+	).items.find((item) => item.held_by === "mcp" && item.agent === "live-fam" && !item.revoked)?.family;
+	expect(second).toMatch(/^f_/);
+	expect(second).not.toBe(first);
+	const [row] = decode(
+		Schema.Array(Schema.Struct({ grant_family: Schema.NullOr(Schema.String) })),
+		await fixture.sql(`SELECT grant_family FROM example_mcp_events WHERE id='${mentions.id}'`),
+	);
+	expect(row?.grant_family?.split(" ").sort()).toEqual([first, second].sort());
+	const queued = decode(
+		Schema.Struct({ result: Schema.Struct({ structuredContent: Schema.Struct({ instance: Schema.String }) }) }),
+		await granted.post("plans", "@here from the second live family", "live-2"),
+	).result.structuredContent.instance;
+	expect(queued).toBe(second);
+	await fixture.sql(
+		`UPDATE example_mcp_grants SET agent='renamed-live',family=NULL,families=NULL WHERE client_id='${granted.clientId}'`,
+	);
+	await other.post("plans", "@here after the live grant identity changed", "live-other");
+	await eventually(() => hook.texts(mentions.id).includes("@here after the live grant identity changed"));
+	expect(hook.texts(mentions.id)).toEqual(["@here after the live grant identity changed"]);
+}, 120000);
+
 it("does not let own-family posts fill the replay window past an older deliverable", async (test) => {
 	const { app, cookie, post } = await installed(test, (source) =>
 		source.replace("const replayScan = 200;", "const replayScan = 4;"),

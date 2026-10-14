@@ -184,7 +184,6 @@ export const makeMessages = (
 				if (targets.length > 32 || targets.some((target) => !target.startsWith("@") || !validTopic(target)))
 					return yield* new KernelError({ code: "query_invalid" });
 				const excluded = typeof input.exclude === "string" ? [input.exclude] : (input.exclude ?? []);
-				if (excluded.length > 32) return yield* new KernelError({ code: "query_invalid" });
 				const topicMatch = sql`(topic=${input.topic ?? null} OR ${input.recursive ? 1 : 0}=1 AND ${isDescendant(sql, sql("topic"), input.topic ?? "")})`;
 				const mentions = sql`CASE WHEN mention_source.updated_seq>${ceiling} THEN mention_source.previous_mentions ELSE mention_source.mentions END`;
 				const mentionMatch =
