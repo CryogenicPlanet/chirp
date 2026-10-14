@@ -572,7 +572,7 @@ export const installEvents = (api: Api, origin: string) =>
 							})
 						: undefined;
 				const family =
-					window === undefined || window.items.length === 0 ? null : yield* grantFamily(ctx, caller.clientId);
+					window === undefined || window.items.length === 0 ? null : yield* grantFamily(ctx, caller.clientId, agent);
 				const matched = (window?.items ?? []).filter((item) => matches(topic, subtopics, family, item));
 				// Past the newest replayLimit matches it starts after the one just older. A full window of candidates starts
 				// at its oldest, and is truncated if an older match exists or older candidates were left unexamined.
@@ -582,7 +582,7 @@ export const installEvents = (api: Api, origin: string) =>
 						? window.items[0]
 						: undefined;
 				// Truncation looks at one older page, the same 200-candidate bound as the newest window. A full page
-				// that ends before oldest may still meet it; one more item tells adjacent pages from a real gap.
+				// that ends before oldest may still meet it; the next page is truncated only when a match is in that gap.
 				const older =
 					oldest === undefined
 						? false
@@ -599,12 +599,11 @@ export const installEvents = (api: Api, origin: string) =>
 								if (last === undefined || last.seq >= oldest.seq || page.items.length < replayScan) return false;
 								const next = yield* ctx.messages.query({
 									since: last.seq,
-									limit: 1,
+									limit: replayScan,
 									exclude: instance,
 									...selection(name, agent, topic, subtopics),
 								});
-								const gap = next.items[0];
-								return gap !== undefined && gap.seq < oldest.seq;
+								return next.items.some((item) => item.seq < oldest.seq && matches(topic, subtopics, family, item));
 							});
 				const start =
 					over !== undefined
@@ -680,11 +679,11 @@ export const installEvents = (api: Api, origin: string) =>
 					sql`SELECT COUNT(*) AS count FROM example_mcp_oauth WHERE client_id=${clientId} AND (kind='access' OR kind='refresh') AND expires_at>${now}`,
 			).pipe(Effect.map((total) => total > 0));
 
-		/** The connection's grant family, whose instance marks posts it made through boot as its own. */
-		const grantFamily = (ctx: Store, clientId: string) =>
+		/** The subscription's grant family: the row for this client and posting name, not a later re-consent. */
+		const grantFamily = (ctx: Store, clientId: string, agent: string) =>
 			ctx
 				.read(() =>
-					ctx.db`SELECT family FROM example_mcp_grants WHERE client_id=${clientId}`.pipe(
+					ctx.db`SELECT family FROM example_mcp_grants WHERE client_id=${clientId} AND agent=${agent}`.pipe(
 						Effect.flatMap(Schema.decodeUnknownEffect(Family)),
 					),
 				)
@@ -782,7 +781,7 @@ export const installEvents = (api: Api, origin: string) =>
 					exclude: row.instance,
 					limit: 16,
 				});
-				const family = page.items.length === 0 ? null : yield* grantFamily(ctx, row.client_id);
+				const family = page.items.length === 0 ? null : yield* grantFamily(ctx, row.client_id, row.agent);
 				let position = row.position;
 				let attempts = row.attempts;
 				for (const message of page.items.filter((item) => matches(row.topic, row.subtopics === 1, family, item))) {

@@ -789,6 +789,16 @@ it("reports truncated for a topic mention replay only when it skipped a matching
 	expect(await mentioned.subscribe(hook.url, "mention.created", { topic: "watched" }, fresh.cursor)).toMatchObject({
 		truncated: false,
 	});
+	// More than two pages of other-topic mentions: a gap exists, but none of it matches this watch.
+	await mentioned.unsubscribe(hook.url, "mention.created", { topic: "watched" });
+	const quiet = await mentioned.subscribe(hook.url, "mention.created", { topic: "watched" });
+	await mentioned.unsubscribe(hook.url, "mention.created", { topic: "watched" });
+	for (let n = 1; n <= 4; n++) await post("elsewhere", `@filter-bot head-gap ${n}`);
+	for (let n = 1; n <= 4; n++) await post("elsewhere", `@filter-bot mid-gap ${n}`);
+	for (let n = 1; n <= 4; n++) await post("elsewhere", `@filter-bot tail-gap ${n}`);
+	expect(await mentioned.subscribe(hook.url, "mention.created", { topic: "watched" }, quiet.cursor)).toMatchObject({
+		truncated: false,
+	});
 }, 120000);
 
 it("keeps a full 200-candidate replay look-back within the message query limit", async (test) => {
