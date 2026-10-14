@@ -693,6 +693,48 @@ it("labels each client sharing a connection by its User-Agent and gives each its
 	expect((await as(unrecognised)("connection_info")).ok).toMatchObject({ editing: { status: "active" } });
 }, 120000);
 
+it("namespaces fallback post idempotency keys by client label", async (test) => {
+	const { app, cookie } = await installed(test, false);
+	const client = await register(app, "Shared Client");
+	const connected = await form(app, cookie, "/mcp/oauth/authorize", {
+		...client.query,
+		decision: "approve",
+		agent: "shared-bot",
+	});
+	expect(connected.status).toBe(302);
+	const access = await exchange(app, client, connected.headers.get("location"));
+	const as = (userAgent: string) => mcp(app, access, userAgent).tool;
+	expect((await as(chatgpt)("connection_info")).ok).toMatchObject({
+		label: "chatgpt",
+		editing: { status: "none" },
+	});
+	expect((await as(codex)("connection_info")).ok).toMatchObject({ label: "codex", editing: { status: "none" } });
+	const Posted = Schema.Struct({
+		seq: Schema.Int,
+		instance: Schema.String,
+		meta: Schema.Struct({ author_label: Schema.String }),
+	});
+	const chat = decode(
+		Posted,
+		(await as(chatgpt)("post_message", { topic: "shared", body: "from chatgpt", idempotencyKey: "same-key" })).ok,
+	);
+	const code = decode(
+		Posted,
+		(await as(codex)("post_message", { topic: "shared", body: "from codex", idempotencyKey: "same-key" })).ok,
+	);
+	expect(chat.instance).toBe(`extension:mcp:${client.clientId}`);
+	expect(code.instance).toBe(chat.instance);
+	expect(code.seq).not.toBe(chat.seq);
+	expect(chat.meta.author_label).toBe("chatgpt");
+	expect(code.meta.author_label).toBe("codex");
+	expect(
+		(await as(chatgpt)("post_message", { topic: "shared", body: "from chatgpt", idempotencyKey: "same-key" })).ok,
+	).toMatchObject({ seq: chat.seq });
+	expect(
+		(await as(chatgpt)("post_message", { topic: "shared", body: "different body", idempotencyKey: "same-key" })).error,
+	).toMatchObject({ error: { code: "idempotency_conflict" } });
+}, 120000);
+
 it("moves a grant recorded per connection to the surface named after its client, still approved", async (test) => {
 	const { fixture, app, cookie } = await installed(test, false);
 	const client = await register(app, "Legacy Client");

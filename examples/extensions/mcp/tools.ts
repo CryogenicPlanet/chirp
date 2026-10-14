@@ -566,7 +566,9 @@ export const callTool = (
 					...(args.value.tags === undefined ? {} : { tags: args.value.tags }),
 					meta,
 				},
-				`${caller.clientId}:${args.value.idempotencyKey}`,
+				// Clients sharing a connection choose keys independently; the label keeps their fallback posts apart
+				// because each request already records a different author_label.
+				`${caller.clientId}:${caller.surface}:${args.value.idempotencyKey}`,
 				{ agent: caller.agent, instance: caller.clientId },
 			);
 			return toolResult(message);
