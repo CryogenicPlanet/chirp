@@ -100,5 +100,14 @@ export async function launch(
 			throw new Error("Invalid child state");
 		return child;
 	};
-	return { url, state, processHandle, cookie, id, data: join(directory, "data"), fetch: authenticatedFetch };
+	return {
+		url,
+		state,
+		processHandle,
+		cookie,
+		id,
+		data: join(directory, "data"),
+		fetch: authenticatedFetch,
+		output: () => output,
+	};
 }

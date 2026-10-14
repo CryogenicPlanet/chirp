@@ -125,7 +125,7 @@ const routes = [
 		"get",
 		["/_boot/events"],
 		"read",
-		"Read bounded boot recovery diagnostics and boot-written request records while the app is unavailable. Humans and fs agents see every request record; other agents see only their own. Request records carry method, path, query parameters with credential values redacted, user agent, status, boot's error_code when boot refused the request, and lost when earlier records of the same actor could not be stored; a record with outcome lost carries only that count. Read scope; private current failure detail additionally requires human or fs authority. Optional since (exclusive), limit (1–200) and wait (0–60 seconds); defaults to the latest 100 events. Diagnostic cursors are not application event cursors; pending app publication cannot hide boot failures. Application event browsing belongs to /api/events.",
+		"Read bounded boot recovery diagnostics, enrollment records and boot-written request records while the app is unavailable. Enrollment records are enrollment.approved, enrollment.denied and enrollment.collected; creating an enrollment is anonymous and records nothing. Humans and fs agents see every request record; other agents see only their own. Request records carry method, path, query parameters with credential values redacted, user agent, status, boot's error_code when boot refused the request, and lost when earlier records of the same actor could not be stored; a record with outcome lost carries only that count. Read scope; private current failure detail additionally requires human or fs authority. Optional since (exclusive), limit (1–200) and wait (0–60 seconds); defaults to the latest 100 events. Diagnostic cursors are not application event cursors; pending app publication cannot hide boot failures. Application event browsing belongs to /api/events.",
 	],
 	[
 		"post",
@@ -137,13 +137,13 @@ const routes = [
 		"post",
 		["/_boot/enroll/{id}", "/auth/enroll/{id}"],
 		"device-secret",
-		"Poll with {device_secret} and optional ?wait=0..60. Returns 202 pending or 200 with a one-time credential pair; 410 requires re-enrollment.",
+		"Poll with {device_secret} and optional ?wait=0..60. Returns 202 {status:pending,expires_at} or 200 with a one-time credential pair; 410 requires re-enrollment. An empty or malformed id, or any method but POST, returns 404 enrollment_invalid.",
 	],
 	[
 		"get",
 		["/_boot/approve/{id}", "/approve/{id}"],
 		"public",
-		"Immutable enrollment approval page displaying the user code and passkey controls. An extension grant's page instead names the extension, agent and label from boot's record, starts with fs unticked and grants 90 days; its optional ?return= same-origin path is where the page goes after the decision. A malformed or unknown link, including one copied with a trailing character, returns 404 approval_link_invalid.",
+		"Immutable enrollment approval page displaying the user code, when a pending request expires, and passkey controls. An extension grant's page instead names the extension, agent and label from boot's record, starts with fs unticked and grants 90 days; its optional ?return= same-origin path is where the page goes after the decision. A malformed or unknown link, including one copied with a trailing character, returns 404 approval_link_invalid.",
 	],
 	[
 		"post",
