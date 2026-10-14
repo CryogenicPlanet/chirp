@@ -344,6 +344,18 @@ it("refuses metadata documents that do not describe the client", async (test) =>
 			headers: { "cache-control": "public, max-age=0, s-maxage=60" },
 			body: metadataDocument(`${base}/shared-age.json`),
 		},
+		"/aged.json": {
+			headers: { "cache-control": "public, s-maxage=60", age: "50" },
+			body: metadataDocument(`${base}/aged.json`),
+		},
+		"/aged-brief.json": {
+			headers: { "cache-control": "public, s-maxage=3", age: "1" },
+			body: metadataDocument(`${base}/aged-brief.json`),
+		},
+		"/aged-out.json": {
+			headers: { "cache-control": "public, s-maxage=60", age: "60" },
+			body: metadataDocument(`${base}/aged-out.json`),
+		},
 	}));
 	const { challenge } = pkce("refusals");
 	const ask = (path: string, fields: Readonly<Record<string, string>> = {}) =>
@@ -392,6 +404,19 @@ it("refuses metadata documents that do not describe the client", async (test) =>
 	expect((await ask("/shared-age.json")).status).toBe(200);
 	expect((await ask("/shared-age.json")).status).toBe(200);
 	expect(host.hits("/shared-age.json")).toBe(1);
+	// Age reduces remaining freshness (RFC 9111 §4.2.3). s-maxage=60 with Age:50 is stored briefly.
+	expect((await ask("/aged.json")).status).toBe(200);
+	expect((await ask("/aged.json")).status).toBe(200);
+	expect(host.hits("/aged.json")).toBe(1);
+	// Remaining 2s after Age:1 on s-maxage=3; after that the document is fetched again.
+	expect((await ask("/aged-brief.json")).status).toBe(200);
+	await new Promise<void>((resolve) => setTimeout(resolve, 2500));
+	expect((await ask("/aged-brief.json")).status).toBe(200);
+	expect(host.hits("/aged-brief.json")).toBe(2);
+	// Age at the freshness lifetime is not stored.
+	expect((await ask("/aged-out.json")).status).toBe(200);
+	expect((await ask("/aged-out.json")).status).toBe(200);
+	expect(host.hits("/aged-out.json")).toBe(2);
 }, 60000);
 
 it("never fetches client metadata from private addresses on a public board", async (test) => {

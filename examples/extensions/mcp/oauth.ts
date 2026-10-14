@@ -145,8 +145,8 @@ const metadataUrl = (clientId: string) => {
 };
 const metadataLimit = 5120;
 const cachedDocuments = 64;
-/** How long a fetched document is reused. This shared cache uses Cache-Control s-maxage, then max-age (CIMD §5.2, RFC 9111), at most an hour, five minutes if neither is set. private, no-store and no-cache are not stored. */
-const cacheLifetime = (header: string | undefined) => {
+/** How long a fetched document is reused. This shared cache uses Cache-Control s-maxage, then max-age (CIMD §5.2, RFC 9111), at most an hour, five minutes if neither is set. private, no-store and no-cache are not stored. When a freshness lifetime is set, Age reduces what remains (RFC 9111 §4.2.3); Age at or past that lifetime is not stored. */
+const cacheLifetime = (header: string | undefined, ageHeader: string | undefined) => {
 	const directives = (header ?? "")
 		.toLowerCase()
 		.split(",")
@@ -154,7 +154,11 @@ const cacheLifetime = (header: string | undefined) => {
 	if (directives.includes("no-store") || directives.includes("no-cache") || directives.includes("private")) return 0;
 	const seconds = (pattern: RegExp) => directives.flatMap((directive) => pattern.exec(directive)?.[1] ?? []).at(0);
 	const shared = seconds(/^s-maxage=(\d+)$/) ?? seconds(/^max-age=(\d+)$/);
-	return Math.min(shared === undefined ? 300 : Number(shared), 3600) * 1000;
+	const freshness = Math.min(shared === undefined ? 300 : Number(shared), 3600);
+	if (shared === undefined) return freshness * 1000;
+	const age = /^(\d+)$/.exec((ageHeader ?? "").trim())?.[1];
+	const remaining = age === undefined ? freshness : freshness - Number(age);
+	return remaining > 0 ? remaining * 1000 : 0;
 };
 const boundedText = (
 	request: Parameters<Api["route"]>[2]["handler"] extends (request: infer R, ...rest: never[]) => unknown ? R : never,
@@ -366,7 +370,11 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 								),
 							);
 							if (size > metadataLimit) return "is larger than 5 KiB";
-							return { text: Buffer.concat(chunks).toString("utf8"), cacheControl: response.headers["cache-control"] };
+							return {
+								text: Buffer.concat(chunks).toString("utf8"),
+								cacheControl: response.headers["cache-control"],
+								age: response.headers.age,
+							};
 						}),
 					)
 					.pipe(Effect.provideService(FetchHttpClient.RequestInit, init), Effect.exit);
@@ -391,7 +399,7 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 				if (redirects.length === 0) return "lists no HTTPS or loopback redirect URI";
 				return {
 					client: { client_name: client_name.trim(), redirect_uris: redirects, client_url: client_id },
-					lifetime: cacheLifetime(read.cacheControl),
+					lifetime: cacheLifetime(read.cacheControl, read.age),
 				};
 			}).pipe(
 				Effect.timeoutOption("5 seconds"),
