@@ -145,13 +145,13 @@ const metadataUrl = (clientId: string) => {
 };
 const metadataLimit = 5120;
 const cachedDocuments = 64;
-/** How long a fetched document is reused: its Cache-Control max-age (CIMD §5.2), at most an hour, five minutes if unset. */
+/** How long a fetched document is reused: its Cache-Control max-age (CIMD §5.2), at most an hour, five minutes if unset. private, no-store and no-cache stay out of this shared cache (RFC 9111). */
 const cacheLifetime = (header: string | undefined) => {
 	const directives = (header ?? "")
 		.toLowerCase()
 		.split(",")
 		.map((directive) => directive.trim());
-	if (directives.includes("no-store") || directives.includes("no-cache")) return 0;
+	if (directives.includes("no-store") || directives.includes("no-cache") || directives.includes("private")) return 0;
 	const maxAge = directives.flatMap((directive) => /^max-age=(\d+)$/.exec(directive)?.[1] ?? []).at(0);
 	return Math.min(maxAge === undefined ? 300 : Number(maxAge), 3600) * 1000;
 };
@@ -381,13 +381,10 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 				const { client_id, client_name, redirect_uris } = document.value;
 				if (client_id !== url.href) return "names a different client_id";
 				if (!client_name.trim() || client_name.length > 200) return "needs a client_name of up to 200 characters";
-				// ChatGPT's document prefers private_key_jwt, but lists none among its methods and uses none here.
-				const method = document.value.token_endpoint_auth_method;
-				if (
-					method !== undefined &&
-					method !== "none" &&
-					!document.value.token_endpoint_auth_methods_supported?.includes("none")
-				)
+				// RFC 7591 defaults an omitted method to client_secret_basic. This board accepts only public clients, so none
+				// must be the selected method or listed among the supported ones. ChatGPT prefers private_key_jwt and lists none.
+				const supportsNone = document.value.token_endpoint_auth_methods_supported?.includes("none") ?? false;
+				if (document.value.token_endpoint_auth_method !== "none" && !supportsNone)
 					return "requires client authentication, and this board accepts only public clients";
 				const redirects = redirect_uris.filter((uri) => uri.length <= 2048 && validRedirect(uri));
 				if (redirects.length === 0) return "lists no HTTPS or loopback redirect URI";

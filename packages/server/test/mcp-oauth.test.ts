@@ -303,6 +303,22 @@ it("refuses metadata documents that do not describe the client", async (test) =>
 		"/secret.json": {
 			body: metadataDocument(`${base}/secret.json`, { token_endpoint_auth_method: "client_secret_basic" }),
 		},
+		// undefined drops the key. An omitted method defaults to client_secret_basic (RFC 7591) unless none is listed.
+		"/default-secret.json": {
+			body: metadataDocument(`${base}/default-secret.json`, { token_endpoint_auth_method: undefined }),
+		},
+		"/secret-methods.json": {
+			body: metadataDocument(`${base}/secret-methods.json`, {
+				token_endpoint_auth_method: undefined,
+				token_endpoint_auth_methods_supported: ["client_secret_basic", "private_key_jwt"],
+			}),
+		},
+		"/public-methods.json": {
+			body: metadataDocument(`${base}/public-methods.json`, {
+				token_endpoint_auth_method: undefined,
+				token_endpoint_auth_methods_supported: ["none", "client_secret_basic"],
+			}),
+		},
 		"/large.json": {
 			body: metadataDocument(`${base}/large.json`, { client_uri: `https://client.test/${"x".repeat(6000)}` }),
 		},
@@ -316,6 +332,10 @@ it("refuses metadata documents that do not describe the client", async (test) =>
 			}),
 		},
 		"/no-store.json": { headers: { "cache-control": "no-store" }, body: metadataDocument(`${base}/no-store.json`) },
+		"/private.json": {
+			headers: { "cache-control": "private, max-age=3600" },
+			body: metadataDocument(`${base}/private.json`),
+		},
 	}));
 	const { challenge } = pkce("refusals");
 	const ask = (path: string, fields: Readonly<Record<string, string>> = {}) =>
@@ -338,6 +358,8 @@ it("refuses metadata documents that do not describe the client", async (test) =>
 		"is not JSON with client_id, client_name and redirect_uris",
 	);
 	expect(await refused(await ask("/secret.json"))).toContain("accepts only public clients");
+	expect(await refused(await ask("/default-secret.json"))).toContain("accepts only public clients");
+	expect(await refused(await ask("/secret-methods.json"))).toContain("accepts only public clients");
 	expect(await refused(await ask("/large.json"))).toContain("is larger than 5 KiB");
 	// Redirects are never followed, so the document they point at is not fetched for them.
 	expect(await refused(await ask("/moved.json"))).toContain("answered HTTP 302");
@@ -347,9 +369,14 @@ it("refuses metadata documents that do not describe the client", async (test) =>
 	expect(Date.now() - started).toBeLessThan(9000);
 
 	expect((await ask("/chatgpt.json")).status).toBe(200);
+	expect((await ask("/public-methods.json")).status).toBe(200);
 	expect((await ask("/no-store.json")).status).toBe(200);
 	expect((await ask("/no-store.json")).status).toBe(200);
 	expect(host.hits("/no-store.json")).toBe(2);
+	// private forbids a shared cache from storing the document, even when max-age is set (RFC 9111).
+	expect((await ask("/private.json")).status).toBe(200);
+	expect((await ask("/private.json")).status).toBe(200);
+	expect(host.hits("/private.json")).toBe(2);
 }, 60000);
 
 it("never fetches client metadata from private addresses on a public board", async (test) => {
