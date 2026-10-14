@@ -117,6 +117,27 @@ const hopHeaders: readonly string[] = Object.freeze([
 	"transfer-encoding",
 	"upgrade",
 ]);
+// Browsers fetch a worker's script with `Service-Worker: script`, to register it and at the update check after each
+// navigation in its scope. Clearing storage there unregisters a worker installed before this refusal; cookies stay.
+const serviceWorkerHeader = "service-worker";
+const serviceWorkerRefused = () =>
+	HttpServerResponse.jsonUnsafe(
+		{
+			error: {
+				code: "service_worker_refused",
+				message: "Boot refuses service workers on the board origin.",
+				hint: "A worker here could answer boot's own sign-in, setup and approval pages. Serve app content without one.",
+				retriable: false,
+			},
+		},
+		{ status: 403, headers: { "cache-control": "no-store", "clear-site-data": '"storage"' } },
+	);
+const varyOnServiceWorker = (headers: Record<string, string>) => {
+	const current = headers.vary;
+	if (current !== undefined && current.split(",").some((item) => item.trim().toLowerCase() === serviceWorkerHeader))
+		return headers;
+	return { ...headers, vary: current === undefined ? "Service-Worker" : `${current}, Service-Worker` };
+};
 
 export const proxy = Effect.gen(function* () {
 	const { child, authConfig, editing, requests, backups, restores, captures, phase, restart, storeIdentity, ingress } =
@@ -392,14 +413,19 @@ export const proxy = Effect.gen(function* () {
 									.map((name) => name.trim()),
 							);
 							const converted = HttpServerResponse.fromClientResponse(response);
-							const responseHeaders = Object.fromEntries(
-								Object.entries(response.headers).filter(
-									([name]) =>
-										!hopHeaders.includes(name) &&
-										!connection.has(name) &&
-										name !== "x-boot-secret" &&
-										(!name.startsWith(headerPrefix) || [initVersionHeader, initStaleHeader].includes(name)) &&
-										name !== "set-cookie",
+							const responseHeaders = varyOnServiceWorker(
+								Object.fromEntries(
+									Object.entries(response.headers).filter(
+										([name]) =>
+											!hopHeaders.includes(name) &&
+											!connection.has(name) &&
+											name !== "x-boot-secret" &&
+											(!name.startsWith(headerPrefix) || [initVersionHeader, initStaleHeader].includes(name)) &&
+											name !== "set-cookie" &&
+											// One widens a worker's scope over boot's paths; the other could clear boot's session cookie.
+											name !== "service-worker-allowed" &&
+											name !== "clear-site-data",
+									),
 								),
 							);
 							if (converted.body._tag !== "Stream")
@@ -566,6 +592,9 @@ export const proxy = Effect.gen(function* () {
 /** Immutable liveness/help and control-path exclusion work before the store can open. */
 export const publicRoute = Effect.gen(function* () {
 	const request = yield* HttpServerRequest.HttpServerRequest;
+	// Shared with the init and identity-upgrade-pending handlers, so a previously installed worker is refused
+	// (and unregistered) even before the full proxy is installed.
+	if (request.headers[serviceWorkerHeader] !== undefined) return serviceWorkerRefused();
 	const path = new URL(request.url, "http://localhost").pathname;
 	// Reserve the child control namespace before any public or authenticated admission.
 	const controlPath = yield* Effect.try(() => {
