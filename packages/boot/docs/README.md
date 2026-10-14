@@ -9,7 +9,7 @@ Run it through the server launcher with `bun run start` at the repository root. 
 - `/setup` and `/auth/login`: passkey registration and sign-in.
 - `/_boot`: recovery help, independent of the app.
 - `/_boot/status` and `/_boot/generations`: authenticated runtime and generation diagnostics.
-- `/_boot/events`: authenticated boot lifecycle and request diagnostics.
+- `/_boot/events`: authenticated boot lifecycle, enrollment and request diagnostics. Boot records each enrollment's approval or denial and each credential collection, never an enrollment's anonymous creation: the app mirrors enrollment events into board messages, so an anonymous caller could otherwise post to the board.
 - `/.well-known/agent.json`: the boot API manifest, including authentication requirements.
 
 Use the [editing guide](../../server/pages/docs/editing.md) for locks, conditional file writes, reloads and source history. Source-only revert and seed reset preserve messages, pages and identities. Restoring a database is a separate, human-authorized action.
