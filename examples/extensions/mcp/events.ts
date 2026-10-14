@@ -135,6 +135,8 @@ const Row = Schema.Struct({
 	topic: Schema.NullOr(Schema.String),
 	subtopics: Schema.Finite,
 	grant_family: Schema.NullOr(Schema.String),
+	client_url: Schema.NullOr(Schema.String),
+	subject: Schema.NullOr(Schema.String),
 });
 const Count = Schema.Array(Schema.Struct({ count: Schema.Finite }));
 const Family = Schema.Array(
@@ -342,6 +344,27 @@ export const installEvents = (api: Api, origin: string) =>
 			}),
 			{ skipIfColumnExists: { table: "example_mcp_events", column: "grant_family" } },
 		);
+		// A reconnect through a client document takes over its earlier connection's subscriptions, so each row records
+		// the document and the approving human. Rows from before have neither until a refresh writes them; a later
+		// matching refresh then takes the peer over.
+		yield* api.migrate(
+			"event_client_url",
+			on(sql, {
+				sqlite: () => "ALTER TABLE example_mcp_events ADD COLUMN client_url TEXT",
+				pg: () => "ALTER TABLE example_mcp_events ADD COLUMN client_url TEXT",
+				mysql: () => "ALTER TABLE example_mcp_events ADD COLUMN client_url LONGTEXT",
+			}),
+			{ skipIfColumnExists: { table: "example_mcp_events", column: "client_url" } },
+		);
+		yield* api.migrate(
+			"event_subject",
+			on(sql, {
+				sqlite: () => "ALTER TABLE example_mcp_events ADD COLUMN subject TEXT",
+				pg: () => "ALTER TABLE example_mcp_events ADD COLUMN subject TEXT",
+				mysql: () => "ALTER TABLE example_mcp_events ADD COLUMN subject VARCHAR(64)",
+			}),
+			{ skipIfColumnExists: { table: "example_mcp_events", column: "subject" } },
+		);
 		const rows = (ctx: Store, clientId?: string) =>
 			ctx.read(() =>
 				(clientId === undefined
@@ -532,8 +555,22 @@ export const installEvents = (api: Api, origin: string) =>
 				const fence = yield* ctx.read((value) => Effect.succeed(value));
 				// A new subscription starts now, or after the client's cursor; a cursor beyond the board starts now.
 				const since = cursor === null ? fence : Math.min(cursor, fence);
-				// Only a replay that creates a row spends the budget below; a refresh keeps its position.
-				const replaying = since < fence && !owned.some((row) => row.id === id && row.refresh_before > now);
+				const subtopics = filter.value.recursive !== false;
+				const clientUrl = caller.clientUrl ?? null;
+				// A reconnect through the same client document, approved by the same human under the same posting name, is a
+				// new connection for the same client. It takes over the live subscriptions an earlier connection holds for
+				// this callback, event and arguments, so the client does not get every event twice. Each delivered to this
+				// callback up to its own position, so starting at the furthest skips nothing.
+				const takeable = (db: Store["db"]) =>
+					clientUrl === null
+						? Effect.succeed<Rows>([])
+						: db`SELECT * FROM example_mcp_events WHERE url=${target.href} AND event_name=${name} AND ${topic === null ? db`topic IS NULL` : db`topic=${topic}`} AND subtopics=${subtopics ? 1 : 0} AND client_url=${clientUrl} AND subject=${caller.subject} AND agent=${agent} AND client_id<>${caller.clientId} AND refresh_before>${now} ORDER BY position DESC`.pipe(
+								Effect.flatMap(decodeRows),
+							);
+				const holding = owned.some((row) => row.id === id && row.refresh_before > now);
+				// Only a replay that creates a row spends the budget below; a refresh keeps its position. A takeover
+				// uses the peer's position when the mutation still finds one; the replay is the fallback if it is gone.
+				const replaying = since < fence && !holding;
 				if (!cached || replaying) {
 					const allowed = yield* Ref.modify(verifications, (budget) => {
 						const recent = (budget.get(caller.clientId) ?? []).filter((at) => at > now - verificationWindow);
@@ -549,7 +586,6 @@ export const installEvents = (api: Api, origin: string) =>
 					if (reason !== null) return failure(-32015, "CallbackEndpointError", { reason });
 				}
 				const verifiedAt = cached?.verified_at ?? now;
-				const subtopics = filter.value.recursive !== false;
 				let families = yield* grantFamilies(ctx, caller.clientId);
 				// A replay is bounded by the messages it would deliver, not by board sequence numbers, and is worked out only
 				// for a subscribe that creates the row. If the row vanishes before the mutation below anyway, the insert
@@ -596,7 +632,7 @@ export const installEvents = (api: Api, origin: string) =>
 					}
 				}
 				const sql = ctx.db;
-				// Mutations serialize on the board's writer lock, so the existence and limit checks cannot race.
+				// Mutations serialize on the board's writer lock, so the existence, takeover and limit checks cannot race.
 				const outcome = yield* ctx.mutate(
 					Effect.gen(function* () {
 						yield* sql`DELETE FROM example_mcp_events WHERE refresh_before<=${now}`;
@@ -607,24 +643,45 @@ export const installEvents = (api: Api, origin: string) =>
 						// A live subscription keeps its own position: whatever cursor the refresh carries is at or behind it.
 						if (existing) {
 							const rotating = !sameSecret(existing.secret, input.delivery.secret);
-							const previous = rotating ? existing.secret : existing.previous_secret;
+							const previousSecret = rotating ? existing.secret : existing.previous_secret;
 							const previousUntil = rotating ? now + secretOverlap : existing.previous_secret_until;
-							const resetRetries = existing.agent !== agent ? 0 : existing.attempts;
-							const storedFamily = storedFamilies(existing.grant_family, ...families);
-							yield* sql`UPDATE example_mcp_events SET agent=${agent},previous_secret=${previous},previous_secret_until=${previousUntil},secret=${input.delivery.secret},refresh_before=${refreshBefore},verified_at=${verifiedAt},attempts=${resetRetries},next_attempt=0,grant_family=${storedFamily} WHERE id=${id}`;
-							return { position: existing.position, truncated: false };
+							// Migrated peers get client_url and subject on their own refresh. Once they match, take them
+							// over here too: the insert path never runs while this row is live.
+							const previous = yield* takeable(sql);
+							if (previous.length > 0)
+								yield* sql`DELETE FROM example_mcp_events WHERE id IN ${sql.in(previous.map((row) => row.id))}`;
+							const storedFamily = storedFamilies(
+								existing.grant_family,
+								...previous.flatMap((row) => [row.grant_family, row.instance]),
+								...families,
+							);
+							const position = previous.reduce(
+								(furthest, row) => (row.position > furthest ? row.position : furthest),
+								existing.position,
+							);
+							// A new posting name, or a cursor that jumped to a peer's, is not the failure the attempts count.
+							const resetRetries = existing.agent !== agent || position !== existing.position ? 0 : existing.attempts;
+							yield* sql`UPDATE example_mcp_events SET agent=${agent},previous_secret=${previousSecret},previous_secret_until=${previousUntil},secret=${input.delivery.secret},refresh_before=${refreshBefore},verified_at=${verifiedAt},position=${position},attempts=${resetRetries},next_attempt=0,grant_family=${storedFamily},client_url=${clientUrl},subject=${caller.subject} WHERE id=${id}`;
+							return { position, truncated: false };
 						}
 						const clientCount =
 							yield* sql`SELECT COUNT(*) AS count FROM example_mcp_events WHERE client_id=${caller.clientId}`.pipe(
 								Effect.flatMap(decodeCount),
 							);
 						if (clientCount >= perClient) return { limit: perClient };
-						const boardCount = yield* sql`SELECT COUNT(*) AS count FROM example_mcp_events`.pipe(
-							Effect.flatMap(decodeCount),
-						);
-						if (boardCount >= perBoard) return { limit: perBoard };
-						yield* sql`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,previous_secret_until,refresh_before,verified_at,position,attempts,next_attempt,last_error,event_name,topic,subtopics,grant_family) VALUES(${id},${caller.clientId},${agent},${instance},${target.href},${input.delivery.secret},NULL,NULL,${refreshBefore},${verifiedAt},${start.position},0,0,NULL,${name},${topic},${subtopics ? 1 : 0},${storedFamilies(...families)})`;
-						return start;
+						const previous = yield* takeable(sql);
+						const taken = previous[0];
+						if (taken === undefined) {
+							const boardCount = yield* sql`SELECT COUNT(*) AS count FROM example_mcp_events`.pipe(
+								Effect.flatMap(decodeCount),
+							);
+							if (boardCount >= perBoard) return { limit: perBoard };
+						} else yield* sql`DELETE FROM example_mcp_events WHERE id IN ${sql.in(previous.map((row) => row.id))}`;
+						// Posts made through a connection that was taken over still count as this client's own.
+						const own = storedFamilies(...previous.flatMap((row) => [row.grant_family, row.instance]), ...families);
+						const begin = taken === undefined ? start : { position: taken.position, truncated: false };
+						yield* sql`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,previous_secret_until,refresh_before,verified_at,position,attempts,next_attempt,last_error,event_name,topic,subtopics,grant_family,client_url,subject) VALUES(${id},${caller.clientId},${agent},${instance},${target.href},${input.delivery.secret},NULL,NULL,${refreshBefore},${verifiedAt},${begin.position},0,0,NULL,${name},${topic},${subtopics ? 1 : 0},${own},${clientUrl},${caller.subject})`;
+						return begin;
 					}),
 				);
 				if ("limit" in outcome)

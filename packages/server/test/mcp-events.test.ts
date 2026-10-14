@@ -41,7 +41,7 @@ const Delivery = Schema.fromJsonString(
 	}),
 );
 
-/** A board with the MCP package installed and local callbacks allowed, with optional source edits. */
+/** A board with the MCP package installed and local callbacks and metadata documents allowed, with optional source edits. */
 const installed = async (
 	test: TestContext,
 	edit: ((source: string) => string) | { events?: (source: string) => string; grants?: (source: string) => string } = (
@@ -60,7 +60,8 @@ const installed = async (
 		const source = (await readFile(path, "utf8"))
 			.replace("../../../packages/server/src/kernel/extension-api.ts", "../../kernel/extension-api.ts")
 			.replace("https://your-board.example", "https://comms.test")
-			.replace("const allowLocalCallbacks = false;", "const allowLocalCallbacks = true;");
+			.replace("const allowLocalCallbacks = false;", "const allowLocalCallbacks = true;")
+			.replace("const allowLocalMetadata = false;", "const allowLocalMetadata = true;");
 		await writeFile(
 			path,
 			file === "events.ts" ? eventsEdit(source) : file === "grants.ts" ? grantsEdit(source) : source,
@@ -1483,4 +1484,184 @@ it("does not skip a mention published between an idle scan and its watermark rea
 	await post("plans", "@race-bot after the idle scan");
 	await eventually(() => hook.texts(mentions.id).includes("@race-bot after the idle scan"));
 	expect(hook.texts(mentions.id)).toEqual(["@race-bot after the idle scan"]);
+}, 120000);
+
+/** Serves client ID metadata documents from this machine, one per path, each naming its own URL as client_id. */
+const metadataHost = async (test: TestContext, paths: ReadonlyArray<string>) => {
+	const server = createServer((request, response) => {
+		const path = request.url ?? "/";
+		if (!paths.includes(path)) {
+			response.writeHead(404).end();
+			return;
+		}
+		response.writeHead(200, { "content-type": "application/json" });
+		response.end(
+			JSON.stringify({
+				client_id: `${base}${path}`,
+				client_name: "Metadata Client",
+				redirect_uris: ["https://client.test/callback"],
+				grant_types: ["authorization_code", "refresh_token"],
+				token_endpoint_auth_method: "none",
+			}),
+		);
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	test.onTestFinished(async () => {
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error("metadata host has no address");
+	const base = `http://127.0.0.1:${address.port}`;
+	return (path: string) => `${base}${path}`;
+};
+/** The connection id the board minted, which a metadata-document client never presents itself. */
+const connectionId = async (connection: { readonly call: ReturnType<typeof client>["call"] }) =>
+	decode(
+		Schema.Struct({ result: Schema.Struct({ structuredContent: Schema.Struct({ client_id: Schema.String }) }) }),
+		await connection.call("tools/call", { name: "connection_info" }),
+	).result.structuredContent.client_id;
+const Subscriptions = Schema.Array(
+	Schema.Struct({ id: Schema.String, client_id: Schema.String, position: Schema.Finite }),
+);
+
+it("hands a metadata-document reconnect the earlier connection's subscription, without duplicates or gaps", async (test) => {
+	const { fixture, app, cookie, post } = await installed(test);
+	const documents = await metadataHost(test, ["/client.json"]);
+	const hook = await receiver(test);
+	const stored = async () =>
+		decode(
+			Subscriptions,
+			await fixture.sql(`SELECT id,client_id,position FROM example_mcp_events WHERE url='${hook.url}'`),
+		);
+	await post("plans", "setup");
+	const first = await authorize(app, cookie, "Metadata first", "meta-bot", false, documents("/client.json"));
+	const earlier = await first.subscribe(hook.url, "message.created", { topic: "plans" });
+	await post("plans", "m1");
+	await eventually(() => hook.texts(earlier.id).includes("m1"));
+
+	// The client reconnects through the same document and the same human approves: a new connection, a new id.
+	const second = await authorize(app, cookie, "Metadata second", "meta-bot", false, documents("/client.json"));
+	expect(await connectionId(second)).not.toBe(await connectionId(first));
+	await post("plans", "m2");
+	const taken = await second.subscribe(hook.url, "message.created", { topic: "plans" });
+	expect(taken.id).not.toBe(earlier.id);
+	expect(taken.truncated).toBe(false);
+	expect(await stored()).toEqual([
+		{ id: taken.id, client_id: await connectionId(second), position: Number(taken.cursor) },
+	]);
+	await post("plans", "m3");
+	await eventually(() => hook.texts(taken.id).includes("m3"));
+	// Each message reached the callback once, under whichever subscription held it.
+	expect(
+		hook
+			.events()
+			.filter((event) => event.subscription === earlier.id || event.subscription === taken.id)
+			.map((event) => event.data.text),
+	).toEqual(["m1", "m2", "m3"]);
+	expect(hook.texts(taken.id)).toContain("m3");
+	// The earlier connection's posts still count as this client's own.
+	await first.post("plans", "from the earlier connection", "earlier-1");
+	await post("plans", "m4");
+	await eventually(() => hook.texts(taken.id).includes("m4"));
+	expect(hook.texts(taken.id)).not.toContain("from the earlier connection");
+}, 120000);
+
+it("consolidates migrated metadata-document subscriptions when they refresh", async (test) => {
+	const { fixture, app, cookie, post } = await installed(test);
+	const documents = await metadataHost(test, ["/client.json"]);
+	const hook = await receiver(test);
+	const stored = async () =>
+		decode(
+			Subscriptions,
+			await fixture.sql(`SELECT id,client_id,position FROM example_mcp_events WHERE url='${hook.url}' ORDER BY id`),
+		);
+	const kickoff = await post("plans", "setup");
+	const first = await authorize(app, cookie, "Metadata first", "meta-bot", false, documents("/client.json"));
+	const second = await authorize(app, cookie, "Metadata second", "meta-bot", false, documents("/client.json"));
+	const earlier = await first.subscribe(hook.url, "mention.created", {});
+	const secondId = await connectionId(second);
+	const laterId = `sub_${createHash("sha256")
+		.update(JSON.stringify([secondId, hook.url, "mention.created", {}]))
+		.digest("hex")
+		.slice(0, 32)}`;
+	await fixture.sql(
+		`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,previous_secret_until,refresh_before,verified_at,position,attempts,next_attempt,last_error,event_name,topic,subtopics,grant_family,client_url,subject) VALUES('${laterId}','${secondId}','meta-bot','extension:mcp:${secondId}','${hook.url}','${secret}',NULL,NULL,${Date.now() + 3600000},${Date.now()},${kickoff.seq},0,0,NULL,'mention.created',NULL,1,NULL,NULL,NULL)`,
+	);
+	await fixture.sql(`UPDATE example_mcp_events SET client_url=NULL,subject=NULL WHERE id='${earlier.id}'`);
+	// Each refresh writes the document and human onto its own migrated row; the first still finds no annotated peer.
+	await first.subscribe(hook.url, "mention.created", {});
+	expect((await stored()).map((row) => row.id).toSorted()).toEqual([earlier.id, laterId].toSorted());
+	// Failed attempts at the older cursor must not count against the first event after the cursor jumps.
+	await fixture.sql(`UPDATE example_mcp_events SET attempts=4,position=0 WHERE id='${laterId}'`);
+	const taken = await second.subscribe(hook.url, "mention.created", {});
+	expect(taken.id).toBe(laterId);
+	expect(Number(taken.cursor)).toBeGreaterThan(0);
+	expect(
+		decode(
+			Schema.Array(Schema.Struct({ id: Schema.String, attempts: Schema.Finite, position: Schema.Finite })),
+			await fixture.sql(`SELECT id,attempts,position FROM example_mcp_events WHERE url='${hook.url}'`),
+		),
+	).toEqual([{ id: laterId, attempts: 0, position: Number(taken.cursor) }]);
+	await post("plans", "@meta-bot once");
+	await eventually(() => hook.texts(laterId).includes("@meta-bot once"));
+	expect(hook.texts(laterId)).toEqual(["@meta-bot once"]);
+	expect(hook.texts(earlier.id)).toEqual([]);
+}, 120000);
+
+it("never takes over across humans, client documents, posting names or registered clients", async (test) => {
+	const { fixture, app, cookie, post } = await installed(test);
+	const documents = await metadataHost(test, ["/client.json", "/other.json"]);
+	const hook = await receiver(test);
+	const stored = async () =>
+		decode(
+			Subscriptions,
+			await fixture.sql(`SELECT id,client_id,position FROM example_mcp_events WHERE url='${hook.url}' ORDER BY id`),
+		).map((row) => row.id);
+	await post("plans", "setup");
+	const first = await authorize(app, cookie, "Metadata first", "meta-bot", false, documents("/client.json"));
+	const earlier = await first.subscribe(hook.url, "mention.created", {});
+
+	// Another document is another client.
+	const other = await authorize(app, cookie, "Other document", "other-bot", false, documents("/other.json"));
+	const elsewhere = await other.subscribe(hook.url, "mention.created", {});
+	// Registered clients have no document to match on.
+	const registered = await authorize(app, cookie, "Registered one", "dcr-bot", false);
+	const another = await authorize(app, cookie, "Registered two", "dcr-bot", false);
+	const one = await registered.subscribe(hook.url, "mention.created", {});
+	const two = await another.subscribe(hook.url, "mention.created", {});
+	expect(await stored()).toEqual([earlier.id, elsewhere.id, one.id, two.id].toSorted());
+	// The same document and human posting under another name is another live client, not a reconnect.
+	const renamed = await authorize(app, cookie, "Metadata renamed", "other-name", false, documents("/client.json"));
+	const apart = await renamed.subscribe(hook.url, "mention.created", {});
+	expect(await stored()).toEqual([earlier.id, elsewhere.id, one.id, two.id, apart.id].toSorted());
+
+	// The same document approved by another human: the earlier row, as that human's, is not this connection's to take.
+	await fixture.sql(`UPDATE example_mcp_events SET subject='someone-else' WHERE id='${earlier.id}'`);
+	const second = await authorize(app, cookie, "Metadata second", "meta-bot", false, documents("/client.json"));
+	const fresh = await second.subscribe(hook.url, "mention.created", {});
+	expect(await stored()).toEqual([earlier.id, elsewhere.id, one.id, two.id, apart.id, fresh.id].toSorted());
+}, 120000);
+
+it("leaves exactly one live subscription when both connections subscribe at once", async (test) => {
+	const { fixture, app, cookie, post } = await installed(test);
+	const documents = await metadataHost(test, ["/client.json"]);
+	const hook = await receiver(test);
+	await post("plans", "setup");
+	const first = await authorize(app, cookie, "Metadata first", "meta-bot", false, documents("/client.json"));
+	const second = await authorize(app, cookie, "Metadata second", "meta-bot", false, documents("/client.json"));
+	await first.subscribe(hook.url, "message.created", { topic: "plans" });
+	for (let round = 0; round < 3; round++) {
+		await Promise.all([
+			first.subscribe(hook.url, "message.created", { topic: "plans" }),
+			second.subscribe(hook.url, "message.created", { topic: "plans" }),
+		]);
+		expect(
+			decode(
+				Subscriptions,
+				await fixture.sql(`SELECT id,client_id,position FROM example_mcp_events WHERE url='${hook.url}'`),
+			),
+		).toHaveLength(1);
+	}
 }, 120000);
