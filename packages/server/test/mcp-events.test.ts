@@ -503,6 +503,53 @@ it("never delivers posts the connection made through any of its clients' grants"
 	expect(hook.texts(watch.id)).toEqual(["from another connection", "last"]);
 }, 120000);
 
+it("keeps an earlier surface's live grant family when later surfaces exceed the family cap", async (test) => {
+	const { fixture, app, cookie, post } = await installed(test);
+	await post("plans", "kickoff");
+	const granted = await authorize(app, cookie, "Cap client", "cap-bot", true);
+	const Instance = Schema.Struct({
+		result: Schema.Struct({ structuredContent: Schema.Struct({ instance: Schema.String }) }),
+	});
+	const live = decode(Instance, await granted.post("plans", "through the live grant", "cap-live")).result
+		.structuredContent.instance;
+	expect(live).toMatch(/^f_/);
+	const [row] = decode(
+		Schema.Array(
+			Schema.Struct({
+				subject: Schema.String,
+				agent: Schema.String,
+				created_at: Schema.Finite,
+				expires_at: Schema.Finite,
+			}),
+		),
+		await fixture.sql(
+			`SELECT subject,agent,created_at,expires_at FROM example_mcp_grants WHERE client_id='${granted.clientId}'`,
+		),
+	);
+	if (!row) throw new Error("live grant row is missing");
+	// 63 historical families on a later surface is enough for creation-order flattening to drop `live`.
+	const history = Array.from({ length: 63 }, (_, n) => `hist_${String(n).padStart(2, "0")}`);
+	await fixture.sql(
+		`INSERT INTO example_mcp_grants(client_id,surface,subject,request_id,approve_url,code,agent,family,families,scopes,status,expires_at,created_at,updated_at) VALUES('${granted.clientId}','later-surface','${row.subject}','req_later','https://comms.test/approve/later',NULL,'${row.agent}','later_family','${history.join(" ")}','read write','active',${row.expires_at},${row.created_at + 1},${row.created_at + 1})`,
+	);
+	const hook = await receiver(test);
+	const watch = await granted.subscribe(hook.url, "message.created", { topic: "plans" });
+	const [stored] = decode(
+		Schema.Array(Schema.Struct({ grant_family: Schema.NullOr(Schema.String) })),
+		await fixture.sql(`SELECT grant_family FROM example_mcp_events WHERE id='${watch.id}'`),
+	);
+	const families = stored?.grant_family?.split(" ") ?? [];
+	expect(families).toContain(live);
+	expect(families).toContain("later_family");
+	expect(families).toHaveLength(63);
+	expect(await granted.post("plans", "own after the cap", "cap-own")).toMatchObject({
+		result: { structuredContent: { instance: live } },
+	});
+	await post("plans", "last");
+	await eventually(() => hook.texts(watch.id).includes("last"));
+	expect(hook.texts(watch.id)).toEqual(["last"]);
+}, 120000);
+
 it("does not replay posts from a replaced editing grant", async (test) => {
 	const { app, cookie, post } = await installed(test);
 	const kickoff = await post("plans", "kickoff");

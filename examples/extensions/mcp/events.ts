@@ -12,7 +12,7 @@ import type {
 	ManagedRequestContext,
 } from "../../../packages/server/src/kernel/extension-api.ts";
 import { makeAddressPolicy } from "./addresses.ts";
-import { familyList, storedFamilies } from "./grants.ts";
+import { connectionFamilies, familyList, storedFamilies } from "./grants.ts";
 import type { OAuthIdentity } from "./oauth.ts";
 import { messageUrl } from "./tools.ts";
 
@@ -665,7 +665,7 @@ export const installEvents = (api: Api, origin: string) =>
 
 		/**
 		 * Families this connection has used on every client surface, including ones kept after a replacement or
-		 * posting-name change.
+		 * posting-name change. Live families are reserved under the cap so a later surface's history cannot drop them.
 		 */
 		const grantFamilies = (ctx: Store, clientId: string) =>
 			ctx
@@ -674,7 +674,7 @@ export const installEvents = (api: Api, origin: string) =>
 						Effect.flatMap(Schema.decodeUnknownEffect(Family)),
 					),
 				)
-				.pipe(Effect.map((found) => familyList(...found.flatMap((row) => [row.families, row.family]))));
+				.pipe(Effect.map((found) => connectionFamilies(found)));
 
 		const deliver = (row: typeof Row.Type, message: Message) =>
 			Effect.gen(function* () {

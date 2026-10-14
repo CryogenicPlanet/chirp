@@ -143,6 +143,21 @@ export const familyList = (...values: ReadonlyArray<string | null | undefined>):
 			),
 		),
 	].slice(-familyCap);
+/**
+ * Families a connection should exclude from its own event delivery. Each surface's current `family` is reserved
+ * under the cap first; historical families fill whatever slots remain. Flattening rows in creation order would
+ * otherwise drop an earlier surface's live family once later surfaces have accumulated more than familyCap names.
+ */
+export const connectionFamilies = (
+	rows: ReadonlyArray<{ readonly family: string | null; readonly families: string | null }>,
+): ReadonlyArray<string> => {
+	const current = [...new Set(rows.flatMap((row) => (row.family ? [row.family] : [])))];
+	const reserved = new Set(current);
+	const historical = rows.flatMap((row) =>
+		row.families === null ? [] : row.families.split(" ").filter((item) => item.length > 0 && !reserved.has(item)),
+	);
+	return familyList(...historical, ...current);
+};
 /** The stored form of familyList: the families joined by spaces, or null when there are none. */
 export const storedFamilies = (...values: ReadonlyArray<string | null | undefined>) =>
 	familyList(...values).join(" ") || null;
