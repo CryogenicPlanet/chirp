@@ -18,6 +18,9 @@ Future changes should record their date, reason, source discussion, and what the
   private to the dashboard. _Superseded in #35: addresses are readable slugs the owner chooses._
 - Cloud authentication controls infrastructure. Chirp passkeys and agent tokens control the
   board. They remain separate.
+  _Superseded 2026-10-13 for board sign-in by the owner's ruling in [decisions](../decisions.md#2026-10-13--one-sign-in-service-for-every-board):
+  boards may also accept linked GitHub and Google identities through auth.chirp.wiki, a separate
+  service. Cloud sessions still do not authenticate into board content._
 - Fly Machines is the first hosting backend.
 - The managed default is demand-started SQLite with persistent board storage.
 - Compatible external PostgreSQL and MySQL are advanced bring-your-own options selected when
