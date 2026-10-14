@@ -554,8 +554,23 @@ export const installEvents = (api: Api, origin: string) =>
 				const fence = yield* ctx.read((value) => Effect.succeed(value));
 				// A new subscription starts now, or after the client's cursor; a cursor beyond the board starts now.
 				const since = cursor === null ? fence : Math.min(cursor, fence);
-				// Only a replay that creates a row spends the budget below; a refresh keeps its position.
-				const replaying = since < fence && !owned.some((row) => row.id === id && row.refresh_before > now);
+				const subtopics = filter.value.recursive !== false;
+				const clientUrl = caller.clientUrl ?? null;
+				// A reconnect through the same client document, approved by the same human under the same posting name, is a
+				// new connection for the same client. It takes over the live subscriptions an earlier connection holds for
+				// this callback, event and arguments, so the client does not get every event twice. Each delivered to this
+				// callback up to its own position, so starting at the furthest skips nothing.
+				const takeable = (db: Store["db"]) =>
+					clientUrl === null
+						? Effect.succeed<Rows>([])
+						: db`SELECT * FROM example_mcp_events WHERE url=${target.href} AND event_name=${name} AND ${topic === null ? db`topic IS NULL` : db`topic=${topic}`} AND subtopics=${subtopics ? 1 : 0} AND client_url=${clientUrl} AND subject=${caller.subject} AND agent=${agent} AND client_id<>${caller.clientId} AND refresh_before>${now} ORDER BY position DESC`.pipe(
+								Effect.flatMap(decodeRows),
+							);
+				const holding = owned.some((row) => row.id === id && row.refresh_before > now);
+				const takingOver = !holding && (yield* ctx.read(() => takeable(ctx.db))).length > 0;
+				// Only a replay that creates a row spends the budget below; a refresh keeps its position, and a takeover
+				// starts at the position it takes over.
+				const replaying = since < fence && !holding && !takingOver;
 				if (!cached || replaying) {
 					const allowed = yield* Ref.modify(verifications, (budget) => {
 						const recent = (budget.get(caller.clientId) ?? []).filter((at) => at > now - verificationWindow);
@@ -571,7 +586,6 @@ export const installEvents = (api: Api, origin: string) =>
 					if (reason !== null) return failure(-32015, "CallbackEndpointError", { reason });
 				}
 				const verifiedAt = cached?.verified_at ?? now;
-				const subtopics = filter.value.recursive !== false;
 				let families = yield* grantFamilies(ctx, caller.clientId);
 				// A replay is bounded by the messages it would deliver, not by board sequence numbers, and is worked out only
 				// for a subscribe that creates the row. If the row vanishes before the mutation below anyway, the insert
@@ -618,7 +632,6 @@ export const installEvents = (api: Api, origin: string) =>
 					}
 				}
 				const sql = ctx.db;
-				const clientUrl = caller.clientUrl ?? null;
 				// Mutations serialize on the board's writer lock, so the existence, takeover and limit checks cannot race.
 				const outcome = yield* ctx.mutate(
 					Effect.gen(function* () {
@@ -642,16 +655,7 @@ export const installEvents = (api: Api, origin: string) =>
 								Effect.flatMap(decodeCount),
 							);
 						if (clientCount >= perClient) return { limit: perClient };
-						// A reconnect through the same client document, approved by the same human, is a new connection for
-						// the same client. It takes over the live subscriptions an earlier connection holds for this callback,
-						// event and arguments, so the client does not get every event twice. Each delivered to this callback
-						// up to its own position, so starting at the furthest misses nothing and repeats nothing.
-						const previous: Rows =
-							clientUrl === null
-								? []
-								: yield* sql`SELECT * FROM example_mcp_events WHERE url=${target.href} AND event_name=${name} AND ${topic === null ? sql`topic IS NULL` : sql`topic=${topic}`} AND subtopics=${subtopics ? 1 : 0} AND client_url=${clientUrl} AND subject=${caller.subject} AND client_id<>${caller.clientId} ORDER BY position DESC`.pipe(
-										Effect.flatMap(decodeRows),
-									);
+						const previous = yield* takeable(sql);
 						const taken = previous[0];
 						if (taken === undefined) {
 							const boardCount = yield* sql`SELECT COUNT(*) AS count FROM example_mcp_events`.pipe(

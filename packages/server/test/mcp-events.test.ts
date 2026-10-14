@@ -1568,7 +1568,7 @@ it("hands a metadata-document reconnect the earlier connection's subscription, w
 	expect(hook.texts(taken.id)).not.toContain("from the earlier connection");
 }, 120000);
 
-it("never takes over across humans, client documents or registered clients", async (test) => {
+it("never takes over across humans, client documents, posting names or registered clients", async (test) => {
 	const { fixture, app, cookie, post } = await installed(test);
 	const documents = await metadataHost(test, ["/client.json", "/other.json"]);
 	const hook = await receiver(test);
@@ -1590,12 +1590,16 @@ it("never takes over across humans, client documents or registered clients", asy
 	const one = await registered.subscribe(hook.url, "mention.created", {});
 	const two = await another.subscribe(hook.url, "mention.created", {});
 	expect(await stored()).toEqual([earlier.id, elsewhere.id, one.id, two.id].toSorted());
+	// The same document and human posting under another name is another live client, not a reconnect.
+	const renamed = await authorize(app, cookie, "Metadata renamed", "other-name", false, documents("/client.json"));
+	const apart = await renamed.subscribe(hook.url, "mention.created", {});
+	expect(await stored()).toEqual([earlier.id, elsewhere.id, one.id, two.id, apart.id].toSorted());
 
 	// The same document approved by another human: the earlier row, as that human's, is not this connection's to take.
 	await fixture.sql(`UPDATE example_mcp_events SET subject='someone-else' WHERE id='${earlier.id}'`);
 	const second = await authorize(app, cookie, "Metadata second", "meta-bot", false, documents("/client.json"));
 	const fresh = await second.subscribe(hook.url, "mention.created", {});
-	expect(await stored()).toEqual([earlier.id, elsewhere.id, one.id, two.id, fresh.id].toSorted());
+	expect(await stored()).toEqual([earlier.id, elsewhere.id, one.id, two.id, apart.id, fresh.id].toSorted());
 }, 120000);
 
 it("leaves exactly one live subscription when both connections subscribe at once", async (test) => {
