@@ -565,6 +565,45 @@ it("copies a replacement grant family onto live subscriptions before the next dr
 	expect(hook.texts(mentions.id)).toEqual(["@here after the live grant identity changed"]);
 }, 120000);
 
+it("does not echo a replaced grant's posts across a multi-page drain", async (test) => {
+	const { fixture, app, cookie, post } = await installed(test);
+	const granted = await authorize(app, cookie, "Paged family client", "page-fam", true);
+	const other = await authorize(app, cookie, "Paged other client", "page-other", false);
+	const hook = await receiver(test);
+	await post("plans", "setup");
+	const mentions = await granted.subscribe(hook.url, "mention.created", {});
+	await post("plans", "@page-fam ready");
+	await eventually(() => hook.texts(mentions.id).includes("@page-fam ready"));
+	// Hold delivery so more than one drain page of F1 posts can queue before replacement.
+	await fixture.sql(`UPDATE example_mcp_events SET next_attempt=${Date.now() + 3_600_000} WHERE id='${mentions.id}'`);
+	for (let n = 1; n <= 17; n++)
+		expect(await granted.post("plans", `@here own ${n}`, `page-own-${n}`)).toMatchObject({
+			result: { structuredContent: { instance: expect.stringMatching(/^f_/) } },
+		});
+	for (let n = 1; n <= 17; n++) await other.post("plans", `@here other ${n}`, `page-other-${n}`);
+	await revokeGrant(app, cookie, "page-fam");
+	const requested = decode(
+		Schema.Struct({
+			result: Schema.Struct({
+				structuredContent: Schema.Struct({ status: Schema.String, approve_url: Schema.String }),
+			}),
+		}),
+		await granted.edit("request_editing"),
+	).result.structuredContent;
+	await approveEditing(app, requested.approve_url);
+	expect(await granted.edit("request_editing")).toMatchObject({
+		result: { structuredContent: { status: "active" } },
+	});
+	await fixture.sql(`UPDATE example_mcp_events SET next_attempt=0 WHERE id='${mentions.id}'`);
+	await post("plans", "@here after multi-page replacement");
+	await eventually(() => hook.texts(mentions.id).includes("@here after multi-page replacement"));
+	expect(hook.texts(mentions.id)).toEqual([
+		"@page-fam ready",
+		...Array.from({ length: 17 }, (_, n) => `@here other ${n + 1}`),
+		"@here after multi-page replacement",
+	]);
+}, 120000);
+
 it("does not let own-family posts fill the replay window past an older deliverable", async (test) => {
 	const { app, cookie, post } = await installed(test, (source) =>
 		source.replace("const replayScan = 200;", "const replayScan = 4;"),
@@ -1044,10 +1083,10 @@ it("reports truncated when a deliverable match lies past a full read of the gap"
 	await post("watched", "setup");
 	const started = await mentioned.subscribe(hook.url, "mention.created", { topic: "watched" });
 	await mentioned.unsubscribe(hook.url, "mention.created", { topic: "watched" });
-	// A full page of mentions elsewhere, then a full read of the watched topic without a mention, then the one
-	// deliverable mention, then a full newest window elsewhere: the match sits just past what the gap read reaches.
+	// A full page of mentions elsewhere, then more than replayScan ordinary posts in the watched topic, then the
+	// one deliverable mention, then a full newest window elsewhere: a topic-only limit would miss the mention.
 	for (let n = 1; n <= 4; n++) await post("elsewhere", `@deep-bot early ${n}`);
-	for (let n = 1; n <= 4; n++) await post("watched", `chatter ${n}`);
+	for (let n = 1; n <= 5; n++) await post("watched", `chatter ${n}`);
 	await post("watched", "@deep-bot in the gap");
 	for (let n = 1; n <= 4; n++) await post("elsewhere", `@deep-bot late ${n}`);
 	expect(await mentioned.subscribe(hook.url, "mention.created", { topic: "watched" }, started.cursor)).toMatchObject({
