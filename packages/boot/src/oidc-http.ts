@@ -78,7 +78,7 @@ export const oidcRoute = (auth: Auth["Service"], requestId: string) =>
 			return yield* authFailure(
 				Effect.gen(function* () {
 					// A credential beside the callback, or no single state, finishes nothing. Anything else naming a live
-					// state reaches boot's check, which spends that state on any refusal, including an issuer error.
+					// state reaches boot's check, which claims that state before redeeming and spends it on any refusal.
 					if (request.headers.authorization !== undefined || namesGrant(request) || state === undefined)
 						return yield* new AuthError({ code: "oidc_invalid" });
 					const result = yield* auth.finishOidc({

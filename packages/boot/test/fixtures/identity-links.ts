@@ -511,6 +511,17 @@ const run = Effect.gen(function* () {
 		issuer.modes.reuse = false;
 		assert.equal(raced.filter(Result.isSuccess).length, 1);
 		assert.equal(yield* sessions, beforeAcross + 1);
+		// The real issuer redeems a code once. Claiming the state first keeps the winner from being spent by the
+		// loser that got invalid_grant.
+		const once = yield* begin(auth, octocat);
+		const beforeOnce = yield* sessions;
+		const singleUse = yield* Effect.forEach(
+			[once.callback, once.callback],
+			(callback) => Effect.result(auth.finishOidc(callback)),
+			{ concurrency: "unbounded" },
+		);
+		assert.equal(singleUse.filter(Result.isSuccess).length, 1);
+		assert.equal(yield* sessions, beforeOnce + 1);
 		// Two confirmations of one pending link store one identity.
 		const pending = yield* pendingLink(auth, owner.id, human);
 		const proofs = [

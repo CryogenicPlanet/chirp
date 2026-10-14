@@ -230,8 +230,9 @@ export const makeIdentityLinks = <E, R, S extends { readonly id: string }, SE, S
 							: null,
 			);
 
-		/** The callback, in the order that keeps the issuer off every lock: check the browser binding, state and issuer;
-		 * redeem and verify over the network; then take the state row exactly once and act in one boot write. */
+		/** Claim the state row before talking to the issuer, so a concurrent callback cannot spend it while this one is
+		 * still redeeming. Issuer I/O holds no mutex. A claimed row is spent even if the callback is then refused, so a
+		 * code that reached a browser without the binding cannot be replayed from the browser that holds it. */
 		const finishOidc = (input: {
 			readonly state: string;
 			readonly code: string | undefined;
@@ -242,51 +243,58 @@ export const makeIdentityLinks = <E, R, S extends { readonly id: string }, SE, S
 		}) =>
 			Effect.gen(function* () {
 				const client = yield* enabled;
-				const row =
-					(yield* sql`SELECT ceremony, challenge, setup_generation, expires_at FROM auth_challenges WHERE id=${input.state}`.pipe(
-						decodeRows(stateRow),
-					))[0];
-				if (!row || (row.ceremony !== "oidc.login" && row.ceremony !== "oidc.link"))
+				const claimed = yield* mutex.withPermit(
+					sql.withTransaction(
+						lockBootWrite(sql).pipe(
+							Effect.andThen(
+								Effect.gen(function* () {
+									const row =
+										(yield* sql`SELECT ceremony, challenge, setup_generation, expires_at FROM auth_challenges WHERE id=${input.state}`.pipe(
+											decodeRows(stateRow),
+										))[0];
+									if (!row || (row.ceremony !== "oidc.login" && row.ceremony !== "oidc.link")) return undefined;
+									const taken = yield* take(input.state, row.ceremony, null);
+									return taken === undefined
+										? undefined
+										: {
+												ceremony: row.ceremony,
+												challenge: taken.challenge,
+												setup_generation: taken.setup_generation,
+												expires_at: taken.expires_at,
+											};
+								}),
+							),
+						),
+					),
+				);
+				if (claimed === undefined) return yield* refuse("oidc_invalid");
+				const ceremony = claimed.ceremony;
+				const code = input.code;
+				if (
+					input.refused ||
+					code === undefined ||
+					input.binding === null ||
+					input.iss !== issuer ||
+					claimed.expires_at <= (yield* Clock.currentTimeMillis)
+				)
 					return yield* refuse("oidc_invalid");
-				const ceremony = row.ceremony;
-				// Any refused callback naming a live state spends it. A code that reached a browser without the binding,
-				// for instance the owner's after an attacker started the round trip, then cannot be replayed from the
-				// browser that holds it. The write runs only after any issuer request has finished.
-				const spend = (error: AuthError) =>
-					mutex
-						.withPermit(sql.withTransaction(lockBootWrite(sql).pipe(Effect.andThen(take(input.state, ceremony, null)))))
-						.pipe(Effect.andThen(Effect.fail(error)));
-				const { state, identity } = yield* Effect.gen(function* () {
-					const code = input.code;
-					if (
-						input.refused ||
-						code === undefined ||
-						input.binding === null ||
-						input.iss !== issuer ||
-						row.expires_at <= (yield* Clock.currentTimeMillis)
-					)
-						return yield* refuse("oidc_invalid");
-					const state = yield* Schema.decodeEffect(Schema.fromJsonString(OidcState))(row.challenge).pipe(
-						Effect.mapError(() => new AuthError({ code: "oidc_invalid" })),
-					);
-					if (!same(yield* hash(input.binding), state.binding_hash)) return yield* refuse("oidc_invalid");
-					const identity = yield* client.exchange(
-						code,
-						state.verifier,
-						`${state.origin}${oidcCallbackPath}`,
-						state.nonce,
-					);
-					return { state, identity };
-				}).pipe(Effect.catchTag("AuthError", spend));
+				const state = yield* Schema.decodeEffect(Schema.fromJsonString(OidcState))(claimed.challenge).pipe(
+					Effect.mapError(() => new AuthError({ code: "oidc_invalid" })),
+				);
+				if (!same(yield* hash(input.binding), state.binding_hash)) return yield* refuse("oidc_invalid");
+				const identity = yield* client.exchange(
+					code,
+					state.verifier,
+					`${state.origin}${oidcCallbackPath}`,
+					state.nonce,
+				);
 				const id = yield* identityId(identity.issuer, identity.subject);
 				return yield* mutex.withPermit(
 					committed(
 						sql,
 						Effect.gen(function* () {
-							const taken = yield* take(input.state, ceremony, null);
 							const now = yield* Clock.currentTimeMillis;
-							if (!taken || taken.expires_at <= now || taken.challenge !== row.challenge)
-								return yield* refuse("oidc_invalid");
+							if (claimed.expires_at <= now) return yield* refuse("oidc_invalid");
 							yield* passkeysUsable;
 							if (!(yield* allowedParties(sql, config)).some((party) => party.expectedOrigin === state.origin))
 								return yield* refuse("origin_invalid");
@@ -307,7 +315,7 @@ export const makeIdentityLinks = <E, R, S extends { readonly id: string }, SE, S
 								);
 								return { _tag: "session" as const, session, next: state.next };
 							}
-							const sessionId = taken.setup_generation;
+							const sessionId = claimed.setup_generation;
 							if (sessionId === null) return yield* refuse("oidc_invalid");
 							yield* liveSession(sessionId);
 							if (current !== undefined) return yield* refuse("identity_exists");

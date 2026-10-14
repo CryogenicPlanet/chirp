@@ -303,7 +303,7 @@ const routes = [
 		"get",
 		["/auth/oidc/callback"],
 		"public",
-		"The issuer's return with code, state and iss, from the browser that started; any refusal spends that state. Login opens an ordinary human session only for an identity already linked, matched by issuer and subject; link holds the verified identity for /@rahul?link=<id> to confirm. Answers an HTML page that continues by a same-site navigation. A linked identity is not a recovery path; passkeys and REOPEN_SETUP are.",
+		"The issuer's return with code, state and iss, from the browser that started. Claims the state before redeeming so a concurrent callback cannot spend it; any refusal has already spent that state. Login opens an ordinary human session only for an identity already linked, matched by issuer and subject; link holds the verified identity for /@rahul?link=<id> to confirm. Answers an HTML page that continues by a same-site navigation. A linked identity is not a recovery path; passkeys and REOPEN_SETUP are.",
 	],
 	[
 		"get",
