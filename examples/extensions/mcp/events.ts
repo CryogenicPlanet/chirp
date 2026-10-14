@@ -568,10 +568,9 @@ export const installEvents = (api: Api, origin: string) =>
 								Effect.flatMap(decodeRows),
 							);
 				const holding = owned.some((row) => row.id === id && row.refresh_before > now);
-				const takingOver = !holding && (yield* ctx.read(() => takeable(ctx.db))).length > 0;
-				// Only a replay that creates a row spends the budget below; a refresh keeps its position, and a takeover
-				// starts at the position it takes over.
-				const replaying = since < fence && !holding && !takingOver;
+				// Only a replay that creates a row spends the budget below; a refresh keeps its position. A takeover
+				// uses the peer's position when the mutation still finds one; the replay is the fallback if it is gone.
+				const replaying = since < fence && !holding;
 				if (!cached || replaying) {
 					const allowed = yield* Ref.modify(verifications, (budget) => {
 						const recent = (budget.get(caller.clientId) ?? []).filter((at) => at > now - verificationWindow);
