@@ -772,7 +772,7 @@ it("reports truncated for a topic mention replay only when it skipped a matching
 	});
 	await eventually(() => hook.texts(scoped.id).includes("@filter-bot kept"));
 	expect(hook.texts(scoped.id)).toEqual(["@filter-bot keep 1", "@filter-bot keep 2", "@filter-bot kept"]);
-	// More than two candidate pages: a match in the unexamined middle must still set truncated.
+	// More than two candidate pages: an unexamined middle is still truncated, without scanning history.
 	const after = hook.events().at(-1)?.cursor ?? null;
 	await mentioned.unsubscribe(hook.url, "mention.created", { topic: "watched" });
 	for (let n = 1; n <= 4; n++) await post("elsewhere", `@filter-bot head ${n}`);

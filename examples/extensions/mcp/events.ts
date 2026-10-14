@@ -575,39 +575,34 @@ export const installEvents = (api: Api, origin: string) =>
 					window === undefined || window.items.length === 0 ? null : yield* grantFamily(ctx, caller.clientId);
 				const matched = (window?.items ?? []).filter((item) => matches(topic, subtopics, family, item));
 				// Past the newest replayLimit matches it starts after the one just older. A full window of candidates starts
-				// at its oldest, and has skipped something only if an older matching message exists.
+				// at its oldest, and is truncated if an older match exists or older candidates were left unexamined.
 				const over = matched.length > replayLimit ? matched[matched.length - replayLimit - 1] : undefined;
 				const oldest =
 					over === undefined && window !== undefined && window.items.length === replayScan
 						? window.items[0]
 						: undefined;
+				// Truncation looks at one older page only, the same 200-candidate bound as the newest window. A full
+				// older page that never reaches the window left unexamined candidates, so the replay is truncated.
 				const older =
 					oldest === undefined
-						? undefined
+						? false
 						: yield* Effect.gen(function* () {
-								let cursor = since;
-								while (cursor < oldest.seq) {
-									const page = yield* ctx.messages.query({
-										since: cursor,
-										limit: replayScan,
-										exclude: instance,
-										...selection(name, agent, topic, subtopics),
-									});
-									const found = page.items.find(
-										(item) => item.seq < oldest.seq && matches(topic, subtopics, family, item),
-									);
-									if (found !== undefined) return found;
-									const last = page.items.at(-1);
-									if (last === undefined || last.seq >= oldest.seq || page.items.length < replayScan) return undefined;
-									cursor = last.seq;
-								}
-								return undefined;
+								const page = yield* ctx.messages.query({
+									since,
+									limit: replayScan,
+									exclude: instance,
+									...selection(name, agent, topic, subtopics),
+								});
+								if (page.items.some((item) => item.seq < oldest.seq && matches(topic, subtopics, family, item)))
+									return true;
+								const last = page.items.at(-1);
+								return last !== undefined && last.seq < oldest.seq && page.items.length === replayScan;
 							});
 				const start =
 					over !== undefined
 						? { position: over.seq, truncated: true }
 						: oldest !== undefined
-							? { position: oldest.seq - 1, truncated: older !== undefined && older.seq < oldest.seq }
+							? { position: oldest.seq - 1, truncated: older }
 							: { position: since, truncated: false };
 				const incarnation = yield* random(8);
 				const sql = ctx.db;
