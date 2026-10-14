@@ -398,6 +398,14 @@ it("refuses metadata documents that do not describe the client", async (test) =>
 			headers: { "cache-control": "public, max-age=3600, max-age=0" },
 			body: metadataDocument(`${base}/duplicate-age.json`),
 		},
+		"/bogus-s-maxage.json": {
+			headers: { "cache-control": "public, s-maxage=bogus, max-age=3600" },
+			body: metadataDocument(`${base}/bogus-s-maxage.json`),
+		},
+		"/negative-max-age.json": {
+			headers: { "cache-control": "public, max-age=-1" },
+			body: metadataDocument(`${base}/negative-max-age.json`),
+		},
 	}));
 	const { challenge } = pkce("refusals");
 	const ask = (path: string, fields: Readonly<Record<string, string>> = {}) =>
@@ -493,6 +501,13 @@ it("refuses metadata documents that do not describe the client", async (test) =>
 	expect((await ask("/duplicate-age.json")).status).toBe(200);
 	expect((await ask("/duplicate-age.json")).status).toBe(200);
 	expect(host.hits("/duplicate-age.json")).toBe(2);
+	// A malformed freshness directive is stale, not a fallback (RFC 9111 §4.2.1).
+	expect((await ask("/bogus-s-maxage.json")).status).toBe(200);
+	expect((await ask("/bogus-s-maxage.json")).status).toBe(200);
+	expect(host.hits("/bogus-s-maxage.json")).toBe(2);
+	expect((await ask("/negative-max-age.json")).status).toBe(200);
+	expect((await ask("/negative-max-age.json")).status).toBe(200);
+	expect(host.hits("/negative-max-age.json")).toBe(2);
 }, 60000);
 
 it("never fetches client metadata from private addresses on a public board", async (test) => {
