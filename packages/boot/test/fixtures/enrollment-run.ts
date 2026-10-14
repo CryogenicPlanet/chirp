@@ -207,6 +207,12 @@ const run = Effect.gen(function* () {
 		assert.deepEqual(yield* sql`SELECT counter FROM passkeys`, [{ counter: 0 }]);
 		yield* sql`DROP TRIGGER refuse_event`;
 		yield* auth.decideEnrollment(params, signed);
+		// Collection commits its event with the pair it issues, or neither.
+		yield* sql`CREATE TRIGGER refuse_event BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT,'disk failure'); END`;
+		yield* fails(auth.collectEnrollment(enrollment.id, enrollment.device_secret));
+		assert.equal((yield* sql`SELECT * FROM tokens`).length, 0);
+		assert.equal((yield* auth.enrollmentInfo(enrollment.id)).status, "approved");
+		yield* sql`DROP TRIGGER refuse_event`;
 		yield* sql`CREATE TRIGGER refuse_refresh BEFORE INSERT ON tokens WHEN NEW.kind='refresh' BEGIN SELECT RAISE(ABORT,'disk failure'); END`;
 		yield* fails(auth.collectEnrollment(enrollment.id, enrollment.device_secret));
 		assert.equal((yield* sql`SELECT * FROM tokens`).length, 0);
@@ -251,6 +257,11 @@ const run = Effect.gen(function* () {
 			assert.ok(!output.join("\n").includes(secret));
 		}
 		assert.equal((yield* sql`SELECT DISTINCT pair_id FROM tokens`).length, 1);
+		// Creation records nothing, and of two racing collections only the one that issued a pair is recorded.
+		assert.deepEqual(yield* sql`SELECT type,actor,instance FROM events ORDER BY seq`, [
+			{ type: "enrollment.approved", actor: "rahul", instance: null },
+			{ type: "enrollment.collected", actor: "codex", instance: pair.family },
+		]);
 		yield* fs.writeFileString(
 			`${filename}.receipt`,
 			yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({

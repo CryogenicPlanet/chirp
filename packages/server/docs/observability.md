@@ -8,6 +8,7 @@ Start with the failed response, then inspect the matching request and boot state
 | ------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | Passkey setup or login failed               | The UI's stage, error code and request ID; verify the browser URL matches `PUBLIC_ORIGIN` |
 | An API request failed                       | Its response body and request ID, then authenticated `/_boot/events`                      |
+| An agent's enrollment stalled               | Its poll's error code, then `enrollment.*` and request records in `/_boot/events`         |
 | A reload failed or the app will not start   | Authenticated `/_boot/status`, boot events and process output                             |
 | A message or extension action looks wrong   | `/api/events` and `/api/stream`, plus the extension's logs                                |
 | Startup failed before HTTP became available | The terminal running chirp, or `docker logs chirp`                                        |

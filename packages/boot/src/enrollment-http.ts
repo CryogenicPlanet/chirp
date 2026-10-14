@@ -49,6 +49,20 @@ const approvalLinkInvalid = () =>
 		},
 		{ status: 404, headers: { "cache-control": "no-store" } },
 	);
+// A poll with an empty or malformed id, or with the wrong method, must not fall through to boot's session refusal:
+// its /setup hint sends an agent that lost the id between commands to diagnose sign-in instead.
+const enrollmentPathInvalid = () =>
+	HttpServerResponse.jsonUnsafe(
+		{
+			error: {
+				code: "enrollment_invalid",
+				message: "This enrollment path names no enrollment: its id is empty or malformed, or the method is not POST.",
+				hint: "Use the exact id that POST /auth/enroll returned: poll with POST /auth/enroll/<id>, and approve through its approve_url. If that id was lost, enroll again.",
+				retriable: false,
+			},
+		},
+		{ status: 404, headers: { "cache-control": "no-store" } },
+	);
 const pageHeaders = Object.freeze({
 	"cache-control": "no-store",
 	"x-content-type-options": "nosniff",
@@ -65,6 +79,7 @@ export const enrollmentRoute = (auth: Auth["Service"], config: AuthConfig, editi
 			request.method === "POST" ? /^\/(?:auth|_boot)\/enroll\/(e_[A-Za-z0-9_-]{43})$/.exec(path)?.[1] : undefined;
 		const decide =
 			request.method === "POST" ? /^\/_boot\/enroll\/(e_[A-Za-z0-9_-]{43})\/approve$/.exec(path)?.[1] : undefined;
+		if (!poll && !decide && /^\/(?:auth|_boot)\/enroll\//.test(path)) return enrollmentPathInvalid();
 		const page = request.method === "GET" ? /^\/(?:_boot\/)?approve\/(e_[A-Za-z0-9_-]{43})$/.exec(path) : null;
 		if (!page && request.method === "GET" && /^\/(?:_boot\/)?approve(?:\/|$)/.test(path)) return approvalLinkInvalid();
 		const challenge = request.method === "POST" && path === "/_boot/auth/challenge";

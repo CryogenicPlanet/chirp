@@ -294,7 +294,8 @@ const make = Effect.fn("Events")(function* (
 						AND events.type='generation.failed' AND generations.status='failed'
 					WHERE transaction_id IS NULL AND seq<=${fence}
 					AND (${prefix(sql`type`, "generation.")} OR ${prefix(sql`type`, "lock.")} OR ${prefix(sql`type`, "fs.")}
-						OR ${prefix(sql`type`, "backup.")} OR type IN ('db.restored','http.request'))
+						OR ${prefix(sql`type`, "backup.")} OR ${prefix(sql`type`, "enrollment.")}
+						OR type IN ('db.restored','http.request'))
 					AND ${input.requestActor === undefined ? sql`1=1` : sql`(type<>'http.request' OR actor=${input.requestActor})`}
 					AND seq>${input.since ?? 0}
 					ORDER BY seq ${input.since === undefined ? sql`DESC` : sql`ASC`} LIMIT ${input.limit + 1}`.pipe(

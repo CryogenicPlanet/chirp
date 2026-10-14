@@ -250,6 +250,20 @@ export const makeEnrollment = <E, R>(
     VALUES(${tokenId},${pair},${row.family},${row.agent_name},${kind},${tokenHash},${row.host},${row.scopes},${expiry},${now})`;
 						}
 						yield* sql`UPDATE enrollments SET status='collected',collected_at=${now} WHERE id=${id}`;
+						// Collection is recorded with the pair it issues. Creation records nothing on purpose: it is anonymous,
+						// and the app mirrors enrollment events into board messages.
+						yield* events.writeBoot({
+							at: now,
+							type: "enrollment.collected",
+							level: "info",
+							actor: row.agent_name,
+							instance: row.family,
+							generation: 0,
+							request_id: null,
+							topic: null,
+							message_id: null,
+							payload: { id, agent: row.agent_name, label: row.host, scopes },
+						});
 						return {
 							status: "collected" as const,
 							agent: row.agent_name,

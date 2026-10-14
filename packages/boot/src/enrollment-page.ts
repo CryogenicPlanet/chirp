@@ -1,3 +1,4 @@
+import { DateTime } from "effect";
 import { assertionHeader } from "@comms/protocol/headers";
 const escape = (value: string) =>
 	value.replace(/[&<>"']/g, (character) =>
@@ -32,6 +33,11 @@ export const approvalReturn = (value: string | null, origin: string) => {
 		? `${target.pathname}${target.search}${target.hash}`
 		: null;
 };
+/** UTC in the markup; the approval script rewrites it in the approver's own time zone. */
+const expiry = (at: number) => {
+	const iso = DateTime.formatIso(DateTime.makeUnsafe(at));
+	return `<time datetime="${iso}">${iso.slice(11, 16)} UTC</time>`;
+};
 const buttons = `<button type="submit" value="approve">Approve with passkey</button><button type="submit" value="deny">Deny with passkey</button>`;
 /** A held enrollment is described only from its own row: the extension, agent and label boot stored. */
 const heldBody = (
@@ -64,6 +70,7 @@ export const approvalPage = (
 		readonly status: string;
 		readonly held: string | null;
 		readonly requested: readonly string[] | null;
+		readonly expires_at: number;
 	},
 	returnTo: string | null = null,
 ) => `<!doctype html>
@@ -76,8 +83,10 @@ export const approvalPage = (
 <p>Confirm this code matches the agent's terminal:</p><p><code>${escape(enrollment.user_code)}</code></p>
 ${enrollment.status === "pending" ? `<form id="approval" data-id="${escape(enrollment.id)}" data-base="read,write"><p>Grant read and write access.</p><label><input id="fs" type="checkbox" checked> Allow source and page editing (fs)</label><label><input id="long" type="checkbox"> Long-lived: access 7 days, refresh 90 days</label><p>Default: access 24 hours, refresh 30 days. Active agents refresh their credentials without another approval.</p>${buttons}</form>` : `<p>This enrollment is ${escape(enrollment.status)}. Return to your agent.</p>`}`
 }
+${enrollment.status === "pending" ? `<p>This request expires at ${expiry(enrollment.expires_at)}.</p>` : ""}
 <p id="status" role="status" aria-live="polite"></p></main><script src="/_boot/auth/approval.js" defer></script></html>`;
 export const approvalClient = `(() => {
+ document.querySelectorAll("time[datetime]").forEach(time => { time.textContent = new Date(time.dateTime).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}); });
  const form = document.getElementById("approval"), status = document.getElementById("status");
  if (!form) return;
  const decode = value => Uint8Array.from(atob(value.replace(/-/g,"+").replace(/_/g,"/")), c => c.charCodeAt(0));
