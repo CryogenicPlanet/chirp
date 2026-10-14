@@ -260,10 +260,10 @@ it("connects each approval of a metadata-document client as its own connection",
 	expect(firstInfo.editing.status).toBe("active");
 	for (const info of [firstInfo, secondInfo]) expect(info.client_id).toMatch(/^mcp_cimd_[A-Za-z0-9_-]{32}$/);
 	expect(secondInfo.client_id).not.toBe(firstInfo.client_id);
-	// The connection id is short enough for the posting instance and the longest idempotency key.
+	// The connection id and client label leave room for the longest idempotency key under the board's 200-character limit.
 	const posted = await mcp(app, secondTokens.access_token, 1, "tools/call", {
 		name: "post_message",
-		arguments: { topic: "plans", body: "From a metadata client", idempotencyKey: "k".repeat(156) },
+		arguments: { topic: "plans", body: "From a metadata client", idempotencyKey: "k".repeat(123) },
 	});
 	expect(decode(Posted, await posted.json()).result.structuredContent).toEqual({
 		agent: "meta-bot",

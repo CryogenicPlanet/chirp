@@ -733,6 +733,12 @@ it("namespaces fallback post idempotency keys by client label", async (test) => 
 	expect(
 		(await as(chatgpt)("post_message", { topic: "shared", body: "different body", idempotencyKey: "same-key" })).error,
 	).toMatchObject({ error: { code: "idempotency_conflict" } });
+	expect(
+		(await as(chatgpt)("post_message", { topic: "shared", body: "max key", idempotencyKey: "k".repeat(123) })).ok,
+	).toMatchObject({ instance: `extension:mcp:${client.clientId}` });
+	expect(
+		(await as(chatgpt)("post_message", { topic: "shared", body: "too long", idempotencyKey: "k".repeat(124) })).error,
+	).toMatchObject({ error: { code: "input_invalid" } });
 }, 120000);
 
 it("moves a grant recorded per connection to the surface named after its client, still approved", async (test) => {

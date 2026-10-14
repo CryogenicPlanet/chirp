@@ -39,6 +39,8 @@ const QueryInput = Schema.Struct({
 	max_body: Schema.optionalKey(Schema.Int),
 });
 const PageInput = Schema.Struct({ path: Schema.String, max_bytes: Schema.optionalKey(Schema.Int) });
+/** A fallback post prefixes `clientId:surface:` (43+32+2); the board refuses keys over 200 characters. */
+const postKeyMax = 123;
 const PostInput = Schema.Struct({
 	topic: Schema.String,
 	body: Schema.String,
@@ -409,7 +411,7 @@ export const tools = Object.freeze([
 				body: { type: "string", minLength: 1 },
 				tags: { type: "array", items: { type: "string" } },
 				meta: { type: "object" },
-				idempotencyKey: { type: "string", minLength: 1, maxLength: 156 },
+				idempotencyKey: { type: "string", minLength: 1, maxLength: postKeyMax },
 			},
 			required: ["topic", "body", "idempotencyKey"],
 			additionalProperties: false,
@@ -528,9 +530,12 @@ export const callTool = (
 				Option.isNone(args) ||
 				!args.value.body ||
 				args.value.idempotencyKey.length < 1 ||
-				args.value.idempotencyKey.length > 156
+				args.value.idempotencyKey.length > postKeyMax
 			)
-				return toolError("input_invalid", "topic, body, and an idempotencyKey of 1–156 characters are required");
+				return toolError(
+					"input_invalid",
+					`topic, body, and an idempotencyKey of 1–${postKeyMax} characters are required`,
+				);
 			const meta = { ...args.value.meta, ...provenance(caller) };
 			// With a live grant the post is the agent's own, so it can be edited and deleted through the grant later.
 			const editing = yield* editingState(ctx, caller).pipe(
