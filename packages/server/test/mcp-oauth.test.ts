@@ -394,6 +394,10 @@ it("refuses metadata documents that do not describe the client", async (test) =>
 			headers: { age: "600" },
 			body: metadataDocument(`${base}/heuristic-age.json`),
 		},
+		"/duplicate-age.json": {
+			headers: { "cache-control": "public, max-age=3600, max-age=0" },
+			body: metadataDocument(`${base}/duplicate-age.json`),
+		},
 	}));
 	const { challenge } = pkce("refusals");
 	const ask = (path: string, fields: Readonly<Record<string, string>> = {}) =>
@@ -485,6 +489,10 @@ it("refuses metadata documents that do not describe the client", async (test) =>
 	expect((await ask("/heuristic-age.json")).status).toBe(200);
 	expect((await ask("/heuristic-age.json")).status).toBe(200);
 	expect(host.hits("/heuristic-age.json")).toBe(2);
+	// A duplicated freshness directive is stale (RFC 9111 §4.2.1).
+	expect((await ask("/duplicate-age.json")).status).toBe(200);
+	expect((await ask("/duplicate-age.json")).status).toBe(200);
+	expect(host.hits("/duplicate-age.json")).toBe(2);
 }, 60000);
 
 it("never fetches client metadata from private addresses on a public board", async (test) => {

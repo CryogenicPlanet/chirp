@@ -145,7 +145,7 @@ const metadataUrl = (clientId: string) => {
 };
 const metadataLimit = 5120;
 const cachedDocuments = 64;
-/** How long a fetched document is reused. This shared cache uses Cache-Control s-maxage, then max-age, then Expires (CIMD §5.2, RFC 9111), at most an hour, five minutes if none is set. private, no-store, no-cache, and Vary: * are not stored. Current age (Age and Date, RFC 9111 §4.2.3) reduces remaining freshness, including the five-minute fallback; an invalid Expires is already stale (RFC 9111 §5.3). Quoted s-maxage and max-age values are accepted (RFC 9111 §5.2). */
+/** How long a fetched document is reused. This shared cache uses Cache-Control s-maxage, then max-age, then Expires (CIMD §5.2, RFC 9111), at most an hour, five minutes if none is set. private, no-store, no-cache, and Vary: * are not stored. Current age (Age and Date, RFC 9111 §4.2.3) reduces remaining freshness, including the five-minute fallback; an invalid Expires is already stale (RFC 9111 §5.3). Quoted s-maxage and max-age values are accepted (RFC 9111 §5.2). A duplicated s-maxage or max-age is stale (RFC 9111 §4.2.1). */
 const cacheLifetime = (
 	header: string | undefined,
 	ageHeader: string | undefined,
@@ -165,13 +165,16 @@ const cacheLifetime = (
 		.map((field) => field.trim());
 	if (vary.includes("*")) return 0;
 	const seconds = (name: string) =>
-		directives
-			.flatMap((directive) => {
-				const match = new RegExp(`^${name}=(?:"(\\d+)"|(\\d+))$`).exec(directive);
-				return match?.[1] ?? match?.[2] ?? [];
-			})
-			.at(0);
-	const shared = seconds("s-maxage") ?? seconds("max-age");
+		directives.flatMap((directive) => {
+			const match = new RegExp(`^${name}=(?:"(\\d+)"|(\\d+))$`).exec(directive);
+			const value = match?.[1] ?? match?.[2];
+			return value === undefined ? [] : [value];
+		});
+	const sMaxAge = seconds("s-maxage");
+	const maxAge = seconds("max-age");
+	// A duplicated freshness directive is invalid; treat the response as stale (RFC 9111 §4.2.1).
+	if (sMaxAge.length > 1 || (sMaxAge.length === 0 && maxAge.length > 1)) return 0;
+	const shared = sMaxAge[0] ?? maxAge[0];
 	const age = Number(/^(\d+)$/.exec((ageHeader ?? "").trim())?.[1] ?? 0);
 	const parsedDate = dateHeader === undefined ? Number.NaN : Date.parse(dateHeader);
 	const origin = Number.isNaN(parsedDate) ? now : parsedDate;
