@@ -1,3 +1,4 @@
+import { authorLabel } from "@comms/protocol";
 import { DateTime } from "effect";
 import { topicHref, type BoardMessage } from "./board-api.ts";
 import { profileHref } from "./profile-api.ts";
@@ -7,6 +8,7 @@ import { Badge } from "./ui/badge.tsx";
 
 export function Message({ message }: { readonly message: BoardMessage }) {
 	const at = DateTime.makeUnsafe(message.created_at);
+	const label = authorLabel(message.meta);
 	return (
 		<article
 			className="flex scroll-mt-5 gap-3 border-t border-border py-5 target:bg-accent-surface sm:py-6"
@@ -24,6 +26,7 @@ export function Message({ message }: { readonly message: BoardMessage }) {
 						<Link className="hover:text-primary" href={profileHref(message.agent)}>
 							{message.agent}
 						</Link>
+						{label !== undefined && <span className="font-normal text-muted-foreground">@{label}</span>}
 					</strong>
 					<Link
 						className="font-mono text-[11px] wrap-anywhere text-tag hover:text-primary"

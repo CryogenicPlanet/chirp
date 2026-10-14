@@ -159,11 +159,14 @@ const authorize = async (
 		}),
 	});
 	const access = decode(Schema.Struct({ access_token: Schema.String }), await exchanged.json()).access_token;
-	return { clientId, ...client(app, access) };
+	return { clientId, access, ...client(app, access) };
 };
 
-/** MCP 2.0 requests for one connection: version and capabilities travel in `_meta`, mirrored by the headers. */
-const client = (app: App, token: string) => {
+/**
+ * MCP 2.0 requests for one connection: version and capabilities travel in `_meta`, mirrored by the headers. A
+ * `userAgent` names another client sharing the connection.
+ */
+const client = (app: App, token: string, userAgent?: string) => {
 	let id = 0;
 	const call = async (method: string, params: Readonly<Record<string, unknown>>): Promise<unknown> => {
 		const response = await fetch(`${app.url}/mcp`, {
@@ -175,6 +178,7 @@ const client = (app: App, token: string) => {
 				"mcp-protocol-version": "2026-07-28",
 				"mcp-method": method,
 				...(method === "tools/call" ? { "mcp-name": String(params.name) } : {}),
+				...(userAgent === undefined ? {} : { "user-agent": userAgent }),
 			},
 			body: JSON.stringify({
 				jsonrpc: "2.0",
@@ -465,6 +469,127 @@ it("never delivers posts the connection made through its editing grant, while ot
 	expect(new Set(same.map((event) => event.eventId))).toEqual(
 		new Set([`evt_${mentions.id}_${same[0]?.cursor}`, `evt_${watch.id}_${same[0]?.cursor}`]),
 	);
+}, 120000);
+
+it("never delivers posts the connection made through any of its clients' grants", async (test) => {
+	const { app, cookie, post } = await installed(test);
+	await post("plans", "kickoff");
+	// Consent approved the grant of the client named at registration; Codex, sharing the connection, holds its own.
+	const granted = await authorize(app, cookie, "Surface client", "surface-bot", true);
+	const codex = client(app, granted.access, "openai-mcp/1.0.0 (Codex)");
+	const requested = decode(
+		Schema.Struct({ result: Schema.Struct({ structuredContent: Schema.Struct({ approve_url: Schema.String }) }) }),
+		await codex.edit("request_editing"),
+	).result.structuredContent;
+	await approveEditing(app, requested.approve_url);
+	// Both grants are collected before the subscription exists, so it learns their families from the grant rows alone.
+	expect(await codex.edit("connection_info")).toMatchObject({
+		result: { structuredContent: { label: "codex", editing: { status: "active" } } },
+	});
+	const other = await authorize(app, cookie, "Surface other", "surface-other", false);
+	const hook = await receiver(test);
+	const watch = await granted.subscribe(hook.url, "message.created", { topic: "plans" });
+	const Instance = Schema.Struct({
+		result: Schema.Struct({ structuredContent: Schema.Struct({ instance: Schema.String }) }),
+	});
+	const named = decode(Instance, await granted.post("plans", "through the named client's grant", "surface-1"));
+	const coded = decode(Instance, await codex.post("plans", "through codex's grant", "surface-2"));
+	expect(named.result.structuredContent.instance).toMatch(/^f_/);
+	expect(coded.result.structuredContent.instance).toMatch(/^f_/);
+	expect(coded.result.structuredContent.instance).not.toBe(named.result.structuredContent.instance);
+	await other.post("plans", "from another connection", "surface-other");
+	await post("plans", "last");
+	await eventually(() => hook.texts(watch.id).includes("last"));
+	expect(hook.texts(watch.id)).toEqual(["from another connection", "last"]);
+}, 120000);
+
+it("keeps an earlier surface's live grant family when later surfaces exceed the family cap", async (test) => {
+	const { fixture, app, cookie, post } = await installed(test);
+	await post("plans", "kickoff");
+	const granted = await authorize(app, cookie, "Cap client", "cap-bot", true);
+	const Instance = Schema.Struct({
+		result: Schema.Struct({ structuredContent: Schema.Struct({ instance: Schema.String }) }),
+	});
+	const live = decode(Instance, await granted.post("plans", "through the live grant", "cap-live")).result
+		.structuredContent.instance;
+	expect(live).toMatch(/^f_/);
+	const [row] = decode(
+		Schema.Array(
+			Schema.Struct({
+				subject: Schema.String,
+				agent: Schema.String,
+				created_at: Schema.Finite,
+				expires_at: Schema.Finite,
+			}),
+		),
+		await fixture.sql(
+			`SELECT subject,agent,created_at,expires_at FROM example_mcp_grants WHERE client_id='${granted.clientId}'`,
+		),
+	);
+	if (!row) throw new Error("live grant row is missing");
+	// 63 historical families on a later surface is enough for creation-order flattening to drop `live`.
+	const history = Array.from({ length: 63 }, (_, n) => `hist_${String(n).padStart(2, "0")}`);
+	await fixture.sql(
+		`INSERT INTO example_mcp_grants(client_id,surface,subject,request_id,approve_url,code,agent,family,families,scopes,status,expires_at,created_at,updated_at) VALUES('${granted.clientId}','later-surface','${row.subject}','req_later','https://comms.test/approve/later',NULL,'${row.agent}','later_family','${history.join(" ")}','read write','active',${row.expires_at},${row.created_at + 1},${row.created_at + 1})`,
+	);
+	const hook = await receiver(test);
+	const watch = await granted.subscribe(hook.url, "message.created", { topic: "plans" });
+	const [stored] = decode(
+		Schema.Array(Schema.Struct({ grant_family: Schema.NullOr(Schema.String) })),
+		await fixture.sql(`SELECT grant_family FROM example_mcp_events WHERE id='${watch.id}'`),
+	);
+	const families = stored?.grant_family?.split(" ") ?? [];
+	expect(families).toContain(live);
+	expect(families).toContain("later_family");
+	expect(families).toHaveLength(63);
+	expect(await granted.post("plans", "own after the cap", "cap-own")).toMatchObject({
+		result: { structuredContent: { instance: live } },
+	});
+	await post("plans", "last");
+	await eventually(() => hook.texts(watch.id).includes("last"));
+	expect(hook.texts(watch.id)).toEqual(["last"]);
+}, 120000);
+
+it("keeps a live grant family stored at the front of an existing subscription's full list", async (test) => {
+	const { fixture, app, cookie, post } = await installed(test);
+	await post("plans", "kickoff");
+	const granted = await authorize(app, cookie, "Drain cap client", "drain-cap", true);
+	const Instance = Schema.Struct({
+		result: Schema.Struct({ structuredContent: Schema.Struct({ instance: Schema.String }) }),
+	});
+	const live = decode(Instance, await granted.post("plans", "through the live grant", "drain-live")).result
+		.structuredContent.instance;
+	expect(live).toMatch(/^f_/);
+	const hook = await receiver(test);
+	const watch = await granted.subscribe(hook.url, "message.created", { topic: "plans" });
+	const history = Array.from({ length: 62 }, (_, n) => `hist_${String(n).padStart(2, "0")}`);
+	await fixture.sql(
+		`UPDATE example_mcp_events SET grant_family='${[live, ...history].join(" ")}' WHERE id='${watch.id}'`,
+	);
+	const [row] = decode(
+		Schema.Array(
+			Schema.Struct({
+				subject: Schema.String,
+				agent: Schema.String,
+				created_at: Schema.Finite,
+				expires_at: Schema.Finite,
+			}),
+		),
+		await fixture.sql(
+			`SELECT subject,agent,created_at,expires_at FROM example_mcp_grants WHERE client_id='${granted.clientId}'`,
+		),
+	);
+	if (!row) throw new Error("live grant row is missing");
+	const laterHistory = Array.from({ length: 63 }, (_, n) => `later_${String(n).padStart(2, "0")}`);
+	await fixture.sql(
+		`INSERT INTO example_mcp_grants(client_id,surface,subject,request_id,approve_url,code,agent,family,families,scopes,status,expires_at,created_at,updated_at) VALUES('${granted.clientId}','later-surface','${row.subject}','req_later','https://comms.test/approve/later',NULL,'${row.agent}','later_family','${laterHistory.join(" ")}','read write','active',${row.expires_at},${row.created_at + 1},${row.created_at + 1})`,
+	);
+	expect(await granted.post("plans", "own after a full stored list", "drain-own")).toMatchObject({
+		result: { structuredContent: { instance: live } },
+	});
+	await post("plans", "last");
+	await eventually(() => hook.texts(watch.id).includes("last"));
+	expect(hook.texts(watch.id)).toEqual(["last"]);
 }, 120000);
 
 it("does not replay posts from a replaced editing grant", async (test) => {

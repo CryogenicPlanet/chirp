@@ -1,8 +1,17 @@
+import { createHash } from "node:crypto";
 import { Effect, Option, Schema } from "effect";
 import { HttpServerRequest } from "effect/unstable/http";
 import { policy } from "@comms/protocol/errors";
 import type { ManagedRequestContext } from "../../../packages/server/src/kernel/extension-api.ts";
-import { asAgent, type BoardReply, type Editing, editingState, grantEnded, storedEditing } from "./grants.ts";
+import {
+	asAgent,
+	type BoardReply,
+	type Editing,
+	editingState,
+	grantEnded,
+	labelNote,
+	storedEditing,
+} from "./grants.ts";
 
 const SearchInput = Schema.Struct({
 	query: Schema.String,
@@ -31,6 +40,8 @@ const QueryInput = Schema.Struct({
 	max_body: Schema.optionalKey(Schema.Int),
 });
 const PageInput = Schema.Struct({ path: Schema.String, max_bytes: Schema.optionalKey(Schema.Int) });
+/** The longest key a caller may send. A grant post passes it on as is; a fallback post hashes it with the label. */
+const postKeyMax = 156;
 const PostInput = Schema.Struct({
 	topic: Schema.String,
 	body: Schema.String,
@@ -179,7 +190,7 @@ export const tools = Object.freeze([
 		name: "connection_info",
 		title: "Describe this chirp connection",
 		description:
-			"Who this connection posts as, its scopes and editing grant, the board and server versions, the MCP handshake this client used, and which delivery paths exist: cursor reads with query_messages, and topic and mention events over webhooks only when the client connected with MCP 2026-07-28. There is no server event stream.",
+			"Who this connection posts as and this client's label (posts show as name@label), its scopes and this client's editing grant, the board and server versions, the MCP handshake this client used, and which delivery paths exist: cursor reads with query_messages, and topic and mention events over webhooks only when the client connected with MCP 2026-07-28. There is no server event stream.",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false },
 		outputSchema: {
 			type: "object",
@@ -189,6 +200,12 @@ export const tools = Object.freeze([
 				client_id: { type: "string" },
 				approved_by: { type: "string" },
 				posting_name: { type: ["string", "null"] },
+				label: {
+					type: "string",
+					description:
+						"This client's label, from its User-Agent: its posts show as posting_name@label, and it holds its own editing grant.",
+				},
+				label_note: { type: "string" },
 				scopes: { type: "array", items: { type: "string" } },
 				editing: {
 					type: "object",
@@ -395,7 +412,7 @@ export const tools = Object.freeze([
 				body: { type: "string", minLength: 1 },
 				tags: { type: "array", items: { type: "string" } },
 				meta: { type: "object" },
-				idempotencyKey: { type: "string", minLength: 1, maxLength: 156 },
+				idempotencyKey: { type: "string", minLength: 1, maxLength: postKeyMax },
 			},
 			required: ["topic", "body", "idempotencyKey"],
 			additionalProperties: false,
@@ -418,10 +435,21 @@ export interface Connection {
 }
 export interface Caller {
 	readonly clientId: string;
+	/** The label of the client calling through this connection, from its User-Agent: its posts read `agent@surface`. */
+	readonly surface: string;
 	readonly subject: string;
 	readonly scopes: ReadonlyArray<"read" | "write">;
 	readonly agent: string | undefined;
 }
+/**
+ * Provenance every MCP post and meta edit carries, whatever meta the client sent. `author_label` is the label the
+ * board shows after the author's name.
+ */
+export const provenance = (caller: Caller) => ({
+	mcp_client_id: caller.clientId,
+	mcp_approved_by: caller.subject,
+	author_label: caller.surface,
+});
 
 /** One page read, following the board's redirect from a directory name to its listing. */
 const readPage = (ctx: ManagedRequestContext, origin: string, path: string, maxBytes: number) =>
@@ -503,10 +531,13 @@ export const callTool = (
 				Option.isNone(args) ||
 				!args.value.body ||
 				args.value.idempotencyKey.length < 1 ||
-				args.value.idempotencyKey.length > 156
+				args.value.idempotencyKey.length > postKeyMax
 			)
-				return toolError("input_invalid", "topic, body, and an idempotencyKey of 1–156 characters are required");
-			const meta = { ...args.value.meta, mcp_client_id: caller.clientId, mcp_approved_by: caller.subject };
+				return toolError(
+					"input_invalid",
+					`topic, body, and an idempotencyKey of 1–${postKeyMax} characters are required`,
+				);
+			const meta = { ...args.value.meta, ...provenance(caller) };
 			// With a live grant the post is the agent's own, so it can be edited and deleted through the grant later.
 			const editing = yield* editingState(ctx, caller).pipe(
 				Effect.catchTag("KernelError", () => storedEditing(ctx, caller)),
@@ -541,7 +572,9 @@ export const callTool = (
 					...(args.value.tags === undefined ? {} : { tags: args.value.tags }),
 					meta,
 				},
-				`${caller.clientId}:${args.value.idempotencyKey}`,
+				// Clients sharing a connection choose keys independently, so the label keeps their fallback posts apart. The
+				// board takes keys of at most 200 characters, so label and key are hashed together to keep the longest one.
+				`${caller.clientId}:${createHash("sha256").update(`${caller.surface}:${args.value.idempotencyKey}`).digest("base64url")}`,
 				{ agent: caller.agent, instance: caller.clientId },
 			);
 			return toolResult(message);
@@ -558,6 +591,8 @@ export const callTool = (
 				client_id: caller.clientId,
 				approved_by: caller.subject,
 				posting_name: caller.agent ?? null,
+				label: caller.surface,
+				label_note: labelNote,
 				scopes: caller.scopes,
 				editing: {
 					status: editing.status,

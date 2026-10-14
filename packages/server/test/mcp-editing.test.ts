@@ -1,3 +1,4 @@
+import { authorLabel } from "@comms/protocol";
 import { assertionHeader } from "@comms/protocol/headers";
 import { createHash } from "node:crypto";
 import { cp, readdir, readFile, writeFile } from "node:fs/promises";
@@ -125,21 +126,27 @@ const editingStep = async (app: App, response: Response) => {
 	expect(back).toMatch(/^\/mcp\/oauth\/continue\?consent=mcp_consent_/);
 	return { code, approval, back, consent: new URL(back, app.url).searchParams.get("consent") ?? "" };
 };
-/** Revokes an agent's live grant family from the board's token list, as the human would. */
-const revoke = async (app: App, cookie: string, agent: string) => {
-	const families = decode(
+/** The live grant families mcp holds, as the board's token list shows them. */
+const held = async (app: App, cookie: string) =>
+	decode(
 		Schema.Struct({
 			items: Schema.Array(
 				Schema.Struct({
 					family: Schema.String,
 					agent: Schema.String,
+					label: Schema.String,
 					held_by: Schema.NullOr(Schema.String),
 					revoked: Schema.Boolean,
 				}),
 			),
 		}),
 		await (await fetch(`${app.url}/_boot/tokens`, { headers: { cookie } })).json(),
-	).items.filter((item) => item.held_by === "mcp" && item.agent === agent && !item.revoked);
+	).items.filter((item) => item.held_by === "mcp" && !item.revoked);
+/** Revokes an agent's live grant family from the board's token list, as the human would. */
+const revoke = async (app: App, cookie: string, agent: string, label?: string) => {
+	const families = (await held(app, cookie)).filter(
+		(item) => item.agent === agent && (label === undefined || item.label === label),
+	);
 	expect(families).toHaveLength(1);
 	const family = families[0]?.family ?? "";
 	const revoked = await fetch(`${app.url}/_boot/tokens/${family}/revoke`, {
@@ -154,8 +161,8 @@ const revoke = async (app: App, cookie: string, agent: string) => {
 	});
 	expect(revoked.status).toBe(200);
 };
-/** An MCP client on the initialize handshake; each call is its own stateless request. */
-const mcp = (app: App, token: string) => {
+/** An MCP client on the initialize handshake; each call is its own stateless request, from `userAgent` when given. */
+const mcp = (app: App, token: string, userAgent?: string) => {
 	let id = 0;
 	const send = (method: string, params?: unknown) =>
 		fetch(`${app.url}/mcp`, {
@@ -165,6 +172,7 @@ const mcp = (app: App, token: string) => {
 				accept: "application/json, text/event-stream",
 				"content-type": "application/json",
 				"mcp-protocol-version": "2025-11-25",
+				...(userAgent === undefined ? {} : { "user-agent": userAgent }),
 			},
 			body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, ...(params === undefined ? {} : { params }) }),
 		});
@@ -574,4 +582,248 @@ it("lets an existing connection request editing, keeps fs opt-in, and never bloc
 	expect((await deniedTool("edit_message", { seq: own, body: "x" })).error).toMatchObject({
 		error: { code: "editing_not_granted", message: expect.stringContaining("revoked") },
 	});
+}, 120000);
+
+const chatgpt = "openai-mcp/1.0.0";
+const codex = "openai-mcp/1.0.0 (Codex)";
+const unrecognised = "custom-agent/2.1";
+
+it("labels each client sharing a connection by its User-Agent and gives each its own grant", async (test) => {
+	const { app, cookie } = await installed(test, false);
+	// One connector serves several clients, as ChatGPT's serves ChatGPT and Codex: one OAuth client and token.
+	const client = await register(app, "Desk Client");
+	const step = await editingStep(
+		app,
+		await form(app, cookie, "/mcp/oauth/authorize", {
+			...client.query,
+			decision: "approve",
+			agent: "dot",
+			editing: "1",
+		}),
+	);
+	await decide(app, step.approval.href, "approve", ["read", "write"]);
+	const access = await exchange(
+		app,
+		client,
+		(await form(app, cookie, "/mcp/oauth/continue", { consent: step.consent })).headers.get("location"),
+	);
+	const as = (userAgent?: string) => mcp(app, access, userAgent).tool;
+
+	// The label comes from the User-Agent; a client this server does not recognise is named after its registration.
+	for (const [userAgent, label] of [
+		[chatgpt, "chatgpt"],
+		[codex, "codex"],
+		["Claude-User/1.0", "claude"],
+		[unrecognised, "desk-client"],
+	] as const)
+		expect((await as(userAgent)("connection_info")).ok, userAgent).toMatchObject({ posting_name: "dot", label });
+
+	// Consent sees only the browser, so it approved the surface named after the client; Codex asks for its own.
+	expect((await as(unrecognised)("connection_info")).ok).toMatchObject({ editing: { status: "active", agent: "dot" } });
+	expect((await as(codex)("connection_info")).ok).toMatchObject({ editing: { status: "none" } });
+	const requested = decode(
+		Schema.Struct({ status: Schema.Literal("pending"), approve_url: Schema.String, message: Schema.String }),
+		(await as(codex)("request_editing")).ok,
+	);
+	// The user is told the label is the client's claim, not a boundary between the clients of a connection.
+	expect(requested.message).toContain(
+		"labelled codex. The label is reported by the client; any client of this connection can use this grant.",
+	);
+	await decide(app, requested.approve_url, "approve", ["read", "write"]);
+	expect((await as(codex)("connection_info")).ok).toMatchObject({ editing: { status: "active", agent: "dot" } });
+	expect((await as(chatgpt)("connection_info")).ok).toMatchObject({ editing: { status: "none" } });
+	// Boot labels each grant with its surface, so the token list and every call through it read as name@label.
+	const families = await held(app, cookie);
+	expect(families.map((item) => `${item.agent}@${item.label}`).sort()).toEqual(["dot@codex", "dot@desk-client"]);
+	const codexFamily = families.find((item) => item.label === "codex")?.family;
+	const deskFamily = families.find((item) => item.label === "desk-client")?.family;
+
+	// Each surface posts through its own grant, or the extension's instance without one, and records its label.
+	const Posted = Schema.Struct({ seq: Schema.Int, instance: Schema.String });
+	const posts = [
+		decode(
+			Posted,
+			(
+				await as(codex)("post_message", {
+					topic: "desk",
+					body: "from codex",
+					meta: { author_label: "chatgpt" },
+					idempotencyKey: "codex-1",
+				})
+			).ok,
+		),
+		decode(Posted, (await as(unrecognised)("post_message", { topic: "desk", body: "desk", idempotencyKey: "d-1" })).ok),
+		decode(Posted, (await as(chatgpt)("post_message", { topic: "desk", body: "chat", idempotencyKey: "g-1" })).ok),
+	];
+	expect(posts.map((posted) => posted.instance)).toEqual([codexFamily, deskFamily, `extension:mcp:${client.clientId}`]);
+	const human = decode(
+		Posted,
+		await (await app.post("/api/messages", { topic: "desk", body: "by hand" }, cookie)).json(),
+	);
+	// The feed reads the board's message API and shows each author as name@label, or the name alone without one.
+	const listed = decode(
+		Schema.Struct({
+			items: Schema.Array(Schema.Struct({ seq: Schema.Int, agent: Schema.String, meta: Schema.JsonObject })),
+		}),
+		await (await fetch(`${app.url}/api/messages?topic=desk&since=0`, { headers: { cookie } })).json(),
+	).items;
+	const shown = (seq: number) =>
+		listed
+			.filter((item) => item.seq === seq)
+			.map((item) => [item.agent, authorLabel(item.meta)].filter((part) => part !== undefined).join("@"))[0];
+	expect([...posts, human].map((posted) => shown(posted.seq))).toEqual([
+		"dot@codex",
+		"dot@desk-client",
+		"dot@chatgpt",
+		"rahul",
+	]);
+
+	// Only the grant that posted can edit, and the label stays whatever meta the client sends.
+	const fromCodex = posts[0]?.seq ?? 0;
+	expect(
+		(await as(codex)("edit_message", { seq: fromCodex, meta: { author_label: "chatgpt", note: 1 } })).ok,
+	).toMatchObject({ meta: { author_label: "codex", note: 1 } });
+	expect((await as(unrecognised)("edit_message", { seq: fromCodex, body: "taken over" })).error).toMatchObject({
+		error: { code: "author_required" },
+	});
+
+	// Each surface's grant is revoked on its own.
+	await revoke(app, cookie, "dot", "codex");
+	expect((await as(codex)("connection_info")).ok).toMatchObject({ editing: { status: "revoked" } });
+	expect((await as(unrecognised)("connection_info")).ok).toMatchObject({ editing: { status: "active" } });
+}, 120000);
+
+it("namespaces fallback post idempotency keys by client label", async (test) => {
+	const { app, cookie } = await installed(test, false);
+	const client = await register(app, "Shared Client");
+	const connected = await form(app, cookie, "/mcp/oauth/authorize", {
+		...client.query,
+		decision: "approve",
+		agent: "shared-bot",
+	});
+	expect(connected.status).toBe(302);
+	const access = await exchange(app, client, connected.headers.get("location"));
+	const as = (userAgent: string) => mcp(app, access, userAgent).tool;
+	expect((await as(chatgpt)("connection_info")).ok).toMatchObject({
+		label: "chatgpt",
+		editing: { status: "none" },
+	});
+	expect((await as(codex)("connection_info")).ok).toMatchObject({ label: "codex", editing: { status: "none" } });
+	const Posted = Schema.Struct({
+		seq: Schema.Int,
+		instance: Schema.String,
+		meta: Schema.Struct({ author_label: Schema.String }),
+	});
+	const chat = decode(
+		Posted,
+		(await as(chatgpt)("post_message", { topic: "shared", body: "from chatgpt", idempotencyKey: "same-key" })).ok,
+	);
+	const code = decode(
+		Posted,
+		(await as(codex)("post_message", { topic: "shared", body: "from codex", idempotencyKey: "same-key" })).ok,
+	);
+	expect(chat.instance).toBe(`extension:mcp:${client.clientId}`);
+	expect(code.instance).toBe(chat.instance);
+	expect(code.seq).not.toBe(chat.seq);
+	expect(chat.meta.author_label).toBe("chatgpt");
+	expect(code.meta.author_label).toBe("codex");
+	expect(
+		(await as(chatgpt)("post_message", { topic: "shared", body: "from chatgpt", idempotencyKey: "same-key" })).ok,
+	).toMatchObject({ seq: chat.seq });
+	expect(
+		(await as(chatgpt)("post_message", { topic: "shared", body: "different body", idempotencyKey: "same-key" })).error,
+	).toMatchObject({ error: { code: "idempotency_conflict" } });
+	expect(
+		(await as(chatgpt)("post_message", { topic: "shared", body: "max key", idempotencyKey: "k".repeat(156) })).ok,
+	).toMatchObject({ instance: `extension:mcp:${client.clientId}` });
+	expect(
+		(await as(chatgpt)("post_message", { topic: "shared", body: "too long", idempotencyKey: "k".repeat(157) })).error,
+	).toMatchObject({ error: { code: "input_invalid" } });
+}, 120000);
+
+it("moves a grant recorded per connection to the surface named after its client, still approved", async (test) => {
+	const { fixture, app, cookie } = await installed(test, false);
+	const client = await register(app, "Legacy Client");
+	const step = await editingStep(
+		app,
+		await form(app, cookie, "/mcp/oauth/authorize", {
+			...client.query,
+			decision: "approve",
+			agent: "legacy-bot",
+			editing: "1",
+		}),
+	);
+	await decide(app, step.approval.href, "approve", ["read", "write"]);
+	const access = await exchange(
+		app,
+		client,
+		(await form(app, cookie, "/mcp/oauth/continue", { consent: step.consent })).headers.get("location"),
+	);
+	const family = (await held(app, cookie)).find((item) => item.agent === "legacy-bot")?.family;
+	expect(family).toMatch(/^f_/);
+	await app.stop();
+	// Put the table back as a board from before surfaces has it: keyed by client_id, the surface steps not yet run.
+	for (const statement of [
+		"ALTER TABLE example_mcp_grants RENAME TO surface_grants_copy",
+		"CREATE TABLE example_mcp_grants(client_id TEXT PRIMARY KEY,subject TEXT NOT NULL,request_id TEXT NOT NULL,approve_url TEXT NOT NULL,code TEXT,agent TEXT NOT NULL,family TEXT,scopes TEXT NOT NULL,status TEXT NOT NULL,expires_at INTEGER NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,families TEXT)",
+		"INSERT INTO example_mcp_grants SELECT client_id,subject,request_id,approve_url,code,agent,family,scopes,status,expires_at,created_at,updated_at,families FROM surface_grants_copy",
+		"DROP TABLE surface_grants_copy",
+		"UPDATE protected_sql_tables SET migration='agent_grants' WHERE name='example_mcp_grants'",
+		"DELETE FROM extension_migrations WHERE extension='mcp' AND name LIKE 'grant_surfaces%'",
+	])
+		await fixture.sql(statement);
+
+	const restarted = await fixture.launch(join(fixture.root, "seed", "server.ts"));
+	await restarted.ready(await restarted.login());
+	expect(await fixture.sql("SELECT client_id,surface,agent,family,status FROM example_mcp_grants")).toEqual([
+		{ client_id: client.clientId, surface: "legacy-client", agent: "legacy-bot", family, status: "active" },
+	]);
+	expect(
+		await fixture.sql("SELECT name,extension FROM protected_sql_tables WHERE name LIKE 'example_mcp%' ORDER BY name"),
+	).toEqual([
+		{ name: "example_mcp_events", extension: "mcp" },
+		{ name: "example_mcp_grants", extension: "mcp" },
+		{ name: "example_mcp_oauth", extension: "mcp" },
+	]);
+	// The client goes on editing through the grant it had, without another approval; Codex would ask for its own.
+	const { tool } = mcp(restarted, access);
+	expect((await tool("connection_info")).ok).toMatchObject({
+		label: "legacy-client",
+		editing: { status: "active", agent: "legacy-bot" },
+	});
+	expect(
+		(await tool("post_message", { topic: "legacy", body: "after the move", idempotencyKey: "l-1" })).ok,
+	).toMatchObject({ instance: family, meta: { author_label: "legacy-client" } });
+	expect((await mcp(restarted, access, codex).tool("connection_info")).ok).toMatchObject({
+		label: "codex",
+		editing: { status: "none" },
+	});
+}, 120000);
+
+it("approves at consent the label a Claude-named client's calls carry", async (test) => {
+	const { app, cookie } = await installed(test, false);
+	const client = await register(app, "Claude Desktop");
+	const step = await editingStep(
+		app,
+		await form(app, cookie, "/mcp/oauth/authorize", {
+			...client.query,
+			decision: "approve",
+			agent: "desk-bot",
+			editing: "1",
+		}),
+	);
+	await decide(app, step.approval.href, "approve", ["read", "write"]);
+	const access = await exchange(
+		app,
+		client,
+		(await form(app, cookie, "/mcp/oauth/continue", { consent: step.consent })).headers.get("location"),
+	);
+	// Its calls say Claude-User, so they carry claude, and find the grant approved at consent.
+	const info = (await mcp(app, access, "Claude-User/1.0").tool("connection_info")).ok;
+	expect(info).toMatchObject({
+		label: "claude",
+		label_note: expect.stringContaining("any client of this connection can use this grant"),
+		editing: { status: "active", agent: "desk-bot" },
+	});
+	expect((await held(app, cookie)).map((item) => `${item.agent}@${item.label}`)).toEqual(["desk-bot@claude"]);
 }, 120000);
