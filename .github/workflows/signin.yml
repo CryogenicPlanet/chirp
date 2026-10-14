@@ -1,0 +1,60 @@
+name: Signin
+
+# The auth.chirp.wiki issuer shares only the lockfile with the rest of the repo, so it has its own CI
+# and Deploy Signin waits on this workflow, not on the boot and server suites in Linux.
+on:
+  pull_request:
+    paths:
+      - packages/signin/**
+      - package.json
+      - bun.lock
+      - patches/**
+      - tsconfig*.json
+      - .github/workflows/signin.yml
+      - .github/workflows/deploy-signin.yml
+  push:
+    branches: [master]
+    paths:
+      - packages/signin/**
+      - package.json
+      - bun.lock
+      - patches/**
+      - tsconfig*.json
+      - .github/workflows/signin.yml
+      - .github/workflows/deploy-signin.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signin-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  signin:
+    name: Signin tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.3
+      - name: Install declared Bun release
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl --fail --location --silent --show-error --retry 3 --retry-all-errors --retry-delay 2 --output bun.zip \
+            https://github.com/oven-sh/bun/releases/download/bun-v1.4.0/bun-linux-x64.zip
+          printf '%s\n' '2d03fb5fb83ac8b567aca0a281b2ce1a1a19d488f56c2968d88c3f25e92fe452  bun.zip' | sha256sum --check -
+          unzip -q bun.zip
+          printf '%s\n' "$RUNNER_TEMP/bun-linux-x64" >> "$GITHUB_PATH"
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+      - name: Verify issuer flows, client metadata refusals and the Bun entry point
+        run: bun run --filter @comms/signin test
+      - name: Build deployment image
+        run: docker build --file packages/signin/Dockerfile --tag chirp-signin:acceptance .

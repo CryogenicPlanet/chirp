@@ -1,0 +1,15 @@
+# Build inputs for the chirp sign-in image only.
+*
+!package.json
+!bun.lock
+!patches/
+!patches/**
+!packages/
+!packages/signin/
+!packages/signin/package.json
+!packages/signin/src/
+!packages/signin/src/**
+**/.env
+**/.env.*
+**/node_modules
+**/.DS_Store
