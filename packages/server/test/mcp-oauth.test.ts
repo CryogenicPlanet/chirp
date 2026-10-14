@@ -238,8 +238,9 @@ it("connects each approval of a metadata-document client as its own connection",
 	expect(firstTokens.refresh_token).toMatch(/^mcp_refresh_/);
 	expect((await connectionInfo(app, firstTokens.access_token)).editing.status).toBe("active");
 
-	// Reconnecting keeps the posting name, found by URL, but is a new connection: any install, or any local program,
-	// can present the same URL, so the approved grant is not inherited and editing asks boot again.
+	// A second https approval for the same URL and human, started by another PKCE initiator (another install, another
+	// account of the same client, or a phished Authorize click), is a new connection: it keeps the posting name, found
+	// by URL, but not the approved grant, so editing asks boot again while the first connection keeps its own.
 	const second = pkce("second");
 	const secondQuery = authorizeQuery(clientId, second.challenge);
 	expect(await (await consent(app, cookie, secondQuery)).text()).toContain('name="agent" value="meta-bot"');

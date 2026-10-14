@@ -626,8 +626,10 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 							"invalid_request",
 							"Choose a posting name of up to 64 lowercase letters, digits, dots, dashes or underscores, other than system, boot or rahul.",
 						);
-					// Every install of a metadata-document client presents the same URL, and any local program can present a
-					// native one's, so each approval is its own connection and never inherits another's editing grant.
+					// Every install and every user account of a metadata-document client presents the same URL and callback
+					// (chatgpt.com and claude.ai serve one document to all their users), and any local program can present a
+					// native client's, so the callback cannot tell whose flow this is. Each approval is its own connection and
+					// never inherits another's editing grant.
 					const clientId = checked.metadata ? yield* random(crypto, metadataPrefix, 24) : checked.clientId;
 					const recorded = checked.metadata ? remember(ctx, clientId, checked.client) : Effect.void;
 					const grant = {
