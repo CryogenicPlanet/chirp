@@ -436,22 +436,14 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 				if (typeof described === "string") return `The client metadata document at ${clientId} ${described}.`;
 				return { client: described, metadata: url } satisfies Found;
 			});
-		/** One connection per metadata URL and human: a digest as short as a registered id, which other humans never share. */
-		const resumedId = (url: string, subject: string) =>
-			crypto
-				.digest("SHA-256", new TextEncoder().encode(JSON.stringify([url, subject])))
-				.pipe(Effect.map((bytes) => metadataPrefix + Buffer.from(bytes).subarray(0, 24).toString("base64url")));
 		/**
-		 * Records a metadata-document connection as a client, so its name shows wherever a registered client's does, from
-		 * the latest document. Run inside the ctx.mutate that stores the connection's code or consent, so no approval
-		 * leaves one behind alone.
+		 * Records a metadata-document connection as a client, so its name shows wherever a registered client's does. Run
+		 * inside the ctx.mutate that stores the connection's code or consent, so no approval leaves one behind alone.
 		 */
 		const remember = (ctx: Context, id: string, described: typeof Client.Type) =>
-			Effect.gen(function* () {
-				const payload = yield* Schema.encodeEffect(Schema.fromJsonString(Client))(described);
-				yield* ctx.db`DELETE FROM example_mcp_oauth WHERE id=${id} AND kind='client'`;
-				yield* store(ctx, { id, kind: "client", clientId: id, family: "", payload, expires: 0 });
-			});
+			Schema.encodeEffect(Schema.fromJsonString(Client))(described).pipe(
+				Effect.flatMap((payload) => store(ctx, { id, kind: "client", clientId: id, family: "", payload, expires: 0 })),
+			);
 		/** Mints the one-use authorization code for an approved grant; run inside ctx.mutate. */
 		const issue = (ctx: Context, clientId: string, grant: typeof Grant.Type) =>
 			Effect.gen(function* () {
@@ -634,15 +626,9 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 							"invalid_request",
 							"Choose a posting name of up to 64 lowercase letters, digits, dots, dashes or underscores, other than system, boot or rahul.",
 						);
-					// A metadata-document client with an https callback can be sent codes only at a host its own document
-					// names, so this human reconnecting resumes their connection, with its name, grant and subscriptions, as a
-					// registered client does. Any program on this device can present a native client's URL with a loopback
-					// callback, so each such approval is a new connection that inherits nothing.
-					const clientId = !checked.metadata
-						? checked.clientId
-						: loopback.includes(new URL(checked.redirectUri).hostname)
-							? yield* random(crypto, metadataPrefix, 24)
-							: yield* resumedId(checked.clientId, ctx.identity.agent);
+					// Every install of a metadata-document client presents the same URL, and any local program can present a
+					// native one's, so each approval is its own connection and never inherits another's editing grant.
+					const clientId = checked.metadata ? yield* random(crypto, metadataPrefix, 24) : checked.clientId;
 					const recorded = checked.metadata ? remember(ctx, clientId, checked.client) : Effect.void;
 					const grant = {
 						redirect_uri: checked.redirectUri,

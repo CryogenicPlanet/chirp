@@ -152,12 +152,7 @@ const approveAtBoot = async (app: App, approveUrl: string) => {
 };
 const Info = Schema.Struct({
 	result: Schema.Struct({
-		structuredContent: Schema.Struct({
-			client_id: Schema.String,
-			approved_by: Schema.String,
-			posting_name: Schema.NullOr(Schema.String),
-			editing: Schema.Struct({ status: Schema.String }),
-		}),
+		structuredContent: Schema.Struct({ client_id: Schema.String, editing: Schema.Struct({ status: Schema.String }) }),
 	}),
 });
 const connectionInfo = async (app: App, access: string) =>
@@ -173,14 +168,12 @@ const callback = (response: Response) => {
 	return new URL(response.headers.get("location") ?? "");
 };
 
-it("resumes a metadata-document connection over https and keeps each loopback approval apart", async (test) => {
+it("connects each approval of a metadata-document client as its own connection", async (test) => {
 	const { fixture, app, cookie } = await installed(test, true);
 	const host = await metadataHost(test, (base) => ({
 		"/client.json": {
 			headers: { "cache-control": "public, max-age=300" },
-			body: metadataDocument(`${base}/client.json`, {
-				redirect_uris: ["https://client.test/callback", "http://127.0.0.1/callback"],
-			}),
+			body: metadataDocument(`${base}/client.json`),
 		},
 		"/other.json": { body: metadataDocument(`${base}/other.json`) },
 	}));
@@ -199,25 +192,6 @@ it("resumes a metadata-document connection over https and keeps each loopback ap
 	expect((await mcp(app, `chirp_app_${"a".repeat(43)}`, 0, "ping")).headers.get("www-authenticate")).toContain(
 		'scope="read write"',
 	);
-	const exchange = (
-		code: string,
-		verifier: string,
-		redirect = "https://client.test/callback",
-		presentedId = clientId,
-	) =>
-		token(app, {
-			grant_type: "authorization_code",
-			client_id: presentedId,
-			redirect_uri: redirect,
-			code,
-			code_verifier: verifier,
-		});
-	const connected = async (response: Response, verifier: string, redirect?: string) => {
-		const exchanged = await exchange(callback(response).searchParams.get("code") ?? "", verifier, redirect);
-		expect(exchanged.status).toBe(200);
-		const tokens = decode(Tokens, await exchanged.json());
-		return { ...tokens, info: await connectionInfo(app, tokens.access_token) };
-	};
 
 	const first = pkce("first");
 	const firstQuery = authorizeQuery(clientId, first.challenge, { scope: "read write offline_access" });
@@ -227,7 +201,7 @@ it("resumes a metadata-document connection over https and keeps each loopback ap
 	expect(html).toContain("Authorize Metadata Client");
 	expect(html).toContain('name="agent" value="metadata-client"');
 	expect(html).toContain(`published by <strong>${new URL(clientId).host}</strong>`);
-	expect(html).toContain("returns to <strong>client.test</strong>.</p>");
+	expect(html).toContain("returns to <strong>client.test</strong>");
 	expect(html).toContain(`name="client_id" value="${clientId}"`);
 	// Editing goes through boot's passkey approval; finishing from there is an authorization response too.
 	const step = await editingStep(
@@ -237,106 +211,78 @@ it("resumes a metadata-document connection over https and keeps each loopback ap
 	expect(
 		await (await fetch(`${app.url}/mcp/oauth/continue?consent=${step.consent}`, { headers: { cookie } })).text(),
 	).toContain("Finish connecting Metadata Client");
-	const finished = await submit(app, cookie, "/mcp/oauth/continue", { consent: step.consent });
-	const firstCallback = callback(finished);
+	const firstCallback = callback(await submit(app, cookie, "/mcp/oauth/continue", { consent: step.consent }));
 	expect(firstCallback.origin + firstCallback.pathname).toBe("https://client.test/callback");
 	expect(firstCallback.searchParams.get("iss")).toBe("https://comms.test");
 	expect(firstCallback.searchParams.get("state")).toBe("state-1");
 	// Approval reused the document fetched for the consent page.
 	expect(host.hits("/client.json")).toBe(1);
-	// The code belongs to the URL it was approved for, not to another metadata client.
+	const exchange = (code: string, verifier: string, presentedId = clientId) =>
+		token(app, {
+			grant_type: "authorization_code",
+			client_id: presentedId,
+			redirect_uri: "https://client.test/callback",
+			code,
+			code_verifier: verifier,
+		});
 	const firstCode = firstCallback.searchParams.get("code") ?? "";
+	// The code belongs to the URL it was approved for, not to another metadata client.
 	expect(
-		decode(
-			OAuthError,
-			await (
-				await exchange(firstCode, first.verifier, "https://client.test/callback", `${host.base}/other.json`)
-			).json(),
-		).error,
+		decode(OAuthError, await (await exchange(firstCode, first.verifier, `${host.base}/other.json`)).json()).error,
 	).toBe("invalid_grant");
-	const a = await connected(finished, first.verifier);
+	const exchanged = await exchange(firstCode, first.verifier);
+	expect(exchanged.status).toBe(200);
+	const firstTokens = decode(Tokens, await exchanged.json());
 	// offline_access was accepted and changed nothing: the grant is read and write, with a refresh token as always.
-	expect(a.scope).toBe("read write");
-	expect(a.refresh_token).toMatch(/^mcp_refresh_/);
-	expect(a.info.editing.status).toBe("active");
-	// One connection per URL and approving human, so no other human's approval can resume it.
-	expect(a.info.client_id).toBe(
-		`mcp_cimd_${createHash("sha256")
-			.update(JSON.stringify([clientId, a.info.approved_by]))
-			.digest()
-			.subarray(0, 24)
-			.toString("base64url")}`,
-	);
+	expect(firstTokens.scope).toBe("read write");
+	expect(firstTokens.refresh_token).toMatch(/^mcp_refresh_/);
+	expect((await connectionInfo(app, firstTokens.access_token)).editing.status).toBe("active");
 
-	// Reconnecting over https resumes that connection: same id and name, and its grant without another passkey.
+	// Reconnecting keeps the posting name, found by URL, but is a new connection: any install, or any local program,
+	// can present the same URL, so the approved grant is not inherited and editing asks boot again.
 	const second = pkce("second");
 	const secondQuery = authorizeQuery(clientId, second.challenge);
 	expect(await (await consent(app, cookie, secondQuery)).text()).toContain('name="agent" value="meta-bot"');
 	expect(host.hits("/client.json")).toBe(1);
-	const b = await connected(
+	const again = await editingStep(
 		await decide(app, cookie, secondQuery, { decision: "approve", agent: "meta-bot", editing: "1" }),
-		second.verifier,
 	);
-	expect(b.info).toEqual(a.info);
-	const recorded = decode(
-		Schema.Array(Schema.Struct({ payload: Schema.String })),
-		await fixture.sql(`SELECT payload FROM example_mcp_oauth WHERE kind='client' AND id='${a.info.client_id}'`),
+	expect(again.code).not.toBe(step.code);
+	const secondCallback = callback(await submit(app, cookie, "/mcp/oauth/continue", { consent: again.consent }));
+	const secondTokens = decode(
+		Tokens,
+		await (await exchange(secondCallback.searchParams.get("code") ?? "", second.verifier)).json(),
 	);
-	expect(recorded.map((row) => decode(Schema.fromJsonString(Schema.Unknown), row.payload))).toEqual([
-		{
-			client_name: "Metadata Client",
-			redirect_uris: ["https://client.test/callback", "http://127.0.0.1/callback"],
-			client_url: clientId,
-		},
-	]);
-
-	// Any program on this device can present the same URL with a loopback callback, so each such approval is a new
-	// connection: it is warned about, inherits no grant, and asks boot for its own.
-	const loopback = "http://127.0.0.1:53682/callback";
-	const third = pkce("third");
-	const thirdQuery = authorizeQuery(clientId, third.challenge, { redirect_uri: loopback });
-	expect(await (await consent(app, cookie, thirdQuery)).text()).toContain(
-		"returns to <strong>127.0.0.1:53682</strong>. That is a program on this device",
-	);
-	const own = await editingStep(
-		await decide(app, cookie, thirdQuery, { decision: "approve", agent: "meta-bot", editing: "1" }),
-	);
-	expect(own.code).not.toBe(step.code);
-	const c = await connected(
-		await submit(app, cookie, "/mcp/oauth/continue", { consent: own.consent }),
-		third.verifier,
-		loopback,
-	);
-	expect(c.info.client_id).toMatch(/^mcp_cimd_[A-Za-z0-9_-]{32}$/);
-	expect(c.info.client_id).not.toBe(a.info.client_id);
-	expect(c.info.editing.status).toBe("pending");
-	expect((await connectionInfo(app, a.access_token)).editing.status).toBe("active");
-	const fourth = pkce("fourth");
-	const d = await connected(
-		await decide(app, cookie, authorizeQuery(clientId, fourth.challenge, { redirect_uri: loopback }), {
-			decision: "approve",
-			agent: "meta-bot",
-		}),
-		fourth.verifier,
-		loopback,
-	);
-	expect(d.info.client_id).not.toBe(c.info.client_id);
-	// A connection id is short enough for the posting instance and the longest idempotency key.
-	const posted = await mcp(app, d.access_token, 1, "tools/call", {
+	const firstInfo = await connectionInfo(app, firstTokens.access_token);
+	const secondInfo = await connectionInfo(app, secondTokens.access_token);
+	expect(secondInfo.editing.status).toBe("pending");
+	expect(firstInfo.editing.status).toBe("active");
+	for (const info of [firstInfo, secondInfo]) expect(info.client_id).toMatch(/^mcp_cimd_[A-Za-z0-9_-]{32}$/);
+	expect(secondInfo.client_id).not.toBe(firstInfo.client_id);
+	// The connection id is short enough for the posting instance and the longest idempotency key.
+	const posted = await mcp(app, secondTokens.access_token, 1, "tools/call", {
 		name: "post_message",
 		arguments: { topic: "plans", body: "From a metadata client", idempotencyKey: "k".repeat(156) },
 	});
 	expect(decode(Posted, await posted.json()).result.structuredContent).toEqual({
 		agent: "meta-bot",
-		instance: `extension:mcp:${d.info.client_id}`,
+		instance: `extension:mcp:${secondInfo.client_id}`,
 	});
+	// The client is recorded under each connection, so editing labels and the continue page can name it.
+	const recorded = decode(
+		Schema.Array(Schema.Struct({ payload: Schema.String })),
+		await fixture.sql(`SELECT payload FROM example_mcp_oauth WHERE kind='client' AND id='${secondInfo.client_id}'`),
+	);
+	expect(recorded.map((row) => decode(Schema.fromJsonString(Schema.Unknown), row.payload))).toEqual([
+		{ client_name: "Metadata Client", redirect_uris: ["https://client.test/callback"], client_url: clientId },
+	]);
 
 	// A connection id is not a client_id anyone can present.
-	expect(await refused(await consent(app, cookie, authorizeQuery(a.info.client_id, second.challenge)))).toBe(
+	expect(await refused(await consent(app, cookie, authorizeQuery(secondInfo.client_id, second.challenge)))).toBe(
 		"client_id is not registered with this board.",
 	);
-	const refresh = { grant_type: "refresh_token", refresh_token: c.refresh_token };
-	expect((await token(app, { ...refresh, client_id: c.info.client_id })).status).toBe(400);
+	const refresh = { grant_type: "refresh_token", refresh_token: secondTokens.refresh_token };
+	expect((await token(app, { ...refresh, client_id: secondInfo.client_id })).status).toBe(400);
 	expect((await token(app, { ...refresh, client_id: `${host.base}/other.json` })).status).toBe(400);
 	expect((await token(app, { ...refresh, client_id: clientId })).status).toBe(200);
 }, 60000);
