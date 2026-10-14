@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: deploy-signin
@@ -18,30 +19,37 @@ concurrency:
 
 jobs:
   token:
-    name: Check deploy token
+    name: Check deploy token and commit
     # Push events only: never deploy a pull request's code with production credentials.
     if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      present: ${{ steps.check.outputs.present }}
+      deploy: ${{ steps.check.outputs.deploy }}
     steps:
-      # A job-level if cannot read secrets, so this step reports only whether the secret is set.
+      # A job-level if cannot read secrets, so this step reports only whether to deploy. A re-run of an older
+      # Signin run keeps its old commit, so only the newest master run deploys; anything else would roll back.
       - id: check
         env:
           TOKEN: ${{ secrets.FLY_SIGNIN_API_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          if [ -n "$TOKEN" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
+          newest=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/signin.yml/runs?branch=master&event=push&per_page=1" --jq '.workflow_runs[0].head_sha')
+          if [ -z "$TOKEN" ]; then
             echo "::notice::FLY_SIGNIN_API_TOKEN not set; skipping deploy (see packages/signin/docs/README.md)"
-            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          elif [ "$newest" != "$HEAD_SHA" ]; then
+            echo "::notice::A newer Signin run exists for $newest; not deploying $HEAD_SHA"
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
           fi
 
   deploy:
     name: Deploy sign-in issuer
     needs: token
-    if: needs.token.outputs.present == 'true'
+    if: needs.token.outputs.deploy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:

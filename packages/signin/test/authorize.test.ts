@@ -194,7 +194,7 @@ it(
 			postConsent(h, cookie, { csrf, decision: "continue" }, "null"),
 			postConsent(h, cookie, { csrf, decision: "continue" }, "https://board.boards.chirp.wiki"),
 			postConsent(h, cookie, { decision: "continue" }),
-			postConsent(h, cookie, { csrf: `${csrf.slice(0, -1)}A`, decision: "continue" }),
+			postConsent(h, cookie, { csrf: `${csrf.slice(0, -1)}${csrf.endsWith("A") ? "Q" : "A"}`, decision: "continue" }),
 			postConsent(h, undefined, { csrf, decision: "continue" }),
 		]);
 		expect(refusals.map((response) => response.status)).toEqual([403, 403, 403, 403, 403, 400]);

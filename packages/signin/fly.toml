@@ -5,7 +5,8 @@ primary_region = "sjc"
 dockerfile = "Dockerfile"
 
 [deploy]
-strategy = "immediate"
+# Rolling updates the one machine in place and waits for /health, so a broken release fails the deploy.
+strategy = "rolling"
 
 [env]
 SIGNIN_ISSUER = "https://auth.chirp.wiki"
