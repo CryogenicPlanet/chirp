@@ -15,12 +15,15 @@ export interface MessageQuery {
 	readonly topic?: string;
 	readonly recursive?: boolean;
 	readonly limit: number;
-	readonly exclude?: string;
+	/** One instance, or at most 64, whose posts are omitted before the page is limited. */
+	readonly exclude?: string | ReadonlyArray<string>;
 	readonly newest?: boolean;
 	readonly tag?: string;
 	readonly agent?: string;
 	readonly q?: string;
 	readonly mentions?: ReadonlyArray<string>;
+	/** When set and both topic and mentions are given, a message must match both instead of either. */
+	readonly all?: boolean;
 }
 /**
  * Names a post made without a signed-in caller, such as one relayed from an MCP client.
