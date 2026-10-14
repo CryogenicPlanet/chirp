@@ -242,6 +242,7 @@ const familiesOf = (...values: ReadonlyArray<string | null | undefined>) => [
 		),
 	),
 ];
+const storedFamilies = (...values: ReadonlyArray<string | null | undefined>) => familiesOf(...values).join(" ") || null;
 /** The subscription's full delivery predicate: not this connection's grant posts, and inside its topic filter. */
 const matches = (topic: string | null, subtopics: boolean, families: ReadonlyArray<string>, item: Message) =>
 	!families.includes(item.instance) && within(topic, subtopics, item.topic);
@@ -348,6 +349,14 @@ export const installEvents = (api: Api, origin: string) =>
 				mysql: () => "ALTER TABLE example_mcp_events ADD COLUMN grant_family VARCHAR(64)",
 			}),
 			{ skipIfColumnExists: { table: "example_mcp_events", column: "grant_family" } },
+		);
+		yield* api.migrate(
+			"event_grant_families",
+			on(sql, {
+				sqlite: () => "UPDATE example_mcp_events SET grant_family=grant_family WHERE 0",
+				pg: () => "ALTER TABLE example_mcp_events ALTER COLUMN grant_family TYPE TEXT",
+				mysql: () => "ALTER TABLE example_mcp_events MODIFY grant_family LONGTEXT",
+			}),
 		);
 		const rows = (ctx: Store, clientId?: string) =>
 			ctx.read(() =>
@@ -563,7 +572,7 @@ export const installEvents = (api: Api, origin: string) =>
 								since,
 								newest: true,
 								limit: replayScan,
-								exclude: instance,
+								exclude: [instance, ...families],
 								...selection(name, agent, topic, subtopics),
 							});
 							const matched = window.items.filter((item) => matches(topic, subtopics, families, item));
@@ -581,7 +590,7 @@ export const installEvents = (api: Api, origin: string) =>
 										since: from,
 										before: oldest.seq,
 										limit: replayScan,
-										exclude: instance,
+										exclude: [instance, ...families],
 										...(name === mentionEvent
 											? {
 													mentions: [`@${agent}`, "@here"],
@@ -626,7 +635,7 @@ export const installEvents = (api: Api, origin: string) =>
 							const previous = rotating ? existing.secret : existing.previous_secret;
 							const previousUntil = rotating ? now + secretOverlap : existing.previous_secret_until;
 							const resetRetries = existing.agent !== agent ? 0 : existing.attempts;
-							const storedFamily = existing.grant_family ?? families[0] ?? null;
+							const storedFamily = storedFamilies(existing.grant_family, ...families);
 							yield* sql`UPDATE example_mcp_events SET agent=${agent},previous_secret=${previous},previous_secret_until=${previousUntil},secret=${input.delivery.secret},refresh_before=${refreshBefore},verified_at=${verifiedAt},attempts=${resetRetries},next_attempt=0,grant_family=${storedFamily} WHERE id=${id}`;
 							return { position: existing.position, truncated: false };
 						}
@@ -639,7 +648,7 @@ export const installEvents = (api: Api, origin: string) =>
 							Effect.flatMap(decodeCount),
 						);
 						if (boardCount >= perBoard) return { limit: perBoard };
-						yield* sql`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,previous_secret_until,refresh_before,verified_at,position,attempts,next_attempt,last_error,event_name,topic,subtopics,grant_family) VALUES(${id},${caller.clientId},${agent},${instance},${target.href},${input.delivery.secret},NULL,NULL,${refreshBefore},${verifiedAt},${start.position},0,0,NULL,${name},${topic},${subtopics ? 1 : 0},${families[0] ?? null})`;
+						yield* sql`INSERT INTO example_mcp_events(id,client_id,agent,instance,url,secret,previous_secret,previous_secret_until,refresh_before,verified_at,position,attempts,next_attempt,last_error,event_name,topic,subtopics,grant_family) VALUES(${id},${caller.clientId},${agent},${instance},${target.href},${input.delivery.secret},NULL,NULL,${refreshBefore},${verifiedAt},${start.position},0,0,NULL,${name},${topic},${subtopics ? 1 : 0},${storedFamilies(...families)})`;
 						return start;
 					}),
 				);
@@ -769,18 +778,19 @@ export const installEvents = (api: Api, origin: string) =>
 					return { wake: Infinity, backlog: false };
 				}
 				// After an expired live() and a refresh before the DELETE, a re-read repeats only delivered ids; a first-time match has none.
+				const held = yield* grantFamilies(ctx, row.client_id, row.agent);
+				const families = familiesOf(row.grant_family, ...held);
+				const stored = storedFamilies(row.grant_family, ...held);
+				if (stored !== null && stored !== row.grant_family)
+					yield* ctx.mutate(
+						ctx.db`UPDATE example_mcp_events SET grant_family=${stored} WHERE id=${row.id} AND agent=${row.agent} AND position=${row.position}`,
+					);
 				const page = yield* ctx.messages.query({
 					since: row.position,
 					...selection(row.event_name, row.agent, row.topic, row.subtopics === 1),
-					exclude: row.instance,
+					exclude: [row.instance, ...families],
 					limit: 16,
 				});
-				const held = page.items.length === 0 ? [] : yield* grantFamilies(ctx, row.client_id, row.agent);
-				const families = familiesOf(row.grant_family, ...held);
-				if (row.grant_family === null && held[0] !== undefined)
-					yield* ctx.mutate(
-						ctx.db`UPDATE example_mcp_events SET grant_family=${held[0]} WHERE id=${row.id} AND agent=${row.agent} AND position=${row.position}`,
-					);
 				let position = row.position;
 				let attempts = row.attempts;
 				for (const message of page.items.filter((item) => matches(row.topic, row.subtopics === 1, families, item))) {

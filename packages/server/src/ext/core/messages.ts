@@ -183,6 +183,8 @@ export const makeMessages = (
 				const targets = input.mentions ?? [];
 				if (targets.length > 32 || targets.some((target) => !target.startsWith("@") || !validTopic(target)))
 					return yield* new KernelError({ code: "query_invalid" });
+				const excluded = typeof input.exclude === "string" ? [input.exclude] : (input.exclude ?? []);
+				if (excluded.length > 32) return yield* new KernelError({ code: "query_invalid" });
 				const topicMatch = sql`(topic=${input.topic ?? null} OR ${input.recursive ? 1 : 0}=1 AND ${isDescendant(sql, sql("topic"), input.topic ?? "")})`;
 				const mentions = sql`CASE WHEN mention_source.updated_seq>${ceiling} THEN mention_source.previous_mentions ELSE mention_source.mentions END`;
 				const mentionMatch =
@@ -207,7 +209,7 @@ export const makeMessages = (
 					yield* sql`WITH visible_messages AS (${publishedMessages(sql, ceiling)}) SELECT * FROM visible_messages WHERE deleted_at IS NULL AND seq>${since} AND seq<=${ceiling}
    AND (${before === undefined ? 1 : 0}=1 OR seq<${before ?? 0})
    AND ${addressed}
-   AND (${nullable(sql, input.exclude ?? null)} IS NULL OR instance<>${input.exclude ?? null})
+   AND ${excluded.length === 0 ? sql`1=1` : sql`instance NOT IN ${sql.in(excluded)}`}
    AND (${nullable(sql, input.agent ?? null)} IS NULL OR agent=${input.agent ?? null})
    AND (${nullable(sql, input.tag ?? null)} IS NULL OR ${jsonArrayHas(sql, sql("visible_messages.tags"), input.tag ?? null)})
    AND ${bodyMatch}

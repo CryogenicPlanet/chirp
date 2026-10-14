@@ -221,6 +221,22 @@ const revokeGrant = async (app: App, cookie: string, agent: string) => {
 	expect(revoked.status).toBe(200);
 };
 
+/** Approves a pending `request_editing` grant the way the human does on boot's page. */
+const approveEditing = async (app: App, approveUrl: string) => {
+	const id = new URL(approveUrl).pathname.split("/").at(-1) ?? "";
+	const scopes = ["read", "write"];
+	const decided = await fetch(`${app.url}/_boot/enroll/${id}/approve`, {
+		method: "POST",
+		headers: {
+			origin: "https://comms.test",
+			"content-type": "application/json",
+			[assertionHeader]: await app.assertion({ id, decision: "approve", scopes, long_lived: false }),
+		},
+		body: JSON.stringify({ decision: "approve", scopes, long_lived: false }),
+	});
+	expect(decided.status, await decided.clone().text()).toBe(200);
+};
+
 /** A webhook endpoint that echoes verification challenges and records each delivered event with its subscription. */
 const receiver = async (test: TestContext) => {
 	const received: Array<{ readonly headers: Readonly<Record<string, string | string[] | undefined>>; body: string }> =
@@ -445,6 +461,74 @@ it("does not replay posts from a replaced editing grant", async (test) => {
 	await post("plans", "@here after replacement");
 	await eventually(() => hook.texts(mentions.id).includes("@here after replacement"));
 	expect(hook.texts(mentions.id)).toEqual(["@here from another connection", "@here after replacement"]);
+}, 120000);
+
+it("persists every retained grant family on the subscription after the grant row changes identity", async (test) => {
+	const { fixture, app, cookie, post } = await installed(test);
+	const kickoff = await post("plans", "kickoff");
+	const granted = await authorize(app, cookie, "Family client", "family-bot", true);
+	const other = await authorize(app, cookie, "Other family client", "other-family", false);
+	const hook = await receiver(test);
+	const first = decode(
+		Schema.Struct({ result: Schema.Struct({ structuredContent: Schema.Struct({ instance: Schema.String }) }) }),
+		await granted.post("plans", "@here from the first family", "fam-1"),
+	).result.structuredContent.instance;
+	expect(first).toMatch(/^f_/);
+	await revokeGrant(app, cookie, "family-bot");
+	const requested = decode(
+		Schema.Struct({
+			result: Schema.Struct({
+				structuredContent: Schema.Struct({ status: Schema.String, approve_url: Schema.String }),
+			}),
+		}),
+		await granted.edit("request_editing"),
+	).result.structuredContent;
+	expect(requested.status).toBe("pending");
+	await approveEditing(app, requested.approve_url);
+	expect(await granted.edit("request_editing")).toMatchObject({
+		result: { structuredContent: { status: "active" } },
+	});
+	const second = decode(
+		Schema.Struct({ result: Schema.Struct({ structuredContent: Schema.Struct({ instance: Schema.String }) }) }),
+		await granted.post("plans", "@here from the second family", "fam-2"),
+	).result.structuredContent.instance;
+	expect(second).toMatch(/^f_/);
+	expect(second).not.toBe(first);
+	await other.post("plans", "@here from another connection", "fam-other");
+	const mentions = await granted.subscribe(hook.url, "mention.created", {}, String(kickoff.seq));
+	const [row] = decode(
+		Schema.Array(Schema.Struct({ grant_family: Schema.NullOr(Schema.String) })),
+		await fixture.sql(`SELECT grant_family FROM example_mcp_events WHERE id='${mentions.id}'`),
+	);
+	expect(row?.grant_family?.split(" ").sort()).toEqual([first, second].sort());
+	await fixture.sql(
+		`UPDATE example_mcp_grants SET agent='renamed-bot',family=NULL,families=NULL WHERE client_id='${granted.clientId}'`,
+	);
+	await post("plans", "@here after the grant identity changed");
+	await eventually(() => hook.texts(mentions.id).includes("@here after the grant identity changed"));
+	expect(hook.texts(mentions.id)).toEqual(["@here from another connection", "@here after the grant identity changed"]);
+}, 120000);
+
+it("does not let own-family posts fill the replay window past an older deliverable", async (test) => {
+	const { app, cookie, post } = await installed(test, (source) =>
+		source.replace("const replayScan = 200;", "const replayScan = 4;"),
+	);
+	const granted = await authorize(app, cookie, "Window family client", "window-fam", true);
+	const other = await authorize(app, cookie, "Window other client", "window-other", false);
+	const hook = await receiver(test);
+	await post("watched", "setup");
+	const started = await granted.subscribe(hook.url, "mention.created", { topic: "watched" });
+	await granted.unsubscribe(hook.url, "mention.created", { topic: "watched" });
+	await other.post("watched", "@window-fam older deliverable", "win-older");
+	for (let n = 1; n <= 5; n++)
+		expect(await granted.post("watched", `@here own ${n}`, `win-own-${n}`)).toMatchObject({
+			result: { structuredContent: { instance: expect.stringMatching(/^f_/) } },
+		});
+	expect(await granted.subscribe(hook.url, "mention.created", { topic: "watched" }, started.cursor)).toMatchObject({
+		truncated: false,
+	});
+	await eventually(() => hook.texts(started.id).includes("@window-fam older deliverable"));
+	expect(hook.texts(started.id)).toEqual(["@window-fam older deliverable"]);
 }, 120000);
 
 it("narrows mention events to a topic while the whole-board subscription keeps its id", async (test) => {

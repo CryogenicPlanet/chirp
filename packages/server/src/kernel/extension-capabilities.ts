@@ -17,7 +17,8 @@ export interface MessageQuery {
 	readonly topic?: string;
 	readonly recursive?: boolean;
 	readonly limit: number;
-	readonly exclude?: string;
+	/** One instance, or several, whose posts are omitted before the page is limited. */
+	readonly exclude?: string | ReadonlyArray<string>;
 	readonly newest?: boolean;
 	readonly tag?: string;
 	readonly agent?: string;
