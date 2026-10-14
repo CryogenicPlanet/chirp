@@ -865,6 +865,26 @@ it("reports truncated for a topic mention replay only when it skipped a matching
 	});
 }, 120000);
 
+it("reports truncated when a deliverable match lies past a full read of the gap", async (test) => {
+	const { app, cookie, post } = await installed(test, (source) =>
+		source.replace("const replayScan = 200;", "const replayScan = 4;"),
+	);
+	const mentioned = await authorize(app, cookie, "Deep gap client", "deep-bot", false);
+	const hook = await receiver(test);
+	await post("watched", "setup");
+	const started = await mentioned.subscribe(hook.url, "mention.created", { topic: "watched" });
+	await mentioned.unsubscribe(hook.url, "mention.created", { topic: "watched" });
+	// A full page of mentions elsewhere, then a full read of the watched topic without a mention, then the one
+	// deliverable mention, then a full newest window elsewhere: the match sits just past what the gap read reaches.
+	for (let n = 1; n <= 4; n++) await post("elsewhere", `@deep-bot early ${n}`);
+	for (let n = 1; n <= 4; n++) await post("watched", `chatter ${n}`);
+	await post("watched", "@deep-bot in the gap");
+	for (let n = 1; n <= 4; n++) await post("elsewhere", `@deep-bot late ${n}`);
+	expect(await mentioned.subscribe(hook.url, "mention.created", { topic: "watched" }, started.cursor)).toMatchObject({
+		truncated: true,
+	});
+}, 120000);
+
 it("keeps a full 200-candidate replay look-back within the message query limit", async (test) => {
 	const { app, cookie, post } = await installed(test);
 	const mentioned = await authorize(app, cookie, "Bound replay client", "bound-bot", false);

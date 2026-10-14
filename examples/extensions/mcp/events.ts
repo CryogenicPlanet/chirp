@@ -768,7 +768,7 @@ export const installEvents = (api: Api, origin: string) =>
 					);
 					return { wake: Infinity, backlog: false };
 				}
-				// An edit re-read after live() failed on expiry and a refresh beat the DELETE keeps its event id; receivers dedupe it.
+				// After an expired live() and a refresh before the DELETE, a re-read repeats only delivered ids; a first-time match has none.
 				const page = yield* ctx.messages.query({
 					since: row.position,
 					...selection(row.event_name, row.agent, row.topic, row.subtopics === 1),
