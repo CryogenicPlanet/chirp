@@ -125,7 +125,15 @@ export function AccountIdentities() {
 			<p className="mt-3 text-xs text-muted-foreground" role="status">
 				{message}
 			</p>
-			{(error ?? loadError) && <Alert className="mt-4">{(error ?? loadError)?.message}</Alert>}
+			{(error ?? loadError) && (
+				<Alert className="mt-4">
+					{/* Boot's own words where this page has none; the code stays for debugging. */}
+					{(error ?? loadError)?.detail ?? (error ?? loadError)?.message}
+					{(error ?? loadError)?.code !== undefined && (
+						<span className="text-subtle"> ({(error ?? loadError)?.code})</span>
+					)}
+				</Alert>
+			)}
 		</section>
 	);
 }

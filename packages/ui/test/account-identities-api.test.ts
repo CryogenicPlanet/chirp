@@ -70,3 +70,35 @@ it("confirms the pending identity named by the callback, not a newer one", () =>
 	expect(pendingForHref(pending, "https://board.test/@rahul")).toEqual(newer);
 	expect(pendingForHref(pending, "https://board.test/@rahul?link=missing")).toBeUndefined();
 });
+
+it("carries boot's message, hint and code when linking is refused with a code this page has no words for", async () => {
+	const assign = vi.fn();
+	vi.stubGlobal("window", { location: { origin: "https://board.test", assign } });
+	const refuse = (status: number, error: unknown) =>
+		vi.stubGlobal("fetch", async () => Response.json({ error }, { status }));
+	const failure = async () => {
+		const result = await Effect.runPromise(
+			startLink("github").pipe(Effect.provideService(FetchHttpClient.Fetch, globalThis.fetch), Effect.result),
+		);
+		if (result._tag !== "Failure") throw new Error("Linking was not refused");
+		return result.failure;
+	};
+	refuse(503, {
+		code: "oidc_unavailable",
+		message: "Boot authentication is unavailable.",
+		hint: "The sign-in service did not answer correctly. Sign in with your passkey, or try again later.",
+		retriable: true,
+	});
+	expect(await failure()).toMatchObject({
+		status: 503,
+		code: "oidc_unavailable",
+		detail:
+			"Boot authentication is unavailable. The sign-in service did not answer correctly. Sign in with your passkey, or try again later.",
+	});
+	// A code this page already explains keeps its own wording.
+	refuse(401, { code: "session_invalid", message: "Authentication request refused.", hint: "Use /auth/login." });
+	const expired = await failure();
+	expect(expired).toMatchObject({ code: "session_invalid", message: expect.stringContaining("Sign in again") });
+	expect(expired).not.toHaveProperty("detail");
+	expect(assign).not.toHaveBeenCalled();
+});

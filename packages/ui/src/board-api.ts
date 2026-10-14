@@ -8,6 +8,10 @@ export type PendingMessage = { readonly topic: string; readonly body: string; re
 export class BoardError extends Schema.TaggedError<BoardError>()("BoardError", {
 	status: Schema.Int,
 	message: Schema.String,
+	/** Boot's refusal code, kept for debugging. */
+	code: Schema.optionalKey(Schema.String),
+	/** Boot's own message and hint, for a refusal this UI has no wording of its own for. */
+	detail: Schema.optionalKey(Schema.String),
 }) {}
 export const boardFailure = <E>(cause: Cause.Cause<E>): BoardError => {
 	const error = Cause.squash(cause);
