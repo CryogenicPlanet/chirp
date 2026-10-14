@@ -353,10 +353,11 @@ export const installEvents = (api: Api, origin: string) =>
 		const verifications = yield* Ref.make<ReadonlyMap<string, ReadonlyArray<number>>>(new Map());
 		// How far each subscription has read in this generation. Kept in memory so an idle subscription need not write
 		// its position on every board request, yet never reads a message twice: an edit or topic move keeps a message's
-		// sequence number, and a second read would deliver it as new. Each entry names the row incarnation it was read
-		// for, and only drains write it, one cycle after another, so a re-created row never inherits its predecessor's.
+		// sequence number, and a second read would deliver it as new. Each entry names the row incarnation and posting
+		// name it was read for, and only drains write it, one cycle after another, so neither a re-created row nor one
+		// re-consented under another name inherits a read point taken for something else.
 		const scanned = yield* Ref.make<
-			ReadonlyMap<string, { readonly incarnation: string | null; readonly through: number }>
+			ReadonlyMap<string, { readonly incarnation: string | null; readonly agent: string; readonly through: number }>
 		>(new Map());
 		// Consecutive drain failures per subscription in this generation, for its back-off.
 		const failures = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
@@ -741,10 +742,14 @@ export const installEvents = (api: Api, origin: string) =>
 					);
 					return { wake: Infinity, backlog: false };
 				}
-				// A read point counts only for the row incarnation it was made for; a re-created row starts at its own position.
+				// A read point counts only for the row incarnation and posting name it was made for; otherwise the row starts at
+				// its own position, which delivery never moves past a scan made for another name.
 				const mark = (yield* Ref.get(scanned)).get(row.id);
 				const page = yield* ctx.messages.query({
-					since: Math.max(row.position, mark !== undefined && mark.incarnation === row.incarnation ? mark.through : 0),
+					since: Math.max(
+						row.position,
+						mark !== undefined && mark.incarnation === row.incarnation && mark.agent === row.agent ? mark.through : 0,
+					),
 					...selection(row.event_name, row.agent, row.topic, row.subtopics === 1),
 					exclude: row.instance,
 					limit: 16,
@@ -784,10 +789,10 @@ export const installEvents = (api: Api, origin: string) =>
 						yield* checkpoint(ctx, row.id, row.agent, position, page.cursor, 0, 0, null);
 					}
 				}
-				// Remember how far this page read. A drain of a replaced row ends in an earlier cycle than the first drain of
-				// its replacement, which ignores this entry because the incarnation differs.
+				// Remember how far this page read. A drain of a replaced or re-consented row ends in an earlier cycle than the
+				// next drain of the row as it is now, which ignores this entry because the incarnation or name differs.
 				yield* Ref.update(scanned, (map) =>
-					new Map(map).set(row.id, { incarnation: row.incarnation, through: page.cursor }),
+					new Map(map).set(row.id, { incarnation: row.incarnation, agent: row.agent, through: page.cursor }),
 				);
 				return { wake: now + 60_000, backlog: page.items.length === 16 };
 			});
