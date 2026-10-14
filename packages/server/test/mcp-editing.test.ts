@@ -622,8 +622,12 @@ it("labels each client sharing a connection by its User-Agent and gives each its
 	expect((await as(unrecognised)("connection_info")).ok).toMatchObject({ editing: { status: "active", agent: "dot" } });
 	expect((await as(codex)("connection_info")).ok).toMatchObject({ editing: { status: "none" } });
 	const requested = decode(
-		Schema.Struct({ status: Schema.Literal("pending"), approve_url: Schema.String }),
+		Schema.Struct({ status: Schema.Literal("pending"), approve_url: Schema.String, message: Schema.String }),
 		(await as(codex)("request_editing")).ok,
+	);
+	// The user is told the label is the client's claim, not a boundary between the clients of a connection.
+	expect(requested.message).toContain(
+		"labelled codex. The label is reported by the client; any client of this connection can use this grant.",
 	);
 	await decide(app, requested.approve_url, "approve", ["read", "write"]);
 	expect((await as(codex)("connection_info")).ok).toMatchObject({ editing: { status: "active", agent: "dot" } });
@@ -746,4 +750,32 @@ it("moves a grant recorded per connection to the surface named after its client,
 		label: "codex",
 		editing: { status: "none" },
 	});
+}, 120000);
+
+it("approves at consent the label a Claude-named client's calls carry", async (test) => {
+	const { app, cookie } = await installed(test, false);
+	const client = await register(app, "Claude Desktop");
+	const step = await editingStep(
+		app,
+		await form(app, cookie, "/mcp/oauth/authorize", {
+			...client.query,
+			decision: "approve",
+			agent: "desk-bot",
+			editing: "1",
+		}),
+	);
+	await decide(app, step.approval.href, "approve", ["read", "write"]);
+	const access = await exchange(
+		app,
+		client,
+		(await form(app, cookie, "/mcp/oauth/continue", { consent: step.consent })).headers.get("location"),
+	);
+	// Its calls say Claude-User, so they carry claude, and find the grant approved at consent.
+	const info = (await mcp(app, access, "Claude-User/1.0").tool("connection_info")).ok;
+	expect(info).toMatchObject({
+		label: "claude",
+		label_note: expect.stringContaining("any client of this connection can use this grant"),
+		editing: { status: "active", agent: "desk-bot" },
+	});
+	expect((await held(app, cookie)).map((item) => `${item.agent}@${item.label}`)).toEqual(["desk-bot@claude"]);
 }, 120000);

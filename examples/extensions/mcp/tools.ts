@@ -2,7 +2,15 @@ import { Effect, Option, Schema } from "effect";
 import { HttpServerRequest } from "effect/unstable/http";
 import { policy } from "@comms/protocol/errors";
 import type { ManagedRequestContext } from "../../../packages/server/src/kernel/extension-api.ts";
-import { asAgent, type BoardReply, type Editing, editingState, grantEnded, storedEditing } from "./grants.ts";
+import {
+	asAgent,
+	type BoardReply,
+	type Editing,
+	editingState,
+	grantEnded,
+	labelNote,
+	storedEditing,
+} from "./grants.ts";
 
 const SearchInput = Schema.Struct({
 	query: Schema.String,
@@ -194,6 +202,7 @@ export const tools = Object.freeze([
 					description:
 						"This client's label, from its User-Agent: its posts show as posting_name@label, and it holds its own editing grant.",
 				},
+				label_note: { type: "string" },
 				scopes: { type: "array", items: { type: "string" } },
 				editing: {
 					type: "object",
@@ -575,6 +584,7 @@ export const callTool = (
 				approved_by: caller.subject,
 				posting_name: caller.agent ?? null,
 				label: caller.surface,
+				label_note: labelNote,
 				scopes: caller.scopes,
 				editing: {
 					status: editing.status,

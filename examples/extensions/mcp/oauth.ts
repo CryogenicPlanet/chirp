@@ -7,7 +7,7 @@ import { FetchHttpClient, HttpClientRequest } from "effect/unstable/http";
 import { SqlClient } from "effect/unstable/sql";
 import type { Api, ManagedRequestContext } from "../../../packages/server/src/kernel/extension-api.ts";
 import { makeAddressPolicy } from "./addresses.ts";
-import { type Editing, editingState, requestEditing, storedEditing } from "./grants.ts";
+import { type Editing, editingState, labelNote, requestEditing, storedEditing } from "./grants.ts";
 
 /** Fetch client metadata over http:// and from private addresses. Only for local development and tests, never on a public board. */
 const allowLocalMetadata = false;
@@ -228,20 +228,31 @@ const client = (ctx: Context, clientId: string) =>
 				: Effect.succeed<typeof Client.Type | undefined>(undefined),
 		),
 	);
-/**
- * A client's registered name as a short slug: the label of a client whose User-Agent this server does not recognise,
- * and of a grant requested at consent, where only the browser's User-Agent is seen.
- */
-export const nameLabel = (clientName: string) =>
+/** A client's registered name as a short slug. */
+const nameLabel = (clientName: string) =>
 	clientName
 		.toLowerCase()
 		.replace(/[^a-z0-9._-]+/g, "-")
 		.replace(/^[^a-z0-9]+/, "")
 		.slice(0, 32)
 		.replace(/[^a-z0-9]+$/, "") || "mcp";
+const within = (host: string, domain: string) => host === domain || host.endsWith(`.${domain}`);
+/**
+ * The label a client's own calls carry, worked out from the client alone: the host of its metadata document, then a
+ * known name, then its name as a slug. Consent sees only the browser, so this is how the grant approved there is the
+ * one the client's calls find; it also labels a client whose User-Agent this server does not recognise.
+ */
+export const clientSurface = (registered: typeof Client.Type | undefined) => {
+	const host = URL.parse(registered?.client_url ?? "")?.hostname ?? "";
+	const name = registered?.client_name ?? "mcp";
+	if (within(host, "claude.ai")) return "claude";
+	if (within(host, "chatgpt.com") || within(host, "openai.com")) return "chatgpt";
+	if (/^claude/i.test(name)) return "claude";
+	if (/^chatgpt/i.test(name)) return "chatgpt";
+	return nameLabel(name);
+};
 /** The label of the registered client behind a connection. */
-export const clientLabel = (ctx: Context, clientId: string) =>
-	client(ctx, clientId).pipe(Effect.map((registered) => nameLabel(registered?.client_name ?? "mcp")));
+export const clientLabel = (ctx: Context, clientId: string) => client(ctx, clientId).pipe(Effect.map(clientSurface));
 /**
  * Which client is calling, as the label after its posting name (`dot@codex`). One connection can serve several:
  * ChatGPT and Codex share ChatGPT's connector, OAuth client and token, and only the User-Agent tells them apart. The
@@ -713,8 +724,9 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 						// One grant per connection and surface: this human's live grant under this name is kept and its waiting
 						// request shown again, because replacing either would leave a grant boot honours that nothing tracks.
 						// Another human's or another name's grant is never reused; a new request replaces it. Consent sees the
-						// browser, not the client, so the grant is for the surface named after the client.
-						const holder = { clientId, surface: nameLabel(checked.clientName), subject: ctx.identity.agent, agent };
+						// browser, not the client, so the grant is for the label the client's own calls will carry.
+						const surface = clientSurface(checked.client);
+						const holder = { clientId, surface, subject: ctx.identity.agent, agent };
 						const current = yield* editingState(ctx, holder, { refresh: true }).pipe(
 							Effect.catchTag("KernelError", () => storedEditing(ctx, holder)),
 						);
@@ -749,7 +761,7 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 							// Boot's page asks the human to match the code the extension showed, so show it before sending them.
 							return page(
 								"Approve editing",
-								`<h1>Approve editing for ${escape(checked.clientName)}</h1><p>Your request code is <code>${escape(requested.code ?? "")}</code>. On the next page, check that boot shows the same code, then approve with your passkey. Tick fs there only if ${escape(checked.clientName)} should publish pages and edit app source.</p><p><a href="${escape(approveLink(requested.approve_url, token))}">Continue to approval</a></p><form method="post" action="/mcp/oauth/continue"><input type="hidden" name="consent" value="${escape(token)}"><button>Skip editing and finish connecting</button></form>`,
+								`<h1>Approve editing for ${escape(checked.clientName)}</h1><p>Your request code is <code>${escape(requested.code ?? "")}</code>. On the next page, check that boot shows the same code, then approve with your passkey. Tick fs there only if ${escape(checked.clientName)} should publish pages and edit app source.</p><p>The grant is labelled <strong>${escape(surface)}</strong>, so its edits show as ${escape(agent)}@${escape(surface)}. ${escape(labelNote)}</p><p><a href="${escape(approveLink(requested.approve_url, token))}">Continue to approval</a></p><form method="post" action="/mcp/oauth/continue"><input type="hidden" name="consent" value="${escape(token)}"><button>Skip editing and finish connecting</button></form>`,
 								`'self' ${new URL(checked.redirectUri).origin}`,
 							);
 						}

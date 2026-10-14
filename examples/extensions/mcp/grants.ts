@@ -49,6 +49,11 @@ const scopesOf = (value: string) =>
  * acts as. A grant is used, collected and reported only for the identity it was requested for, so a client
  * re-authorized by another human or under another posting name never acts through an earlier approval.
  */
+/**
+ * Said wherever a grant is requested or reported. Every client of a connection holds its token and chooses its own
+ * User-Agent, so a grant per label splits approvals and attribution, not authority.
+ */
+export const labelNote = "The label is reported by the client; any client of this connection can use this grant.";
 export interface GrantHolder {
 	readonly clientId: string;
 	/** The label of the client calling, such as chatgpt or codex: each surface of a connection holds its own grant. */
@@ -95,8 +100,8 @@ export const installGrants = (api: Api) =>
 			{ skipIfColumnExists: { table: "example_mcp_grants", column: "families" } },
 		);
 		// Surfaces came later, and SQLite cannot change a primary key, so the table is rebuilt keyed by (client_id, surface)
-		// and renamed back. An earlier row takes the surface named after its client, the one consent requests for, as
-		// nameLabel gives it for ASCII words separated by single spaces, or mcp once the client is gone.
+		// and renamed back. An earlier row takes its client's name as a slug (as nameLabel gives it for ASCII words separated
+		// by single spaces, or mcp once the client is gone): for ChatGPT and Claude that is the label their calls carry.
 		yield* api.migrate(
 			"grant_surfaces",
 			on(sql, {

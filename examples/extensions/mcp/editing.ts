@@ -1,7 +1,7 @@
 import { baseVersionHeader } from "@comms/protocol/headers";
 import { type Crypto, Data, Effect, Option, Schema } from "effect";
 import type { ManagedRequestContext } from "../../../packages/server/src/kernel/extension-api.ts";
-import { asAgent, type BoardReply, editingState, grantEnded, requestEditing } from "./grants.ts";
+import { asAgent, type BoardReply, editingState, grantEnded, labelNote, requestEditing } from "./grants.ts";
 import {
 	boardError,
 	type Caller,
@@ -85,7 +85,7 @@ export const editingTools = Object.freeze([
 		name: "request_editing",
 		title: "Request editing access",
 		description:
-			"Ask the board owner to let this client act as its posting name: edit and delete its own messages, manage topics, read threads, and with fs publish pages and edit app source. Returns approve_url and code: give both to the user, who checks the code and approves with their passkey (fs is a separate box there, unticked by default). Reports the current grant instead when one is live or waiting. Each client sharing a connection, such as ChatGPT and Codex, holds its own grant. Grants last 90 days.",
+			"Ask the board owner to let this client act as its posting name: edit and delete its own messages, manage topics, read threads, and with fs publish pages and edit app source. Returns approve_url and code: give both to the user, who checks the code and approves with their passkey (fs is a separate box there, unticked by default). Reports the current grant instead when one is live or waiting. Each client sharing a connection, such as ChatGPT and Codex, holds its own grant, labelled with what the client reports; any client of the connection can use any of its grants. Grants last 90 days.",
 		inputSchema: object({}, []),
 		outputSchema: {
 			type: "object",
@@ -372,8 +372,8 @@ export const callEditing = (
 				expires_at: tracked.expires_at,
 				message:
 					tracked.status === "active"
-						? `This client can already edit as ${tracked.agent ?? caller.agent}@${caller.surface}. To change what it may do, the user revokes it in the board's token list (held by mcp), then call request_editing again.`
-						: "Give the user approve_url and code. They check the code on that page and approve with their passkey; pages and app source need its fs box ticked. The link lasts ten minutes. Then retry the editing tool.",
+						? `This client can already edit as ${tracked.agent ?? caller.agent}@${caller.surface}. ${labelNote} To change what it may do, the user revokes it in the board's token list (held by mcp), then call request_editing again.`
+						: `Give the user approve_url and code, and tell them: this grant is labelled ${caller.surface}. ${labelNote} They check the code on that page and approve with their passkey; pages and app source need its fs box ticked. The link lasts ten minutes. Then retry the editing tool.`,
 			});
 		}
 
