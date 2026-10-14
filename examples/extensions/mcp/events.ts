@@ -12,7 +12,7 @@ import type {
 	ManagedRequestContext,
 } from "../../../packages/server/src/kernel/extension-api.ts";
 import { makeAddressPolicy } from "./addresses.ts";
-import { familyList, storedFamilies } from "./grants.ts";
+import { connectionFamilies, familyList, storedFamilies } from "./grants.ts";
 import type { OAuthIdentity } from "./oauth.ts";
 import { messageUrl } from "./tools.ts";
 
@@ -663,15 +663,18 @@ export const installEvents = (api: Api, origin: string) =>
 					sql`SELECT COUNT(*) AS count FROM example_mcp_oauth WHERE client_id=${clientId} AND (kind='access' OR kind='refresh') AND expires_at>${now}`,
 			).pipe(Effect.map((total) => total > 0));
 
-		/** Families this connection has used, including ones kept after a replacement or posting-name change. */
+		/**
+		 * Families this connection has used on every client surface, including ones kept after a replacement or
+		 * posting-name change. Live families are reserved under the cap so a later surface's history cannot drop them.
+		 */
 		const grantFamilies = (ctx: Store, clientId: string) =>
 			ctx
 				.read(() =>
-					ctx.db`SELECT family,families FROM example_mcp_grants WHERE client_id=${clientId}`.pipe(
+					ctx.db`SELECT family,families FROM example_mcp_grants WHERE client_id=${clientId} ORDER BY created_at,surface`.pipe(
 						Effect.flatMap(Schema.decodeUnknownEffect(Family)),
 					),
 				)
-				.pipe(Effect.map((found) => familyList(found[0]?.families, found[0]?.family)));
+				.pipe(Effect.map((found) => connectionFamilies(found)));
 
 		const deliver = (row: typeof Row.Type, message: Message) =>
 			Effect.gen(function* () {

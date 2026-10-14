@@ -150,6 +150,10 @@ Shown: Each ChatGPT or Claude connection is its own agent family, so revoking on
 
 > yes let's build auth.chirp.wiki for github and google
 
+## 2026-10-13 — Naming each MCP client
+
+> i like dot@codex where the @ is ghe user agent
+
 ## 2026-10-13 — Where linked identities are stored
 
 Asked: How should boot store linked GitHub/Google identities?
