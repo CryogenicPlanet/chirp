@@ -60,10 +60,10 @@ There is no rotation tooling. Replacing the signing key invalidates ID tokens is
 
 ## Setting up auth.chirp.wiki
 
-Run these once, from the repository root, as the Fly account that owns `chirp-cloud` (org `rahul-tarak`).
+Run these once, from the repository root, as the Fly account that owns `chirp-cloud` (org `personal`).
 
-1. Create the app: `fly apps create chirp-signin --org rahul-tarak`.
-2. Stage the keys: `bun run --filter @comms/signin keygen | fly secrets import --stage --app chirp-signin`.
+1. Create the app: `fly apps create chirp-signin --org personal`.
+2. Stage the keys: `bun packages/signin/scripts/keygen.ts | fly secrets import --stage --app chirp-signin` (through `bun run --filter`, each line gains a package prefix that `fly secrets import` rejects).
 3. GitHub: in [Developer settings → OAuth Apps](https://github.com/settings/developers), create an OAuth app (not a GitHub App). Homepage URL `https://auth.chirp.wiki`, Authorization callback URL `https://auth.chirp.wiki/callback/github`, device flow off. Generate a client secret, then `fly secrets set --stage --app chirp-signin GITHUB_CLIENT_ID=… GITHUB_CLIENT_SECRET=…`. The app requests no scopes; it reads only the public profile.
 4. Google: in the [Google Auth Platform](https://console.cloud.google.com/auth/overview) for a project you own, configure the consent screen: app name `chirp`, a support email, authorized domain `chirp.wiki`, audience External, and data access scopes `openid` and `.../auth/userinfo.email`. Publish it to production so any Google account can sign in; these are non-sensitive scopes, so they need no scope verification review. Then under Clients create a Web application client with Authorized redirect URI `https://auth.chirp.wiki/callback/google` and no JavaScript origins, and `fly secrets set --stage --app chirp-signin GOOGLE_CLIENT_ID=… GOOGLE_CLIENT_SECRET=…`.
 5. Deploy once by hand: `fly deploy --config packages/signin/fly.toml --dockerfile packages/signin/Dockerfile --ignorefile packages/signin/Dockerfile.dockerignore --depot --ha=false`. Keep it to one machine: redeemed codes are tracked in that process.
