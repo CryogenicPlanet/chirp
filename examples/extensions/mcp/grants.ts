@@ -235,7 +235,7 @@ export const requestEditing = (
 				const current = yield* connectionRow(ctx, row.client_id);
 				if ((current?.request_id ?? null) !== (prior?.request_id ?? null)) return current;
 				if (current) yield* remember(ctx, current.client_id, current.agent, retained(current.families, current.family));
-				const families = current?.agent === holder.agent ? retained(current.families, current.family) : null;
+				const families = retained(current?.families, current?.family);
 				const next = { ...row, families };
 				yield* ctx.db`DELETE FROM example_mcp_grants WHERE client_id=${next.client_id}`;
 				yield* ctx.db`INSERT INTO example_mcp_grants(client_id,subject,request_id,approve_url,code,agent,family,families,scopes,status,expires_at,created_at,updated_at) VALUES(${next.client_id},${next.subject},${next.request_id},${next.approve_url},${next.code},${next.agent},${next.family},${next.families},${next.scopes},${next.status},${next.expires_at},${next.created_at},${next.updated_at})`;

@@ -561,65 +561,72 @@ export const installEvents = (api: Api, origin: string) =>
 				}
 				const verifiedAt = cached?.verified_at ?? now;
 				const subtopics = filter.value.recursive !== false;
-				const families = yield* grantFamilies(ctx, caller.clientId, agent);
+				let families = yield* grantFamilies(ctx, caller.clientId);
 				// A replay is bounded by the messages it would deliver, not by board sequence numbers, and is worked out only
 				// for a subscribe that creates the row. If the row vanishes before the mutation below anyway, the insert
 				// starts at the fence and reports truncated whenever the client was behind.
-				const start = !replaying
-					? { position: fence, truncated: since < fence }
-					: yield* Effect.gen(function* () {
-							const window = yield* ctx.messages.query({
-								since,
-								newest: true,
-								limit: replayScan,
-								exclude: [instance, ...families],
-								...selection(name, agent, topic, subtopics),
-							});
-							const matched = window.items.filter((item) => matches(topic, subtopics, families, item));
-							// Past the newest replayLimit matches it starts after the one just older. A full window of candidates
-							// starts at its oldest, and is truncated if an older match exists or older candidates went unexamined.
-							const over = matched.length > replayLimit ? matched[matched.length - replayLimit - 1] : undefined;
-							if (over !== undefined) return { position: over.seq, truncated: true };
-							const oldest = window.items.length === replayScan ? window.items[0] : undefined;
-							if (oldest === undefined) return { position: since, truncated: false };
-							// One existence page uses the subscription's delivery filters over the whole skipped range, so a
-							// topic mention past three broad candidate pages is still found without walking mention history.
-							const exists = (from: number) =>
-								ctx.messages
-									.query({
-										since: from,
-										before: oldest.seq,
-										limit: replayScan,
-										exclude: [instance, ...families],
-										...(name === mentionEvent
-											? {
-													mentions: [`@${agent}`, "@here"],
-													...(topic === null ? {} : { topic, recursive: subtopics, all: true }),
-												}
-											: topic === null
-												? { mentions: [`@${agent}`, "@here"] }
-												: { topic, recursive: subtopics }),
-									})
-									.pipe(
-										Effect.map((page) => ({
-											hit: page.items.some((item) => matches(topic, subtopics, families, item)),
-											last: page.items.at(-1),
-											full: page.items.length === replayScan,
-										})),
-									);
-							let from = since;
-							let skipped = false;
-							while (true) {
-								const page = yield* exists(from);
-								if (page.hit) {
-									skipped = true;
-									break;
-								}
-								if (page.last === undefined || !page.full) break;
-								from = page.last.seq;
-							}
-							return { position: oldest.seq - 1, truncated: skipped };
+				const replayFrom = (held: ReadonlyArray<string>) =>
+					Effect.gen(function* () {
+						const window = yield* ctx.messages.query({
+							since,
+							newest: true,
+							limit: replayScan,
+							exclude: [instance, ...held],
+							...selection(name, agent, topic, subtopics),
 						});
+						const matched = window.items.filter((item) => matches(topic, subtopics, held, item));
+						// Past the newest replayLimit matches it starts after the one just older. A full window of candidates
+						// starts at its oldest, and is truncated if an older match exists or older candidates went unexamined.
+						const over = matched.length > replayLimit ? matched[matched.length - replayLimit - 1] : undefined;
+						if (over !== undefined) return { position: over.seq, truncated: true };
+						const oldest = window.items.length === replayScan ? window.items[0] : undefined;
+						if (oldest === undefined) return { position: since, truncated: false };
+						// One existence page uses the subscription's delivery filters over the whole skipped range, so a
+						// topic mention past three broad candidate pages is still found without walking mention history.
+						const exists = (from: number) =>
+							ctx.messages
+								.query({
+									since: from,
+									before: oldest.seq,
+									limit: replayScan,
+									exclude: [instance, ...held],
+									...(name === mentionEvent
+										? {
+												mentions: [`@${agent}`, "@here"],
+												...(topic === null ? {} : { topic, recursive: subtopics, all: true }),
+											}
+										: topic === null
+											? { mentions: [`@${agent}`, "@here"] }
+											: { topic, recursive: subtopics }),
+								})
+								.pipe(
+									Effect.map((page) => ({
+										hit: page.items.some((item) => matches(topic, subtopics, held, item)),
+										last: page.items.at(-1),
+										full: page.items.length === replayScan,
+									})),
+								);
+						let from = since;
+						let skipped = false;
+						while (true) {
+							const page = yield* exists(from);
+							if (page.hit) {
+								skipped = true;
+								break;
+							}
+							if (page.last === undefined || !page.full) break;
+							from = page.last.seq;
+						}
+						return { position: oldest.seq - 1, truncated: skipped };
+					});
+				let start = !replaying ? { position: fence, truncated: since < fence } : yield* replayFrom(families);
+				if (replaying) {
+					const latest = yield* grantFamilies(ctx, caller.clientId);
+					if (storedFamilies(...latest) !== storedFamilies(...families)) {
+						families = latest;
+						start = yield* replayFrom(families);
+					}
+				}
 				const sql = ctx.db;
 				// Mutations serialize on the board's writer lock, so the existence and limit checks cannot race.
 				const outcome = yield* ctx.mutate(
@@ -688,11 +695,11 @@ export const installEvents = (api: Api, origin: string) =>
 					sql`SELECT COUNT(*) AS count FROM example_mcp_oauth WHERE client_id=${clientId} AND (kind='access' OR kind='refresh') AND expires_at>${now}`,
 			).pipe(Effect.map((total) => total > 0));
 
-		/** Families this client and posting name have used, including ones kept after a replacement request. */
-		const grantFamilies = (ctx: Store, clientId: string, agent: string) =>
+		/** Families this connection has used, including ones kept after a replacement or posting-name change. */
+		const grantFamilies = (ctx: Store, clientId: string) =>
 			ctx
 				.read(() =>
-					ctx.db`SELECT family,families FROM example_mcp_grants WHERE client_id=${clientId} AND agent=${agent}`.pipe(
+					ctx.db`SELECT family,families FROM example_mcp_grants WHERE client_id=${clientId}`.pipe(
 						Effect.flatMap(Schema.decodeUnknownEffect(Family)),
 					),
 				)
@@ -778,7 +785,7 @@ export const installEvents = (api: Api, origin: string) =>
 					return { wake: Infinity, backlog: false };
 				}
 				// After an expired live() and a refresh before the DELETE, a re-read repeats only delivered ids; a first-time match has none.
-				const held = yield* grantFamilies(ctx, row.client_id, row.agent);
+				const held = yield* grantFamilies(ctx, row.client_id);
 				const families = familiesOf(row.grant_family, ...held);
 				const stored = storedFamilies(row.grant_family, ...held);
 				if (stored !== null && stored !== row.grant_family)
