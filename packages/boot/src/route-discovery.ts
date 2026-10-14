@@ -309,7 +309,7 @@ const routes = [
 		"get",
 		["/_boot/auth/identities"],
 		"human",
-		"List linked GitHub and Google identities {id,issuer,provider,label,created_at,last_used_at,active}, this session's pending link, and the providers this board can link. An identity from an issuer the board no longer uses is inactive and can only be removed.",
+		"List linked GitHub and Google identities {id,issuer,provider,label,created_at,last_used_at,active}, this session's pending links newest first, and the providers this board can link. An identity from an issuer the board no longer uses is inactive and can only be removed.",
 	],
 	[
 		"post",

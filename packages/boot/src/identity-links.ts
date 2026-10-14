@@ -342,13 +342,13 @@ export const makeIdentityLinks = <E, R, S extends { readonly id: string }, SE, S
 								{ id: row.id, provider: link.provider, label: link.label, expires_at: row.expires_at },
 							],
 						}),
-					)[0];
+					);
 					return {
 						// An identity linked through another issuer no longer signs in, but stays listed so it can be removed.
 						identities: (yield* linked)
 							.toSorted((left, right) => left.created_at - right.created_at)
 							.map(({ subject: _subject, ...identity }) => ({ ...identity, active: identity.issuer === issuer })),
-						pending: pending ?? null,
+						pending,
 						providers: issuer === null ? [] : [...oidcProviders],
 					};
 				}),

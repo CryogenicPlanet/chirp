@@ -2,7 +2,7 @@ import { assertionHeader } from "@comms/protocol/headers";
 import { Effect } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { afterEach, expect, it, vi } from "vitest";
-import { confirmLink, startLink, unlinkIdentity } from "../src/account-identities-api.ts";
+import { confirmLink, pendingForHref, startLink, unlinkIdentity } from "../src/account-identities-api.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -60,4 +60,13 @@ it("links a GitHub account through the issuer and a passkey, then unlinks it wit
 		["POST", "/_boot/auth/challenge", { action: "identity.unlink", params: { id: identity } }, false],
 		["DELETE", `/_boot/auth/identities/${identity}`, {}, true],
 	]);
+});
+
+it("confirms the pending identity named by the callback, not a newer one", () => {
+	const older = { id: "a".repeat(43), provider: "github" as const, label: "octocat", expires_at: 1 };
+	const newer = { id: "b".repeat(43), provider: "google" as const, label: "human", expires_at: 2 };
+	const pending = [newer, older];
+	expect(pendingForHref(pending, `https://board.test/@rahul?link=${older.id}`)).toEqual(older);
+	expect(pendingForHref(pending, "https://board.test/@rahul")).toEqual(newer);
+	expect(pendingForHref(pending, "https://board.test/@rahul?link=missing")).toBeUndefined();
 });

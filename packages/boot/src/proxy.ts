@@ -78,7 +78,7 @@ GET /_boot/auth/passkeys lists keys; passkey.add and passkey.delete assertions a
 POST /_boot/auth/passkey-code {origin?} with a passkey.code assertion issues a 10-minute one-time code; redeem it at /auth/passkey-code.
 A code bound to a new origin activates that origin when redeemed there. GET/DELETE /_boot/auth/origins lists or removes runtime origins.
 GitHub and Google sign-in goes through OIDC_ISSUER (auth.chirp.wiki by default): POST /_boot/auth/oidc/start, then /auth/oidc/callback.
-GET /_boot/auth/identities lists linked accounts; linking and unlinking need identity.link and identity.unlink assertions.
+GET /_boot/auth/identities lists linked accounts and this session's pending links; linking and unlinking need identity.link and identity.unlink assertions.
 A linked account only opens a session. It is not a recovery path: passkeys and REOPEN_SETUP are the way back in.
 POST /_boot/tokens/:family/revoke requires a human session and fresh token.revoke passkey assertion.
 Extension grants: the live app asks boot to hold access for an agent; the human approves at /approve/<id>, and boot

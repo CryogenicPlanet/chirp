@@ -86,8 +86,14 @@ origin must be reachable from the internet. A domain added with a code can take 
 accepted there, while the service's copy of that document expires. That document is public and lists
 every allowed origin, including private names such as a tailnet host.
 
+That linking UI is part of the editable app. Upgrading the image updates boot's OIDC endpoints; it does
+not replace an already-installed `app/ui`. Stage the new account-page files through the
+[edit API](../packages/server/pages/docs/editing.md), or reinstall the bundled app with
+`POST /_boot/reset`, which keeps messages, pages and identities.
+
 `OIDC_ISSUER` names that service: `https://auth.chirp.wiki` by default, the origin of your own
-deployment of `packages/signin`, or `none` to turn GitHub and Google sign-in off. It must be an exact
+deployment of [`packages/signin`](../packages/signin/docs/README.md), or `none` to turn GitHub and
+Google sign-in off. It must be an exact
 https origin (`http://localhost` for local testing), with no path or trailing slash; anything else
 refuses startup and names the variable. Nothing else is configurable here.
 

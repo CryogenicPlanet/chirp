@@ -16,7 +16,7 @@ const failure = Schema.Struct({ error: Schema.Struct({ code: Schema.String }) })
 const started = Schema.Struct({ authorization_url: Schema.String });
 const identities = Schema.Struct({
 	identities: Schema.Array(Schema.Struct({ id: Schema.String, provider: Schema.String, label: Schema.String })),
-	pending: Schema.NullOr(Schema.Struct({ id: Schema.String, label: Schema.String })),
+	pending: Schema.Array(Schema.Struct({ id: Schema.String, label: Schema.String })),
 	providers: Schema.Array(Schema.String),
 });
 const origin = "https://comms.test";
@@ -174,7 +174,7 @@ it("links, signs in with and unlinks a GitHub identity through a loopback issuer
 	const listed = Schema.decodeUnknownSync(identities)(await (await read("/_boot/auth/identities", owner)).json());
 	expect(listed).toEqual({
 		identities: [],
-		pending: { ...listed.pending, id: pendingId, label: "octocat" },
+		pending: [{ ...listed.pending[0], id: pendingId, label: "octocat" }],
 		providers: ["github", "google"],
 	});
 	// The pending link needs the passkey: no proof, no Origin, a bearer, or a grant all refuse.

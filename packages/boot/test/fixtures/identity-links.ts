@@ -395,11 +395,11 @@ const run = Effect.gen(function* () {
 		yield* refused(auth.startIdentityUnlinkAssertion({ id: "A".repeat(64) }, first.id), "invalid_request");
 		const pending = yield* pendingLink(auth, first.id, octocat);
 		const listed = yield* auth.listIdentities(first.id);
-		assert.deepEqual(listed.pending && { id: listed.pending.id, label: listed.pending.label }, {
-			id: pending,
-			label: "octocat",
-		});
-		assert.equal((yield* auth.listIdentities(second.id)).pending, null);
+		assert.deepEqual(
+			listed.pending.map((row) => ({ id: row.id, label: row.label })),
+			[{ id: pending, label: "octocat" }],
+		);
+		assert.equal((yield* auth.listIdentities(second.id)).pending.length, 0);
 		// Another session cannot confirm the pending link, even with its own valid proof.
 		const fromSecond = yield* auth.startIdentityLinkAssertion({ id: pending }, second.id);
 		yield* refused(auth.linkIdentity({ id: pending }, proof(fromSecond), second.id), "identity_not_found");
@@ -407,6 +407,10 @@ const run = Effect.gen(function* () {
 		const forFirst = yield* auth.startIdentityLinkAssertion({ id: pending }, first.id);
 		yield* refused(auth.linkIdentity({ id: pending }, proof(forFirst), second.id), "challenge_invalid");
 		const other = yield* pendingLink(auth, first.id, human);
+		const waiting = yield* auth.listIdentities(first.id);
+		assert.equal(waiting.pending.length, 2);
+		assert.ok(waiting.pending.some((row) => row.id === pending && row.label === "octocat"));
+		assert.ok(waiting.pending.some((row) => row.id === other && row.label === "human@example.com"));
 		const forOther = yield* auth.startIdentityLinkAssertion({ id: other }, first.id);
 		yield* refused(auth.linkIdentity({ id: pending }, proof(forOther), first.id), "challenge_invalid");
 		// The right session and proof link it once, and the proof does not replay.

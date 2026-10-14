@@ -2,7 +2,14 @@ import { useLoad } from "./use-load.ts";
 import { Effect } from "effect";
 import { useState } from "react";
 import { type BoardError } from "./board-api.ts";
-import { confirmLink, getIdentities, startLink, unlinkIdentity, type Provider } from "./account-identities-api.ts";
+import {
+	confirmLink,
+	getIdentities,
+	pendingForHref,
+	startLink,
+	unlinkIdentity,
+	type Provider,
+} from "./account-identities-api.ts";
 import { Alert } from "./ui/alert.tsx";
 import { Button } from "./ui/button.tsx";
 import { Card, CardContent } from "./ui/card.tsx";
@@ -36,7 +43,7 @@ export function AccountIdentities() {
 		url.searchParams.delete("link");
 		window.history.replaceState(null, "", url.pathname + url.search + url.hash);
 	};
-	const pending = identities?.pending;
+	const pending = identities ? pendingForHref(identities.pending, window.location.href) : undefined;
 	// One account per provider here: a provider that already signs in is not offered again.
 	const linkable =
 		identities?.providers.filter(

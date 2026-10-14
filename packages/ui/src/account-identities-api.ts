@@ -5,6 +5,12 @@ import { accountPost, accountRequest, unreadable } from "./account-api.ts";
 import { confirmAccountAction } from "./account-passkeys.ts";
 
 const Provider = Schema.Literals(["github", "google"]);
+const Pending = Schema.Struct({
+	id: Schema.String,
+	provider: Provider,
+	label: Schema.String,
+	expires_at: Schema.Finite,
+});
 const Identities = Schema.Struct({
 	identities: Schema.Array(
 		Schema.Struct({
@@ -17,14 +23,19 @@ const Identities = Schema.Struct({
 			active: Schema.Boolean,
 		}),
 	),
-	pending: Schema.NullOr(
-		Schema.Struct({ id: Schema.String, provider: Provider, label: Schema.String, expires_at: Schema.Finite }),
-	),
+	pending: Schema.Array(Pending),
 	providers: Schema.Array(Provider),
 });
 const Started = Schema.Struct({ authorization_url: Schema.String });
 export type Provider = typeof Provider.Type;
 export type IdentityList = typeof Identities.Type;
+export type PendingIdentity = typeof Pending.Type;
+
+/** Boot returns to /@user?link=<id>. Match that id so a later pending row is not confirmed by mistake. */
+export const pendingForHref = (pending: IdentityList["pending"], href: string) => {
+	const id = new URL(href).searchParams.get("link");
+	return id === null ? pending[0] : pending.find((row) => row.id === id);
+};
 
 export const getIdentities = Effect.suspend(() =>
 	accountRequest(HttpClientRequest.get(new URL("/_boot/auth/identities", window.location.origin).href)).pipe(
