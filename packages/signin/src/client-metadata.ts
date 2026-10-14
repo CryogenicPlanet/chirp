@@ -63,8 +63,8 @@ export const makeAddressPolicy = () => {
 		["2001::", 23],
 		["2001:db8::", 32],
 		["2002::", 16],
-		["3fff::", 20],
 		["2620:4f:8000::", 48],
+		["3fff::", 20],
 	] as const)
 		reserved.addSubnet(network, prefix, "ipv6");
 	const global = new BlockList();
