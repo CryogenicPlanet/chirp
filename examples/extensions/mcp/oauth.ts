@@ -145,8 +145,13 @@ const metadataUrl = (clientId: string) => {
 };
 const metadataLimit = 5120;
 const cachedDocuments = 64;
-/** How long a fetched document is reused. This shared cache uses Cache-Control s-maxage, then max-age (CIMD §5.2, RFC 9111), at most an hour, five minutes if neither is set. private, no-store and no-cache are not stored. When a freshness lifetime is set, Age reduces what remains (RFC 9111 §4.2.3); Age at or past that lifetime is not stored. */
-const cacheLifetime = (header: string | undefined, ageHeader: string | undefined) => {
+/** How long a fetched document is reused. This shared cache uses Cache-Control s-maxage, then max-age, then Expires (CIMD §5.2, RFC 9111), at most an hour, five minutes if none is set. private, no-store and no-cache are not stored. When a freshness lifetime is set, Age reduces what remains (RFC 9111 §4.2.3); Age at or past that lifetime is not stored. */
+const cacheLifetime = (
+	header: string | undefined,
+	ageHeader: string | undefined,
+	expiresHeader: string | undefined,
+	dateHeader: string | undefined,
+) => {
 	const directives = (header ?? "")
 		.toLowerCase()
 		.split(",")
@@ -154,8 +159,14 @@ const cacheLifetime = (header: string | undefined, ageHeader: string | undefined
 	if (directives.includes("no-store") || directives.includes("no-cache") || directives.includes("private")) return 0;
 	const seconds = (pattern: RegExp) => directives.flatMap((directive) => pattern.exec(directive)?.[1] ?? []).at(0);
 	const shared = seconds(/^s-maxage=(\d+)$/) ?? seconds(/^max-age=(\d+)$/);
-	const freshness = Math.min(shared === undefined ? 300 : Number(shared), 3600);
-	if (shared === undefined) return freshness * 1000;
+	const expiresAt = Date.parse(expiresHeader ?? "");
+	const issuedAt = Date.parse(dateHeader ?? "");
+	const fromExpires = Number.isNaN(expiresAt)
+		? undefined
+		: Math.floor((expiresAt - (Number.isNaN(issuedAt) ? Date.now() : issuedAt)) / 1000);
+	const declared = shared === undefined ? fromExpires : Number(shared);
+	if (declared === undefined) return 300 * 1000;
+	const freshness = Math.min(declared, 3600);
 	const age = /^(\d+)$/.exec((ageHeader ?? "").trim())?.[1];
 	const remaining = age === undefined ? freshness : freshness - Number(age);
 	return remaining > 0 ? remaining * 1000 : 0;
@@ -374,6 +385,8 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 								text: Buffer.concat(chunks).toString("utf8"),
 								cacheControl: response.headers["cache-control"],
 								age: response.headers.age,
+								expires: response.headers.expires,
+								date: response.headers.date,
 							};
 						}),
 					)
@@ -399,7 +412,7 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 				if (redirects.length === 0) return "lists no HTTPS or loopback redirect URI";
 				return {
 					client: { client_name: client_name.trim(), redirect_uris: redirects, client_url: client_id },
-					lifetime: cacheLifetime(read.cacheControl, read.age),
+					lifetime: cacheLifetime(read.cacheControl, read.age, read.expires, read.date),
 				};
 			}).pipe(
 				Effect.timeoutOption("5 seconds"),

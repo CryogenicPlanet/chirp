@@ -356,6 +356,17 @@ it("refuses metadata documents that do not describe the client", async (test) =>
 			headers: { "cache-control": "public, s-maxage=60", age: "60" },
 			body: metadataDocument(`${base}/aged-out.json`),
 		},
+		"/expires-stale.json": {
+			headers: { expires: "Wed, 21 Oct 2015 07:28:00 GMT", date: "Wed, 21 Oct 2015 07:28:01 GMT" },
+			body: metadataDocument(`${base}/expires-stale.json`),
+		},
+		"/expires-fresh.json": {
+			headers: {
+				expires: new Date(Date.now() + 60_000).toUTCString(),
+				date: new Date().toUTCString(),
+			},
+			body: metadataDocument(`${base}/expires-fresh.json`),
+		},
 	}));
 	const { challenge } = pkce("refusals");
 	const ask = (path: string, fields: Readonly<Record<string, string>> = {}) =>
@@ -417,6 +428,13 @@ it("refuses metadata documents that do not describe the client", async (test) =>
 	expect((await ask("/aged-out.json")).status).toBe(200);
 	expect((await ask("/aged-out.json")).status).toBe(200);
 	expect(host.hits("/aged-out.json")).toBe(2);
+	// Expires is freshness when max-age/s-maxage are absent. An already-expired value is not stored.
+	expect((await ask("/expires-stale.json")).status).toBe(200);
+	expect((await ask("/expires-stale.json")).status).toBe(200);
+	expect(host.hits("/expires-stale.json")).toBe(2);
+	expect((await ask("/expires-fresh.json")).status).toBe(200);
+	expect((await ask("/expires-fresh.json")).status).toBe(200);
+	expect(host.hits("/expires-fresh.json")).toBe(1);
 }, 60000);
 
 it("never fetches client metadata from private addresses on a public board", async (test) => {
