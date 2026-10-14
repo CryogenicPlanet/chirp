@@ -8,6 +8,7 @@ on:
     paths-ignore:
       - packages/cloud/**
       - packages/landing/**
+      - packages/signin/**
       - docs/**
       - repos/**
       - skills/**
@@ -16,12 +17,15 @@ on:
       - .github/workflows/checks.yml
       - .github/workflows/cloud.yml
       - .github/workflows/deploy-cloud.yml
+      - .github/workflows/signin.yml
+      - .github/workflows/deploy-signin.yml
       - .github/workflows/release-latest.yml
   push:
     branches: [master]
     paths-ignore:
       - packages/cloud/**
       - packages/landing/**
+      - packages/signin/**
       - docs/**
       - repos/**
       - skills/**
@@ -30,6 +34,8 @@ on:
       - .github/workflows/checks.yml
       - .github/workflows/cloud.yml
       - .github/workflows/deploy-cloud.yml
+      - .github/workflows/signin.yml
+      - .github/workflows/deploy-signin.yml
       - .github/workflows/release-latest.yml
 
 permissions:
