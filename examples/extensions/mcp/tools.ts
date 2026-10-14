@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Effect, Option, Schema } from "effect";
 import { HttpServerRequest } from "effect/unstable/http";
 import { policy } from "@comms/protocol/errors";
@@ -39,8 +40,8 @@ const QueryInput = Schema.Struct({
 	max_body: Schema.optionalKey(Schema.Int),
 });
 const PageInput = Schema.Struct({ path: Schema.String, max_bytes: Schema.optionalKey(Schema.Int) });
-/** A fallback post prefixes `clientId:surface:` (43+32+2); the board refuses keys over 200 characters. */
-const postKeyMax = 123;
+/** The longest key a caller may send. A grant post passes it on as is; a fallback post hashes it with the label. */
+const postKeyMax = 156;
 const PostInput = Schema.Struct({
 	topic: Schema.String,
 	body: Schema.String,
@@ -571,9 +572,9 @@ export const callTool = (
 					...(args.value.tags === undefined ? {} : { tags: args.value.tags }),
 					meta,
 				},
-				// Clients sharing a connection choose keys independently; the label keeps their fallback posts apart
-				// because each request already records a different author_label.
-				`${caller.clientId}:${caller.surface}:${args.value.idempotencyKey}`,
+				// Clients sharing a connection choose keys independently, so the label keeps their fallback posts apart. The
+				// board takes keys of at most 200 characters, so label and key are hashed together to keep the longest one.
+				`${caller.clientId}:${createHash("sha256").update(`${caller.surface}:${args.value.idempotencyKey}`).digest("base64url")}`,
 				{ agent: caller.agent, instance: caller.clientId },
 			);
 			return toolResult(message);
