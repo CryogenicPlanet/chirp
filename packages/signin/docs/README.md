@@ -25,6 +25,8 @@ The session is as stateless as the rest of the service:
 - A stolen cookie signs in as its owner, and can approve new boards, for up to 30 days.
 - A GitHub or Google account that is suspended or deleted keeps signing in until its session ends, up to 30 days.
 
+The OpenID Connect `prompt` and `max_age` parameters are ignored, so a board cannot force a fresh provider sign-in or a consent page; a board that wants a recent sign-in can check `auth_time`.
+
 ## Routes
 
 `GET /` lists every route with its description; the table is `src/routes.ts`.
@@ -87,7 +89,7 @@ Run these once, from the repository root, as the Fly account that owns `chirp-cl
 
 - One machine. A second machine, or a restart within a code's 60 seconds, could let a code be redeemed twice; it would still need the board's PKCE verifier, and the board consumes its own state once.
 - No rate limiting.
-- Boards under `*.boards.chirp.wiki` are same-site with auth.chirp.wiki and can set `Domain=chirp.wiki` cookies. `__Host-` stops them from replacing the transaction and session cookies but not from crowding the cookie header; the Public Suffix List entry that would end this is deferred.
+- Boards under `*.boards.chirp.wiki` are same-site with auth.chirp.wiki and can set `Domain=chirp.wiki` cookies. `__Host-` stops them from replacing the transaction and session cookies but not from crowding the cookie header. Browsers skip the `__Host-` rules for a name with a leading non-breaking space, so the issuer trims only spaces and tabs and reads such a cookie as another name; the Public Suffix List entry that would end this is deferred.
 - A local board on `http://localhost` cannot use auth.chirp.wiki: the issuer only fetches public `https` client documents. Tests reach loopback `http://localhost` and `https://localhost` document servers through `loopbackLayerForTests` in `src/client-metadata.ts`, which `main.ts` never uses.
 
 ## Tests

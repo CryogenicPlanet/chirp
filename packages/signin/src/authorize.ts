@@ -4,7 +4,15 @@ import { ClientMetadata } from "./client-metadata.ts";
 import { Issuer } from "./issuer.ts";
 import { consentPage, errorPage, signedOutPage } from "./pages.ts";
 import { open, randomToken, s256, sameSecret, seal } from "./seal.ts";
-import { consentKey, cookieOptions, forgetSessions, readCookie, readSession, rememberConsent } from "./session.ts";
+import {
+	consentKey,
+	cookieOptions,
+	forgetSessions,
+	readCookie,
+	readSession,
+	rememberConsent,
+	sessionEnd,
+} from "./session.ts";
 import { Settings } from "./settings.ts";
 import { Identity, type Provider, providers, Upstream } from "./upstream.ts";
 
@@ -110,7 +118,10 @@ const finish = <R>(flow: Effect.Effect<HttpServerResponse.HttpServerResponse, Re
 		);
 	});
 
-/** Ask before the code goes out. The identity waits in the sealed transaction cookie, never in the form. */
+/**
+ * Ask before the code goes out. The identity waits in the sealed transaction cookie, never in the form. A question
+ * asked from a session expires with it, so Continue cannot issue a code after the session has ended.
+ */
 const askConsent = (board: BoardRequest, identity: Identity, authTime: number) =>
 	Effect.gen(function* () {
 		const settings = yield* Settings;
@@ -121,7 +132,7 @@ const askConsent = (board: BoardRequest, identity: Identity, authTime: number) =
 			identity,
 			auth_time: authTime,
 			csrf,
-			exp: (yield* Clock.currentTimeMillis) + Duration.toMillis(transactionLifetime),
+			exp: Math.min((yield* Clock.currentTimeMillis) + Duration.toMillis(transactionLifetime), sessionEnd(authTime)),
 		});
 		return consentPage({ destination: board.redirect_origin, clientId: board.client_id, identity, csrf }).pipe(
 			transactionCookie(sealed),

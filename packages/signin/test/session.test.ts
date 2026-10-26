@@ -38,7 +38,7 @@ const browser = (h: Harness) => {
 			}),
 		);
 	/** The board's redirect to /authorize, with the verifier the board keeps. */
-	const authorize = async (clientId: string, overrides: Record<string, string> = {}) => {
+	const authorize = async (clientId: string, overrides: Record<string, string | null> = {}) => {
 		const boardVerifier = verifier();
 		return { response: await visit(authorizeQuery(clientId, s256(boardVerifier), overrides)), boardVerifier };
 	};
@@ -215,21 +215,31 @@ it(
 		const first = await b.signIn(board);
 		const auth = (await redeem(h, board, first.code, first.boardVerifier)).auth_time;
 		h.advance(Duration.days(20));
-		// Consenting through the session at day 20 does not extend it.
+		// Consenting through the session at day 20 does not extend it: the rewritten cookie has 10 days left.
 		const asked = await b.authorize(other);
-		const code = toBoard(await b.decide(asked.response, "continue"));
-		expect((await redeem(h, other, code, asked.boardVerifier)).auth_time).toBe(auth);
+		const consented = await b.decide(asked.response, "continue");
+		expect(consented.headers.getSetCookie().find((line) => line.startsWith(`${sessionCookie("github")}=`))).toMatch(
+			/; Max-Age=(863999|864000);/,
+		);
+		expect((await redeem(h, other, toBoard(consented), asked.boardVerifier)).auth_time).toBe(auth);
 		h.advance(Duration.days(9));
 		h.advance(Duration.hours(23));
 		toBoard((await b.authorize(board)).response);
-		h.advance(Duration.hours(1));
+		// A question asked from the session 5 minutes before it ends cannot be answered after, within its 10 minutes.
+		h.advance(Duration.minutes(55));
+		const late = await b.authorize(h.clients.board("/late/client.json"));
+		await toConsent(late.response);
+		h.advance(Duration.minutes(6));
+		const refused = await b.decide(late.response, "continue");
+		expect(refused.status).toBe(400);
+		expect(refused.headers.get("location")).toBeNull();
 		toProvider(h, (await b.authorize(board)).response);
 		toProvider(h, (await b.authorize(other)).response);
 	}),
 );
 
 it(
-	"treats a tampered, duplicated, foreign-purpose or other provider's cookie as no session",
+	"treats a tampered, duplicated, foreign-purpose, other provider's or near-named cookie as no session",
 	withHarness(async (h) => {
 		const b = browser(h);
 		const board = h.clients.board();
@@ -244,6 +254,9 @@ it(
 			["github", `${github}=${transaction}`],
 			["github", `${github}=${code}`],
 			["google", `${sessionCookie("google")}=${session}`],
+			// Browsers skip the __Host- rules for a name that starts with a non-breaking space, so any same-site host
+			// could set this one; it must not be read as ours.
+			["github", ` ${github}=${session}`],
 		];
 		for (const [provider, cookie] of attempts) {
 			const response = await h.request(authorizeQuery(board, s256(verifier()), { provider }), {
@@ -257,12 +270,21 @@ it(
 );
 
 it(
-	"never lets a session skip the redirect_uri check",
+	"never lets a session skip the redirect_uri or request checks",
 	withHarness(async (h) => {
 		const b = browser(h);
 		const board = h.clients.board();
 		await b.signIn(board);
 		const calls = h.upstream.requests.length;
+		for (const [overrides, error] of [
+			[{ response_type: "token" }, "unsupported_response_type"],
+			[{ nonce: null }, "invalid_request"],
+			[{ code_challenge_method: "plain" }, "invalid_request"],
+		] as const) {
+			const back = location((await b.authorize(board, overrides)).response);
+			expect(`${back.origin}${back.pathname}`).toBe(boardRedirect);
+			expect(Object.fromEntries(back.searchParams)).toEqual({ error, state: "board-state", iss: issuer });
+		}
 		for (const redirectUri of ["https://evil.test/auth/oidc/callback", "http://board.test/auth/oidc/callback"]) {
 			const response = (await b.authorize(board, { redirect_uri: redirectUri })).response;
 			expect(response.status).toBe(400);
@@ -315,6 +337,9 @@ it(
 		// A Google sign-in leaves the GitHub session alone.
 		toBoard((await b.authorize(board)).response);
 		toBoard((await b.authorize(board, { provider: "google" })).response);
+		// A consent page left open in another tab.
+		const open = await b.authorize(h.clients.board("/other/client.json"));
+		await toConsent(open.response);
 
 		const page = await b.visit("/signout");
 		expect(page.status).toBe(200);
@@ -338,6 +363,11 @@ it(
 			expect(expired.find((line) => line.startsWith(`${name}=;`))).toMatch(
 				/^[^;]+=; Max-Age=0; Path=\/; Expires=[^;]+; HttpOnly; Secure; SameSite=Lax$/,
 			);
+		expect(b.jar.size).toBe(0);
+		// The open consent page can no longer sign in, nor bring the session back.
+		const stale = await b.decide(open.response, "continue");
+		expect(stale.status).toBe(400);
+		expect(stale.headers.get("location")).toBeNull();
 		expect(b.jar.size).toBe(0);
 		toProvider(h, (await b.authorize(board)).response);
 		toProvider(h, (await b.authorize(board, { provider: "google" })).response, "google");

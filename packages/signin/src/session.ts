@@ -23,11 +23,15 @@ type Session = typeof Session.Type;
 // so the cookies ride the top-level GET a board on another site sends to /authorize.
 export const cookieOptions = { httpOnly: true, secure: true, sameSite: "lax", path: "/" } as const;
 
-/** Exactly one cookie of this name; a duplicate means another cookie was planted beside ours. */
+/**
+ * Exactly one cookie of this name; a duplicate means another cookie was planted beside ours. Only spaces and tabs
+ * are trimmed: a browser that keeps a leading non-breaking space as part of the name does not apply the `__Host-`
+ * rules to it, so `String.prototype.trim` would let any same-site host plant a cookie read as ours.
+ */
 export const readCookie = (request: HttpServerRequest.HttpServerRequest, name: string) => {
 	const values = (request.headers.cookie ?? "")
 		.split(";")
-		.map((part) => part.trim())
+		.map((part) => part.replace(/^[ \t]+|[ \t]+$/g, ""))
 		.filter((part) => part.startsWith(`${name}=`));
 	return values.length === 1 ? values[0]?.slice(name.length + 1) : undefined;
 };
@@ -48,7 +52,10 @@ export const readSession = (request: HttpServerRequest.HttpServerRequest, provid
 		return session.exp > (yield* Clock.currentTimeMillis) ? session : undefined;
 	});
 
-/** 128 bits of S256(client_id, redirect origin), so a client document that adds an origin is asked again. */
+/** When a session from a provider sign-in at `authTime` (seconds) ends, in milliseconds. */
+export const sessionEnd = (authTime: number) => authTime * 1000 + Duration.toMillis(sessionLifetime);
+
+/** 22 base64url characters (132 bits) of S256(client_id, redirect origin), so a document that adds an origin is asked again. */
 export const consentKey = (clientId: string, redirectOrigin: string) =>
 	s256(`${clientId} ${redirectOrigin}`).pipe(Effect.map((digest) => digest.slice(0, 22)));
 
@@ -60,7 +67,7 @@ export const rememberConsent = (previous: Session | undefined, identity: Identit
 	Effect.gen(function* () {
 		const settings = yield* Settings;
 		const name = sessionCookie(identity.provider);
-		const exp = authTime * 1000 + Duration.toMillis(sessionLifetime);
+		const exp = sessionEnd(authTime);
 		const remaining = exp - (yield* Clock.currentTimeMillis);
 		if (remaining <= 0) return HttpServerResponse.expireCookieUnsafe(name, cookieOptions);
 		const kept = previous?.identity.sub === identity.sub ? previous.consented.filter((other) => other !== key) : [];
