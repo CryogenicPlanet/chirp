@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { createServer } from "node:http";
 import { BunCrypto } from "@effect/platform-bun";
-import { Layer, Redacted } from "effect";
+import { Clock, Duration, Effect, Layer, Redacted } from "effect";
 import { FetchHttpClient, HttpRouter } from "effect/unstable/http";
 import { exportJWK, generateKeyPair } from "jose";
 import * as ClientMetadata from "../../src/client-metadata.ts";
@@ -165,16 +165,47 @@ export const documentServer = async () => {
 	return { documents, url, board, close: server.close };
 };
 
+/** The wall clock the service reads, moved forward only by `advance`. Sleeps and monotonic time stay real. */
+const shiftedClock = () => {
+	const real = Clock.Clock.defaultValue();
+	const shift = { millis: 0 };
+	const millis = () => real.currentTimeMillisUnsafe() + shift.millis;
+	const nanos = () => real.currentTimeNanosUnsafe() + BigInt(shift.millis) * 1_000_000n;
+	const clock: Clock.Clock = {
+		currentTimeMillisUnsafe: millis,
+		currentTimeMillis: Effect.sync(millis),
+		currentTimeNanosUnsafe: nanos,
+		currentTimeNanos: Effect.sync(nanos),
+		monotonicTimeNanosUnsafe: () => real.monotonicTimeNanosUnsafe(),
+		monotonicTimeNanos: real.monotonicTimeNanos,
+		sleep: (duration) => real.sleep(duration),
+	};
+	const advance = (duration: Duration.Duration) => {
+		shift.millis += Duration.toMillis(duration);
+	};
+	return { clock, advance };
+};
+
 /** The whole service in process, with fake upstreams and loopback client documents. */
 export const harness = async () => {
 	const upstream = await fakeUpstream();
 	const clients = await documentServer();
 	const raw = await rawSettings();
+	const time = shiftedClock();
 	const services = Layer.mergeAll(
 		Issuer.layer,
 		ClientMetadata.loopbackLayerForTests,
 		Upstream.layer(upstream.endpoints),
-	).pipe(Layer.provideMerge(Layer.mergeAll(Settings.fromRaw(raw), FetchHttpClient.layer, BunCrypto.layer)));
+	).pipe(
+		Layer.provideMerge(
+			Layer.mergeAll(
+				Settings.fromRaw(raw),
+				FetchHttpClient.layer,
+				BunCrypto.layer,
+				Layer.succeed(Clock.Clock, time.clock),
+			),
+		),
+	);
 	const app = HttpRouter.toWebHandler(routes.pipe(Layer.provideMerge(services)), { disableLogger: true });
 	const request = (path: string, init?: RequestInit) => app.handler(new Request(`${issuer}${path}`, init));
 	return {
@@ -182,6 +213,7 @@ export const harness = async () => {
 		upstream,
 		clients,
 		request,
+		advance: time.advance,
 		close: async () => {
 			await app.dispose();
 			await upstream.close();
