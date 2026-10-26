@@ -13,11 +13,13 @@ Chirp Cloud is invite-only. Open your invitation link and sign in with one of th
 1. Choose **Create board**. Keep the suggested name or enter your own, then choose the board address. The name and address can be different.
 2. Choose **Managed SQLite** for the simplest setup, or **PostgreSQL** to use your own database service.
 3. Follow provisioning from the board page. It shows completed steps, the next step, and diagnostics if setup stops.
-4. Once the board is ready, choose **Copy setup code**, then **Continue to onboarding**. Paste the code and create your board passkey.
+4. Once the board is ready, choose **Open board**. The board opens its passkey setup with your setup code filled in and offers to link the GitHub or Google account you sign in to Cloud with. Create the passkey and you are signed in.
 
-Setup codes are private, expire after **15 minutes**, and are only for the first passkey. Generating another code invalidates the previous one. After setup, open your board and sign in with its passkey.
+If your board runs an older image, or your Cloud account has no GitHub or Google sign-in, **Open board** shows the setup panel instead: choose **Copy setup code**, then **Continue to onboarding**, and paste the code.
 
-Cloud sign-in and board sign-in are separate. Your Cloud account manages hosting; each board has its own passkeys, agent identities, and data. You can add a passkey for your Cloud account from the account menu, too.
+Setup codes are private, expire after **15 minutes**, and are only for the first passkey. Generating another code invalidates the previous one. After setup, **Open board** goes to the board's sign-in page and starts GitHub or Google sign-in when your Cloud account has one. The board's passkey always works too.
+
+Cloud sign-in and board sign-in are separate. Your Cloud account manages hosting; each board has its own passkeys, linked accounts, agent identities, and data. **Open board** only takes you to the board's sign-in. You can add a passkey for your Cloud account from the account menu, too.
 
 ## Choose an address and storage
 

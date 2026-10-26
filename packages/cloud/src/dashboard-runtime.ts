@@ -31,6 +31,7 @@ const setupLayer = Layer.unwrap(
 					)
 				: Layer.succeed(BoardSetup, {
 						issue: () => Effect.fail(new SetupCodeIssue({ code: "setup_code_unavailable" })),
+						open: () => Effect.fail(new SetupCodeIssue({ code: "setup_code_unavailable" })),
 					}),
 		),
 	),
@@ -60,6 +61,16 @@ export const makeDashboardRequestRuntime = (
 					Effect.catchTags({
 						BoardNotFound: () => Effect.succeed({ ok: false as const, code: "not_found" as const }),
 						SetupCodeIssue: (issue) => Effect.succeed({ ok: false as const, code: issue.code }),
+					}),
+				),
+			),
+		openBoard: (ownerId: string, boardId: string) =>
+			runtime.runPromise(
+				BoardSetup.use((setup) => setup.open(ownerId, boardId)).pipe(
+					Effect.map((target) => ({ ok: true as const, ...target })),
+					Effect.catchTags({
+						BoardNotFound: () => Effect.succeed({ ok: false as const, code: "not_found" as const }),
+						SetupCodeIssue: () => Effect.succeed({ ok: false as const, code: "board_unavailable" as const }),
 					}),
 				),
 			),

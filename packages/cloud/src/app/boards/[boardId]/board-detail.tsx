@@ -3,13 +3,15 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { DashboardBoardResponse, type DashboardBoard } from "../../../dashboard-contract.ts";
-import { useAnalyticsIdentity, useTrack } from "../../analytics.tsx";
+import { useAnalyticsIdentity } from "../../analytics.tsx";
 import { dashboardErrorMessage, readDashboardResponse } from "../../dashboard-response.ts";
 import { type CloudClientUser, DashboardShell } from "../../dashboard-shell.tsx";
 import { pollDashboardBoard } from "../../poll-dashboard-board.ts";
 import { DeleteBoardDialog } from "../../delete-board-dialog.tsx";
 import { BoardSetupPanel } from "../../board-setup-panel.tsx";
+import { OpenBoardButton } from "../../open-board-button.tsx";
 import { BoardProgressPanel } from "../../board-progress-panel.tsx";
 import { boardStatusBanner } from "../../board-status-banner.ts";
 import { StatusBadge } from "../../status-badge.tsx";
@@ -31,14 +33,16 @@ const bannerTones = {
 export function BoardDetail({
 	authUnavailable,
 	boardId,
+	openSetup,
 	sessionUser,
 }: {
 	readonly authUnavailable: boolean;
 	readonly boardId: string;
+	readonly openSetup: boolean;
 	readonly sessionUser: CloudClientUser | null;
 }) {
-	const track = useTrack();
 	const router = useRouter();
+	const [setupOpen, setSetupOpen] = useState(openSetup);
 	const deletionObserved = useRef(false);
 	const [board, setBoard] = useState<DashboardBoard>();
 	useAnalyticsIdentity(sessionUser);
@@ -175,15 +179,15 @@ export function BoardDetail({
 									}}
 								/>
 								{board.hostname && board.phase === "ready" ? (
-									<a
-										className="inline-flex min-h-9 items-center justify-center whitespace-nowrap rounded-md border border-transparent bg-primary px-3.5 py-2 text-[13px] font-medium leading-none text-primary-foreground no-underline hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-										href={`https://${board.hostname}`}
-										onClick={() => track("board_opened", { board_id: board.id })}
-										rel="noreferrer"
-										target="_blank"
-									>
-										Open board
-									</a>
+									<OpenBoardButton
+										boardId={board.id}
+										hostname={board.hostname}
+										className="inline-flex min-h-9 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent bg-primary px-3.5 py-2 text-[13px] font-medium leading-none text-primary-foreground no-underline hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-wait disabled:opacity-70"
+										onSetupCode={() => {
+											flushSync(() => setSetupOpen(true));
+											document.getElementById("board-setup")?.scrollIntoView({ block: "center" });
+										}}
+									/>
 								) : null}
 							</div>
 						</div>
@@ -259,7 +263,13 @@ export function BoardDetail({
 						</details>
 					</div>
 					{board.phase === "ready" && board.hostname ? (
-						<BoardSetupPanel key={board.id} boardId={board.id} hostname={board.hostname} />
+						<BoardSetupPanel
+							key={board.id}
+							boardId={board.id}
+							hostname={board.hostname}
+							open={setupOpen}
+							onOpenChange={setSetupOpen}
+						/>
 					) : null}
 				</>
 			)}

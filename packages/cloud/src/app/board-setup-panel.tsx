@@ -10,7 +10,17 @@ import { useTrack } from "./analytics.tsx";
 const setupResponse = Schema.Struct({ code: Schema.String, expires_at: Schema.String, onboarding_url: Schema.String });
 const setupError = Schema.Struct({ error: Schema.Struct({ code: Schema.String }) });
 
-export function BoardSetupPanel({ boardId, hostname }: { readonly boardId: string; readonly hostname: string }) {
+export function BoardSetupPanel({
+	boardId,
+	hostname,
+	open,
+	onOpenChange,
+}: {
+	readonly boardId: string;
+	readonly hostname: string;
+	readonly open: boolean;
+	readonly onOpenChange: (open: boolean) => void;
+}) {
 	const track = useTrack();
 	const [issued, setIssued] = useState<typeof setupResponse.Type>();
 	const [pending, setPending] = useState(false);
@@ -120,7 +130,11 @@ export function BoardSetupPanel({ boardId, hostname }: { readonly boardId: strin
 	};
 
 	return (
-		<details className="mt-4 rounded-md border border-border bg-card p-5">
+		<details
+			className="mt-4 rounded-md border border-border bg-card p-5"
+			open={open}
+			onToggle={(event) => onOpenChange(event.currentTarget.open)}
+		>
 			<summary className="cursor-pointer text-sm font-medium focus-visible:outline-ring">
 				{closed ? "Board passkey is set up" : "First-time board setup"}
 			</summary>

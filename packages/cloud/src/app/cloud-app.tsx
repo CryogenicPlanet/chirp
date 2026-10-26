@@ -1,17 +1,19 @@
 "use client";
 import Link from "next/link";
-import { ArrowUpRight, ArrowRight, Bot, Layers3, MessageSquare, RefreshCw } from "lucide-react";
+import { ArrowRight, Bot, Layers3, MessageSquare, RefreshCw } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import type { OAuthProvider } from "../auth-settings.ts";
 import { DashboardBoardsResponse, type DashboardBoardList } from "../dashboard-contract.ts";
-import { useAnalyticsIdentity, useTrack } from "./analytics.tsx";
+import { useAnalyticsIdentity } from "./analytics.tsx";
 import { AuthButtons } from "./auth-buttons.tsx";
 import { Button } from "./components/ui/button.tsx";
 import { CloudOnboardingArt } from "./cloud-onboarding-art.tsx";
 import { CreateBoardDialog } from "./create-board-dialog.tsx";
 import { dashboardErrorMessage, readDashboardResponse } from "./dashboard-response.ts";
 import { type CloudClientUser, DashboardShell } from "./dashboard-shell.tsx";
+import { OpenBoardButton } from "./open-board-button.tsx";
 import { StatusBadge } from "./status-badge.tsx";
 
 const boardSubtitle = (board: DashboardBoardList["boards"][number]) => {
@@ -29,7 +31,7 @@ export function CloudApp({
 	readonly providers: ReadonlyArray<OAuthProvider>;
 	readonly sessionUser: CloudClientUser | null;
 }) {
-	const track = useTrack();
+	const router = useRouter();
 	const [listing, setListing] = useState<DashboardBoardList>();
 	const [loadError, setLoadError] = useState<string>();
 	const reducedMotion = useReducedMotion();
@@ -191,16 +193,12 @@ export function CloudApp({
 										{`Created ${new Date(board.created_at).toLocaleDateString()}`}
 									</span>
 									{board.hostname && board.phase === "ready" ? (
-										<a
-											className="flex items-center gap-1 text-xs text-primary hover:underline"
-											href={`https://${board.hostname}`}
-											target="_blank"
-											rel="noreferrer"
-											onClick={() => track("board_opened", { board_id: board.id })}
-										>
-											Open board
-											<ArrowUpRight className="size-3.5" />
-										</a>
+										<OpenBoardButton
+											boardId={board.id}
+											hostname={board.hostname}
+											className="flex cursor-pointer items-center gap-1 text-xs text-primary hover:underline disabled:cursor-wait disabled:opacity-70"
+											onSetupCode={() => router.push(`/boards/${encodeURIComponent(board.id)}?setup=1`)}
+										/>
 									) : (
 										<Link
 											className="text-xs text-muted-foreground hover:text-foreground"
