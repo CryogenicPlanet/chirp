@@ -41,7 +41,7 @@ export type OfferedIdentity = typeof OfferedIdentity.Type;
 // The issuer's subject forms: GitHub's numeric account id, or Google's account id.
 const offeredSubject = /^(?:github:[1-9][0-9]{0,19}|google:[A-Za-z0-9._-]{1,255})$/;
 // 1–100 printable characters: no control, surrogate, line or paragraph separator, or bidirectional override.
-const offeredLabel = /^[^\p{Cc}\p{Cs}\p{Zl}\p{Zp}‪-‮⁦-⁩]{1,100}$/u;
+const offeredLabel = /^[^\p{Cc}\p{Cs}\p{Zl}\p{Zp}\u202A-\u202E\u2066-\u2069]{1,100}$/u;
 /** The operator's setup-code request body: at most two identities with distinct subjects. */
 export const SetupOffer = Schema.Struct({
 	identities: Schema.Array(

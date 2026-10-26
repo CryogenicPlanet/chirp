@@ -177,6 +177,40 @@ it("returns to a safe requested page after sign-in or standalone setup", async (
 });
 
 it("fills in a setup code from the fragment, clears it, and shows offered identities as text", async () => {
+	const label = '<img src=x onerror="alert(1)">';
+	const offered = await setupFromFragment({
+		identities: [
+			{ provider: "github", label },
+			{ provider: "gitlab", label: "not offered by boot" },
+		],
+	});
+	// The code is in the field and gone from the address before anything else happens.
+	expect(offered.prefilled).toBe("0123456789ABCDEF");
+	expect(offered.replaced).toEqual(["/setup"]);
+	expect(offered.requests.map((request) => request.path)).toEqual([
+		"/_boot/auth/setup/options",
+		"/_boot/auth/setup/verify",
+	]);
+	expect(offered.requests[0]?.body).toEqual({ code: "0123456789ABCDEF" });
+	// Shown while the browser creates the passkey, as text: the status line is only ever written with textContent.
+	expect(offered.shown).toEqual([
+		`Waiting for your browser to create a passkey… It will also link your GitHub account ${label}.`,
+	]);
+	expect(authClient).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
+	expect(offered.assigned).toBe("/");
+	// With nothing offered, or from a board that names no identities, the code is still filled in and no
+	// identity line appears.
+	for (const options of [{ identities: [] }, {}]) {
+		const plain = await setupFromFragment(options);
+		expect(plain.prefilled).toBe("0123456789ABCDEF");
+		expect(plain.replaced).toEqual(["/setup"]);
+		expect(plain.shown).toEqual(["Waiting for your browser to create a passkey…"]);
+		expect(plain.assigned).toBe("/");
+	}
+});
+
+/** Open /setup#code=… and create the passkey, with the options response carrying `extra`. */
+const setupFromFragment = async (extra: Readonly<Record<string, unknown>>) => {
 	const status = { textContent: "" },
 		button = { disabled: false },
 		code = { value: "" };
@@ -189,7 +223,6 @@ it("fills in a setup code from the fragment, clears it, and shows offered identi
 		clientDataJSON = new Uint8Array([1]).buffer;
 		attestationObject = new Uint8Array([2]).buffer;
 	}
-	const label = '<img src=x onerror="alert(1)">';
 	runInNewContext(authClient, {
 		document: {
 			querySelectorAll: () => [],
@@ -249,31 +282,17 @@ it("fills in a setup code from the fragment, clears it, and shows offered identi
 		fetch: async (path: string, init: RequestInit) => {
 			requests.push({ path, body: JSON.parse(String(init.body)) });
 			return path.endsWith("/options")
-				? Response.json({
-						id: "challenge",
-						options: { challenge: "YWJj", user: { id: "YWJj" } },
-						identities: [
-							{ provider: "github", label },
-							{ provider: "gitlab", label: "not offered by boot" },
-						],
-					})
+				? Response.json({ id: "challenge", options: { challenge: "YWJj", user: { id: "YWJj" } }, ...extra })
 				: Response.json({ expires_at: 1 });
 		},
 	});
-	// The code is in the field and gone from the address before anything else happens.
-	expect(code.value).toBe("0123456789ABCDEF");
-	expect(replaced).toEqual(["/setup"]);
+	// Read before submitting: the fragment is handled as the script loads.
+	const prefilled = code.value;
+	const replacedOnLoad = [...replaced];
 	if (!submit) throw new Error("Missing submit handler");
 	await submit();
-	expect(requests.map((request) => request.path)).toEqual(["/_boot/auth/setup/options", "/_boot/auth/setup/verify"]);
-	expect(requests[0]?.body).toEqual({ code: "0123456789ABCDEF" });
-	// Shown while the browser creates the passkey, as text: the status line is only ever written with textContent.
-	expect(shown).toEqual([
-		`Waiting for your browser to create a passkey… It will also link your GitHub account ${label}.`,
-	]);
-	expect(authClient).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
-	expect(assigned).toBe("/");
-});
+	return { prefilled, replaced: replacedOnLoad, shown, requests, assigned };
+};
 
 it("starts a rendered provider's sign-in from ?provider=, unless the browser is already signed in", async () => {
 	const run = async (search: string, authenticated: boolean | "unreachable", rendered = ["github"]) => {

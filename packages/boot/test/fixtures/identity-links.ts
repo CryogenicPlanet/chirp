@@ -779,8 +779,8 @@ const run = Effect.gen(function* () {
 		yield* refused(auth.startSetup(failing.code), "setup_code_invalid");
 		assert.deepEqual((yield* auth.startSetup(stdoutCode())).identities, []);
 
-		// A mint racing a finish, in one process or two: a passkey comes only with its own code's offer, and rows
-		// only with a passkey.
+		// A mint racing a finish, through one Auth instance or two (the one SQL connection still orders them): a
+		// passkey comes only with its own code's offer, and rows only with a passkey.
 		const other = yield* build();
 		for (const [index, minter] of [auth, other, auth, other].entries()) {
 			yield* reset;

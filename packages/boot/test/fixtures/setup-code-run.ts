@@ -67,7 +67,9 @@ const run = Effect.gen(function* () {
 		const first = yield* auth.mintSetupCode();
 		assert.match(first.code, /^[A-F0-9]{16}$/);
 		assert.equal(first.expires_at, now + 900_000);
+		assert.equal(first.identities, 0);
 		const pending = yield* auth.startSetup(first.code);
+		assert.deepEqual(pending.identities, []);
 		const second = yield* auth.mintSetupCode();
 		assert.notEqual(first.code, second.code);
 		yield* fails(auth.startSetup(first.code), "setup_code_invalid");
@@ -148,9 +150,11 @@ const run = Effect.gen(function* () {
 		JSON.stringify({ identities });
 	const rahul = { subject: "github:583231", label: "Rahul" };
 	const google = { subject: "google:108", label: "rahul@example.com" };
-	const minted = Schema.decodeEffect(
-		Schema.fromJsonString(Schema.Struct({ code: Schema.String, expires_at: Schema.Finite, identities: Schema.Finite })),
-	);
+	// Exactly these keys: Cloud tells a new image from an old one by whether `identities` is present.
+	const minted = (stdout: string) =>
+		Schema.decodeEffect(
+			Schema.fromJsonString(Schema.Struct({ code: Schema.String, expires_at: Schema.Int, identities: Schema.Int })),
+		)(stdout, { onExcessProperty: "error" });
 	const linkedRows = sql`SELECT ${sql("key")}, value FROM settings WHERE ${sql("key")} LIKE 'auth.identity:%' ORDER BY value`;
 	/** Straight to the socket, past the command's own checks. */
 	const raw = (body: string) =>
@@ -199,7 +203,7 @@ const run = Effect.gen(function* () {
 			offer([{ subject: "github:1", label: "" }]),
 			offer([{ subject: "github:1", label: "x".repeat(101) }]),
 			offer([{ subject: "github:1", label: "line\nbreak" }]),
-			offer([{ subject: "github:1", label: "bidi ‮override" }]),
+			offer([{ subject: "github:1", label: "bidi \u202Eoverride" }]),
 			offer([rahul, google, { subject: "github:2", label: "third" }]),
 			offer([rahul, { ...rahul, label: "twin" }]),
 			JSON.stringify({ identities: [rahul], issuer: "https://evil.test" }),

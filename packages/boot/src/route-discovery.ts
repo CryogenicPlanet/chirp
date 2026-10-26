@@ -173,7 +173,7 @@ const routes = [
 		"get",
 		["/auth/login"],
 		"public",
-		"Human passkey sign-in page. ?provider=github or google starts that provider's sign-in when an identity from it is linked, or goes straight to ?next= when the browser is already signed in.",
+		"Human passkey sign-in page. ?provider=github or google acts only when the page offers that provider, because an identity from it is linked: it starts that provider's sign-in, or goes straight to ?next= when the browser is already signed in.",
 	],
 	[
 		"post",

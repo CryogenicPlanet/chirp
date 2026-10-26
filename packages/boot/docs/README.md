@@ -52,7 +52,7 @@ Discovery must name the issuer exactly and keep every endpoint on the issuer's o
 
 A linked account is not a recovery path. It signs in only while a stored passkey could sign in too, and it never adds a passkey or reopens setup; passkeys, one-time codes and `REOPEN_SETUP` stay the way back in. No schema step was needed, so an older image ignores these rows.
 
-Identities the operator offers with a first-setup code (see [Cloud first setup](#cloud-first-setup)) are linked by the first passkey registration and never sign in before it. `/auth/login?provider=github` (or `google`) starts that sign-in once the page offers the provider, or goes straight to `next` when the browser is already signed in.
+Identities the operator offers with a first-setup code (see [Cloud first setup](#cloud-first-setup)) are linked by the first passkey registration and never sign in before it. `/auth/login?provider=github` (or `google`) acts only when the page offers that provider: it starts that sign-in, or goes straight to `next` when the browser is already signed in.
 
 Local development runs under one OS user. The image separates boot, app and build users; see [deploying a board](../../../docs/deploy.md) for its limits. [Storage](storage.md) describes capacity admission, protected artifacts and retention. [Constraints](constraints.md) records the failures boot is built to prevent; read it before changing boot.
 
@@ -81,12 +81,13 @@ code carries no offer.
 
 The command prints only JSON: `{ "code": "...", "expires_at": 1234567890000, "identities": 1 }`
 on success, where expiry is epoch milliseconds and `identities` counts the identities kept
-with the code (0 when `OIDC_ISSUER=none`); `{ "error": "setup_closed" }` once any passkey exists;
+with the code; `{ "error": "setup_closed" }` once any passkey exists;
 `{ "error": "invalid_request" }` with exit status 1 for a malformed offer, which leaves the
 current code valid; or `{ "error": "setup_code_unavailable" }` with exit status 1 if unavailable.
-Success and setup-closed results use exit status 0. A reply without `identities` comes from an
-older image, which ignores the offer. Images predating this command are unsupported and must
-be updated; callers must not fall back to scraping logs.
+Success and setup-closed results use exit status 0. Every success carries `identities`, 0
+without an argument or when `OIDC_ISSUER=none`, so a reply without it comes from an older
+image, which ignores the offer and has no `#code=` setup link. Images predating this command
+are unsupported and must be updated; callers must not fall back to scraping logs.
 
 Each generated code lasts 15 minutes, replaces previous codes, offers and pending setup
 challenges, and is never logged by boot. Both registration start and finish enforce the deadline.

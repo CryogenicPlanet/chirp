@@ -173,7 +173,8 @@ const main = Effect.gen(function* () {
 		const restarted = yield* build;
 		assert.equal((yield* restarted.finishOidc(yield* begin(restarted, human)))._tag, "session");
 		// An identity offered with a setup code is linked by the first passkey registration, in its commit, and only
-		// under the code it came with: a later mint replaces it, even one racing the finish from another process.
+		// under the code it came with: a later mint replaces it, even one racing the finish from another Auth instance.
+		// Both share this fixture's one pinned connection, so this checks the outcome, not lockBootWrite's row lock.
 		yield* sql`DELETE FROM passkeys`;
 		yield* sql`DELETE FROM sessions`;
 		const rahul = { subject: "github:583231", provider: "github", label: "Rahul" } as const;
