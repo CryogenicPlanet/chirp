@@ -14,6 +14,7 @@ import { sourceTables } from "../../src/boot-source-tables.ts";
 import { layer as lockLayer } from "../../src/edit-lock.ts";
 import { layer as eventsLayer } from "../../src/events.ts";
 import { authenticator } from "./authenticator.ts";
+import { identityId } from "../../src/oidc-schema.ts";
 import { fakeIssuer, type Grant } from "./oidc-issuer.ts";
 
 const Settings = Schema.Struct({
@@ -171,6 +172,57 @@ const main = Effect.gen(function* () {
 		// A new process on the same store still signs the remaining identity in.
 		const restarted = yield* build;
 		assert.equal((yield* restarted.finishOidc(yield* begin(restarted, human)))._tag, "session");
+		// An identity offered with a setup code is linked by the first passkey registration, in its commit, and only
+		// under the code it came with: a later mint replaces it, even one racing the finish from another Auth instance.
+		// Both share this fixture's one pinned connection, so this checks the outcome, not lockBootWrite's row lock.
+		yield* sql`DELETE FROM passkeys`;
+		yield* sql`DELETE FROM sessions`;
+		const rahul = { subject: "github:583231", provider: "github", label: "Rahul" } as const;
+		const offeredKey = `auth.identity:${yield* identityId(issuer.issuer, rahul.subject)}`;
+		const offeredRow = sql`SELECT value FROM settings WHERE ${sql("key")}=${offeredKey}`;
+		const stale = yield* restarted.mintSetupCode([rahul]);
+		const staleChallenge = yield* restarted.startSetup(stale.code);
+		const fresh = yield* restarted.mintSetupCode([{ ...rahul, label: "Rahul again" }]);
+		assert.equal(fresh.identities, 1);
+		const staleFinish = yield* Effect.result(
+			restarted.finishSetup(staleChallenge.id, device.registration(staleChallenge.options.challenge)),
+		);
+		assert.ok(
+			Result.isFailure(staleFinish) &&
+				"code" in staleFinish.failure &&
+				staleFinish.failure.code === "challenge_invalid",
+		);
+		assert.equal((yield* sql`SELECT id FROM passkeys`).length, 0);
+		assert.equal((yield* offeredRow).length, 0);
+		const challenge = yield* restarted.startSetup(fresh.code);
+		const { finished, replaced } = yield* Effect.all(
+			{
+				finished: Effect.result(restarted.finishSetup(challenge.id, device.registration(challenge.options.challenge))),
+				replaced: Effect.result(other.mintSetupCode([{ ...rahul, label: "Rahul raced" }])),
+			},
+			{ concurrency: "unbounded" },
+		);
+		const winner = Result.isSuccess(finished) ? "Rahul again" : "Rahul raced";
+		if (Result.isFailure(finished)) {
+			assert.ok(
+				"code" in finished.failure && finished.failure.code === "challenge_invalid" && Result.isSuccess(replaced),
+			);
+			assert.equal((yield* sql`SELECT id FROM passkeys`).length, 0);
+			assert.equal((yield* offeredRow).length, 0);
+			const retried = yield* other.startSetup(replaced.success.code);
+			yield* other.finishSetup(retried.id, device.registration(retried.options.challenge));
+		} else assert.ok(Result.isFailure(replaced));
+		assert.equal((yield* sql`SELECT id FROM passkeys`).length, 1);
+		const stored = yield* offeredRow.pipe(
+			Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ value: Schema.String })))),
+		);
+		assert.equal(stored.length, 1);
+		assert.ok(stored[0]?.value.includes(`"label":"${winner}"`) && stored[0]?.value.includes(issuer.issuer));
+		assert.equal(
+			(yield* other.finishOidc(yield* begin(other, { subject: rahul.subject, provider: "github", label: "rahul" })))
+				._tag,
+			"session",
+		);
 	}).pipe(Effect.provide(layer));
 	return { engine, passed: true };
 }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(BunServices.layer, FetchHttpClient.layer)));

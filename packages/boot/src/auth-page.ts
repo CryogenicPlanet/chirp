@@ -45,27 +45,53 @@ export const authClient = `(() => {
  const decode = value => Uint8Array.from(atob(value.replace(/-/g,"+").replace(/_/g,"/")), c => c.charCodeAt(0));
  const encode = value => btoa(String.fromCharCode(...new Uint8Array(value))).replace(/\\+/g,"-").replace(/\\//g,"_").replace(/=+$/g,"");
  let stage = "browser", requestId = "", errorCode = "";
- const rawNext = new URLSearchParams(window.location.search).get("next");
- const next = safeNext(rawNext);
+ const query = new URLSearchParams(window.location.search);
+ const next = safeNext(query.get("next"));
+ const providerNames = {github:"GitHub", google:"Google"};
+ // Cloud opens a new board at /setup#code=…; the fragment never reaches a server, and leaves the address bar here.
+ const offeredCode = form.dataset.mode === "setup" ? new URLSearchParams(window.location.hash.slice(1)).get("code") : null;
+ if (offeredCode !== null) {
+  document.getElementById("code").value = offeredCode;
+  history.replaceState(null, "", window.location.pathname + window.location.search);
+ }
  // A linked GitHub or Google account signs in through the board's issuer. The page asks boot for the address with
  // JSON and navigates itself, because a form redirect to another origin breaks form-action 'self'.
- for (const choice of document.querySelectorAll("button[data-provider]")) choice.addEventListener("click", async () => {
-  choice.disabled = true; status.textContent = "Opening the sign-in service…";
-  try {
-   let response;
-   try { response = await fetch("/_boot/auth/oidc/start", {method:"POST", redirect:"manual", headers:{"content-type":"application/json"}, body:JSON.stringify({intent:"login", provider:choice.dataset.provider, next})}); }
-   catch { throw new Error("The sign-in request could not reach the board. Check your connection."); }
-   const result = await response.json().catch(() => null);
-   const target = result && typeof result.authorization_url === "string" ? result.authorization_url : "";
-   if (!response.ok || !(target.startsWith("https://") || target.startsWith("http://"))) {
-    const messages = {oidc_unavailable:"The sign-in service is unavailable right now. Sign in with your passkey.", oidc_disabled:"GitHub and Google sign-in is off for this board. Sign in with your passkey.", origin_invalid:"This address is not an allowed origin for this board.", setup_required:"Create your first passkey at /setup.", identity_not_linked:"That account is no longer linked to this board. Sign in with your passkey.", passkey_origin_mismatch:"No passkey on this board belongs to an address it serves, so linked accounts cannot sign in either. Ask the operator to restore the previous address settings or reopen setup."};
-    const code = result?.error?.code;
-    throw new Error((typeof code === "string" && Object.hasOwn(messages, code) ? messages[code] : null) || "Sign-in was refused (HTTP " + response.status + "). Sign in with your passkey.");
-   }
-   window.location.assign(target);
-  } catch (error) { status.textContent = error instanceof Error ? error.message : "Sign-in failed. Sign in with your passkey."; }
-  finally { choice.disabled = false; }
- });
+ const starts = new Map();
+ for (const choice of document.querySelectorAll("button[data-provider]")) {
+  const start = async () => {
+   choice.disabled = true; status.textContent = "Opening the sign-in service…";
+   try {
+    let response;
+    try { response = await fetch("/_boot/auth/oidc/start", {method:"POST", redirect:"manual", headers:{"content-type":"application/json"}, body:JSON.stringify({intent:"login", provider:choice.dataset.provider, next})}); }
+    catch { throw new Error("The sign-in request could not reach the board. Check your connection."); }
+    const result = await response.json().catch(() => null);
+    const target = result && typeof result.authorization_url === "string" ? result.authorization_url : "";
+    if (!response.ok || !(target.startsWith("https://") || target.startsWith("http://"))) {
+     const messages = {oidc_unavailable:"The sign-in service is unavailable right now. Sign in with your passkey.", oidc_disabled:"GitHub and Google sign-in is off for this board. Sign in with your passkey.", origin_invalid:"This address is not an allowed origin for this board.", setup_required:"Create your first passkey at /setup.", identity_not_linked:"That account is no longer linked to this board. Sign in with your passkey.", passkey_origin_mismatch:"No passkey on this board belongs to an address it serves, so linked accounts cannot sign in either. Ask the operator to restore the previous address settings or reopen setup."};
+     const code = result?.error?.code;
+     throw new Error((typeof code === "string" && Object.hasOwn(messages, code) ? messages[code] : null) || "Sign-in was refused (HTTP " + response.status + "). Sign in with your passkey.");
+    }
+    window.location.assign(target);
+   } catch (error) { status.textContent = error instanceof Error ? error.message : "Sign-in failed. Sign in with your passkey."; }
+   finally { choice.disabled = false; }
+  };
+  starts.set(choice.dataset.provider, start);
+  choice.addEventListener("click", start);
+ }
+ // /auth/login?provider=… starts a rendered provider's sign-in, unless this browser is already signed in. The
+ // parameter leaves the address first, so going back from the sign-in service does not start another round trip.
+ const autoStart = form.dataset.mode === "login" ? starts.get(query.get("provider")) : undefined;
+ if (autoStart) {
+  query.delete("provider");
+  const search = query.toString();
+  history.replaceState(null, "", window.location.pathname + (search ? "?" + search : ""));
+  // A 401 means this browser holds a session boot no longer accepts (revoked, or ended by an unlink elsewhere): that
+  // is signed out, so the sign-in continues. Any other failure starts nothing.
+  fetch("/_boot/auth/state", {redirect:"manual", headers:{accept:"application/json"}})
+   .then(response => response.ok ? response.json() : response.status === 401 ? {authenticated:false} : null)
+   .then(state => { if (state?.authenticated === true) window.location.assign(next); else if (state?.authenticated === false) autoStart(); })
+   .catch(() => {});
+ }
  const progress = (value, message) => { stage = value; status.textContent = message; };
  const post = async (path, body, step) => {
   requestId = ""; errorCode = "";
@@ -122,12 +148,18 @@ export const authClient = `(() => {
     options.user.id = decode(options.user.id);
     options.excludeCredentials = (options.excludeCredentials || []).map(item => ({...item,id:decode(item.id)}));
    } else options.allowCredentials = (options.allowCredentials || []).map(item => ({...item,id:decode(item.id)}));
-   progress(setup ? "credential create" : "credential get", setup ? "Waiting for your browser to create a passkey…" : "Waiting for your browser to unlock your passkey…");
+   // Identities the operator offered with this setup code; the board supplies the labels, so they stay text.
+   const offered = (Array.isArray(started.identities) ? started.identities : [])
+    .filter(item => item && typeof item.label === "string" && Object.hasOwn(providerNames, item.provider))
+    .map(item => providerNames[item.provider] + " account " + item.label);
+   const linking = offered.length ? " It will also link your " + offered.join(" and your ") + "." : "";
+   progress(setup ? "credential create" : "credential get", setup ? "Waiting for your browser to create a passkey…" + linking : "Waiting for your browser to unlock your passkey…");
    const credential = await navigator.credentials[setup ? "create" : "get"]({publicKey:options});
    if (!credential) throw new Error("No passkey was returned. Try again.");
    progress("credential encode", "Preparing passkey verification…");
+   // Every mode answers with a session, so the human goes straight on.
    await post(path + "/verify", {id:started.id, response:serialize(credential)}, "verify");
-   window.location.assign(mode === "setup" ? "/auth/login?next=" + encodeURIComponent(next) : next);
+   window.location.assign(next);
   } catch (error) {
    const names = ["NotAllowedError", "SecurityError", "InvalidStateError", "NotSupportedError", "AbortError", "TypeError", "UnknownError", "Error", "InvalidCharacterError"];
    const name = names.includes(error?.name) ? error.name : "Error";

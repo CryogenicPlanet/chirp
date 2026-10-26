@@ -1,11 +1,13 @@
 /* oxlint-disable effecttsgo/node-builtin-import */
 import { assertionHeader, grantExtensionHeader, grantHeader } from "@comms/protocol/headers";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { promisify } from "node:util";
 import { Schema } from "effect";
 import { expect, it, type TestContext } from "vitest";
 import { authenticator } from "./fixtures/authenticator.ts";
@@ -21,6 +23,7 @@ const identities = Schema.Struct({
 });
 const origin = "https://comms.test";
 const octocat: Grant = { subject: "github:583231", provider: "github", label: "octocat" };
+const execute = promisify(execFile);
 
 /** One boot process on a data directory that outlives it. */
 const launch = async (test: TestContext, directory: string, issuer: string) => {
@@ -369,4 +372,100 @@ it("links, signs in with and unlinks a GitHub identity through a loopback issuer
 		"/_boot/auth/identities/{id}",
 	])
 		expect(manifest).toContain(`"${path}"`);
+}, 60_000);
+
+it("links an identity offered with an operator setup code at registration, which signs in, then signs it in through the issuer", async (test) => {
+	const issuer = await fakeIssuer();
+	test.onTestFinished(() => issuer.close());
+	// The operator socket's path must fit a Unix socket address.
+	const directory = await mkdtemp("/tmp/chirp-oidc-setup-");
+	test.onTestFinished(() => rm(directory, { recursive: true, force: true }));
+	await mkdir(join(directory, "seed"));
+	await writeFile(join(directory, "seed", "child.ts"), 'throw new Error("intentionally unavailable app");');
+	const board = await launch(test, directory, issuer.issuer);
+	const request = (path: string, input: unknown, cookie?: string) =>
+		fetch(`${board.url}${path}`, {
+			method: "POST",
+			headers: { "content-type": "application/json", origin, ...(cookie === undefined ? {} : { cookie }) },
+			body: JSON.stringify(input),
+		});
+	const cookieNamed = (response: Response, name: string) =>
+		response.headers.getSetCookie().find((value) => value.startsWith(`${name}=`)) ?? "";
+	const authState = Schema.Struct({ setup_required: Schema.Boolean, authenticated: Schema.Boolean });
+	const state = async (cookie?: string) =>
+		Schema.decodeUnknownSync(authState)(
+			await (await fetch(`${board.url}/_boot/auth/state`, cookie === undefined ? {} : { headers: { cookie } })).json(),
+		);
+	const minted = Schema.Struct({ code: Schema.String, expires_at: Schema.Finite, identities: Schema.Finite });
+	const closed = Schema.Struct({ error: Schema.Literal("setup_closed") });
+
+	// The fixed operator command, exactly as Cloud runs it: the offer is its one argv element.
+	const offer = JSON.stringify({ identities: [{ subject: octocat.subject, label: "Rahul" }] });
+	const operator = () =>
+		execute("bun", [join(import.meta.dirname, "../src/setup-code.ts"), offer], {
+			env: { ...process.env, DATA_DIR: join(directory, "data") },
+		});
+	await expect.poll(() => existsSync(join(directory, "data", ".boot-operator", "setup.sock"))).toBe(true);
+	const code = Schema.decodeSync(Schema.fromJsonString(minted))((await operator()).stdout);
+	expect(code.identities).toBe(1);
+	// Nothing is linked yet: sign-in still leads to setup, and no provider can start.
+	expect(await state()).toEqual({ setup_required: true, authenticated: false });
+	expect(
+		(await fetch(`${board.url}/auth/login?provider=github&next=/`, { redirect: "manual" })).headers.get("location"),
+	).toBe("/onboarding?next=%2F");
+	expect((await request("/_boot/auth/oidc/start", { intent: "login", provider: "github" })).status).toBe(403);
+
+	// /setup#code=…: the options name the offered identity, and one registration links it and signs in.
+	expect((await fetch(`${board.url}/setup`)).status).toBe(200);
+	const options = await request("/_boot/auth/setup/options", { code: code.code });
+	expect(options.status).toBe(200);
+	const setup = Schema.decodeUnknownSync(
+		Schema.Struct({
+			...ceremony.fields,
+			identities: Schema.Array(Schema.Struct({ provider: Schema.String, label: Schema.String })),
+		}),
+	)(await options.json());
+	expect(setup.identities).toEqual([{ provider: "github", label: "Rahul" }]);
+	const device = authenticator();
+	const registered = await request("/_boot/auth/setup/verify", {
+		id: setup.id,
+		response: device.registration(setup.options.challenge),
+	});
+	expect(registered.status).toBe(200);
+	const header = cookieNamed(registered, "__Host-comms_session");
+	// The same cookie, lifetime included, that a passkey sign-in sets.
+	for (const flag of ["HttpOnly", "Secure", "SameSite=Strict", "Path=/", "Max-Age=2592000"])
+		expect(header).toContain(flag);
+	const owner = header.split(";")[0] ?? "";
+	// An already signed-in visit to /auth/login?provider= goes straight on: the page reads this state first.
+	expect(await state(owner)).toEqual({ setup_required: false, authenticated: true });
+	const listed = Schema.decodeUnknownSync(identities)(
+		await (await fetch(`${board.url}/_boot/auth/identities`, { headers: { cookie: owner } })).json(),
+	);
+	expect(listed.identities.map(({ provider, label }) => ({ provider, label }))).toEqual([
+		{ provider: "github", label: "Rahul" },
+	]);
+	expect((await fetch(`${board.url}/setup`)).status).toBe(404);
+	expect(Schema.decodeSync(Schema.fromJsonString(closed))((await operator()).stdout)).toEqual({
+		error: "setup_closed",
+	});
+
+	// A later visit: the login page renders the provider ?provider= starts, and the issuer's callback signs in.
+	expect(await (await fetch(`${board.url}/auth/login?provider=github&next=/`)).text()).toContain(
+		'data-provider="github"',
+	);
+	expect(await state()).toEqual({ setup_required: false, authenticated: false });
+	const start = await request("/_boot/auth/oidc/start", { intent: "login", provider: "github", next: "/" });
+	expect(start.status).toBe(200);
+	const binding = cookieNamed(start, "__Host-chirp_oidc").split(";")[0] ?? "";
+	const issued = issuer.issue(Schema.decodeUnknownSync(started)(await start.json()).authorization_url, octocat);
+	const callback = new URL(issued.callback);
+	const signedIn = await fetch(`${board.url}${callback.pathname}${callback.search}`, {
+		headers: { cookie: binding, accept: "text/html" },
+		redirect: "manual",
+	});
+	expect(signedIn.status).toBe(200);
+	expect(await signedIn.text()).toContain('content="0;url=/"');
+	const github = cookieNamed(signedIn, "__Host-comms_session").split(";")[0] ?? "";
+	expect(await state(github)).toEqual({ setup_required: false, authenticated: true });
 }, 60_000);

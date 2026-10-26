@@ -6,7 +6,7 @@ Run it through the server launcher with `bun run start` at the repository root. 
 
 ## Recovery surfaces
 
-- `/setup` and `/auth/login`: passkey registration and sign-in, and GitHub or Google sign-in once an account is linked.
+- `/setup` and `/auth/login`: passkey registration and sign-in, and GitHub or Google sign-in once an account is linked. Registering at `/setup` also signs the human in, since whoever holds the setup code could sign in with the new passkey at once.
 - `/_boot`: recovery help, independent of the app.
 - `/_boot/status` and `/_boot/generations`: authenticated runtime and generation diagnostics.
 - `/_boot/events`: authenticated boot lifecycle, enrollment and request diagnostics. Boot records each enrollment's approval or denial and each credential collection, never an enrollment's anonymous creation: the app mirrors enrollment events into board messages, so an anonymous caller could otherwise post to the board.
@@ -52,6 +52,8 @@ Discovery must name the issuer exactly and keep every endpoint on the issuer's o
 
 A linked account is not a recovery path. It signs in only while a stored passkey could sign in too, and it never adds a passkey or reopens setup; passkeys, one-time codes and `REOPEN_SETUP` stay the way back in. No schema step was needed, so an older image ignores these rows.
 
+Identities the operator offers with a first-setup code (see [Cloud first setup](#cloud-first-setup)) are linked by the first passkey registration and never sign in before it. `/auth/login?provider=github` (or `google`) acts only when the page offers that provider: it starts that sign-in, or goes straight to `next` when the browser is already signed in.
+
 Local development runs under one OS user. The image separates boot, app and build users; see [deploying a board](../../../docs/deploy.md) for its limits. [Storage](storage.md) describes capacity admission, protected artifacts and retention. [Constraints](constraints.md) records the failures boot is built to prevent; read it before changing boot.
 
 SQLite is the default. PostgreSQL/MySQL use existing databases and separate credentials. Read [what recovery promises on a remote engine](../../../docs/deploy.md#what-recovery-promises-on-a-remote-engine) before changing remote recovery: rehearsal is a schema check, failed unaccepted cutovers require repair, and provider restore is followed by identity verification. There is no remote root guardian, native dump keeper or database provisioner. Boot's tables use the shared portable migration path.
@@ -69,13 +71,30 @@ to boot with mode `0700`, and the socket is `0600`. The app and dependency build
 connect. This is not a public HTTP route or a shared Cloud credential. Development under one
 OS user is not an isolation boundary.
 
-The command prints only JSON: `{ "code": "...", "expires_at": 1234567890000 }` on success,
-where expiry is epoch milliseconds; `{ "error": "setup_closed" }` once any passkey exists;
-or `{ "error": "setup_code_unavailable" }` with exit status 1 if unavailable. Success and
-setup-closed results use exit status 0. Images predating this command are unsupported and
-must be updated; callers must not fall back to scraping logs.
+The command takes at most one argument, passed as its own argv element and never through a
+shell: a JSON identity offer of at most 2 KB, such as
+`{"identities":[{"subject":"github:583231","label":"Rahul"}]}`. It names at most two
+identities with distinct subjects; a subject is `github:` and the numeric account id, or
+`google:` and the account id, and a label is 1–100 printable characters. Boot links them
+under its own `OIDC_ISSUER`; the operator never names an issuer. Without an argument the
+code carries no offer.
 
-Each generated code lasts 15 minutes, replaces previous codes and pending setup challenges,
-and is never logged by boot. Both registration start and finish enforce the deadline.
-It cannot reopen setup even with `REOPEN_SETUP=1`; existing passkey recovery remains the
-separate operator workflow. Self-hosted startup codes in stdout retain their existing lifetime.
+The command prints only JSON: `{ "code": "...", "expires_at": 1234567890000, "identities": 1 }`
+on success, where expiry is epoch milliseconds and `identities` counts the identities kept
+with the code; `{ "error": "setup_closed" }` once any passkey exists;
+`{ "error": "invalid_request" }` with exit status 1 for a malformed offer, which leaves the
+current code valid; or `{ "error": "setup_code_unavailable" }` with exit status 1 if unavailable.
+Success and setup-closed results use exit status 0. Every success carries `identities`, 0
+without an argument or when `OIDC_ISSUER=none`, so a reply without it comes from an older
+image, which ignores the offer and has no `#code=` setup link. Images predating this command
+are unsupported and must be updated; callers must not fall back to scraping logs.
+
+Each generated code lasts 15 minutes, replaces previous codes, offers and pending setup
+challenges, and is never logged by boot. Both registration start and finish enforce the deadline.
+The offer lives only in memory: three wrong codes, expiry and a restart all drop it, and
+`/_boot/auth/setup/options` lists it as `identities: [{provider, label}]`. The registration that
+finishes under the code links each offered identity in the passkey's commit, and an existing
+link for the same identity is kept. Open the board at `/setup#code=<code>` to fill in the code.
+It cannot reopen setup even with `REOPEN_SETUP=1`, and a reopened setup never links an offer;
+existing passkey recovery remains the separate operator workflow. Self-hosted startup codes in
+stdout retain their existing lifetime.

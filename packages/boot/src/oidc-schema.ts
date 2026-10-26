@@ -29,6 +29,40 @@ export const LinkedIdentity = Schema.Struct({
 });
 export type LinkedIdentity = typeof LinkedIdentity.Type;
 
+/** A GitHub or Google identity the operator offers with a first-setup code. Only the first passkey registration
+ * under that code links it, as a LinkedIdentity under boot's own configured issuer; the operator never names one. */
+export const OfferedIdentity = Schema.Struct({
+	subject: Schema.String,
+	provider: OidcProvider,
+	label: Schema.String,
+});
+export type OfferedIdentity = typeof OfferedIdentity.Type;
+
+// The issuer's subject forms: GitHub's numeric account id, or Google's account id.
+const offeredSubject = /^(?:github:[1-9][0-9]{0,19}|google:[A-Za-z0-9._-]{1,255})$/;
+// 1–100 printable characters: no control, surrogate, line or paragraph separator, or bidirectional override.
+const offeredLabel = /^[^\p{Cc}\p{Cs}\p{Zl}\p{Zp}\u202A-\u202E\u2066-\u2069]{1,100}$/u;
+/** The operator's setup-code request body: at most two identities with distinct subjects. */
+export const SetupOffer = Schema.Struct({
+	identities: Schema.Array(
+		Schema.Struct({
+			subject: Schema.String.check(Schema.isPattern(offeredSubject)),
+			label: Schema.String.check(Schema.isPattern(offeredLabel)),
+		}),
+	).check(
+		Schema.isMaxLength(2),
+		Schema.makeFilter((items) => new Set(items.map((item) => item.subject)).size === items.length),
+	),
+});
+export type SetupOffer = typeof SetupOffer.Type;
+/** The subject's prefix names its provider; the pattern above admits no other. */
+export const offeredIdentities = (offer: SetupOffer): ReadonlyArray<OfferedIdentity> =>
+	offer.identities.map(({ subject, label }) => ({
+		subject,
+		provider: subject.startsWith("github:") ? "github" : "google",
+		label,
+	}));
+
 /** An auth_challenges row for one sign-in round trip. The browser holds the binding; boot keeps only its hash. */
 export const OidcState = Schema.Struct({
 	verifier: Schema.String,

@@ -56,6 +56,8 @@ it.each([
 		window: {
 			isSecureContext: true,
 			location: {
+				search: "",
+				hash: "",
 				assign: () => {
 					throw new Error("Unexpected redirect");
 				},
@@ -138,6 +140,7 @@ it("returns to a safe requested page after sign-in or standalone setup", async (
 				location: {
 					origin: "https://comms.test",
 					search,
+					hash: "",
 					assign: (value: string) => {
 						assigned = value;
 					},
@@ -167,8 +170,217 @@ it("returns to a safe requested page after sign-in or standalone setup", async (
 	expect(await run("?next=/\\evil.example")).toBe("/");
 	// A dot segment collapses into a protocol-relative path once parsed.
 	expect(await run("?next=/.//evil.example")).toBe("/");
-	expect(await run("?next=/t/design", true)).toBe("/auth/login?next=%2Ft%2Fdesign");
-	expect(await run("", true)).toBe("/auth/login?next=%2F");
+	// Setup signs the human in, so it goes straight to the requested page too.
+	expect(await run("?next=/t/design", true)).toBe("/t/design");
+	expect(await run("?next=//evil.example", true)).toBe("/");
+	expect(await run("", true)).toBe("/");
+});
+
+it("fills in a setup code from the fragment, clears it, and shows offered identities as text", async () => {
+	const label = '<img src=x onerror="alert(1)">';
+	const offered = await setupFromFragment({
+		identities: [
+			{ provider: "github", label },
+			{ provider: "gitlab", label: "not offered by boot" },
+		],
+	});
+	// The code is in the field and gone from the address before anything else happens.
+	expect(offered.prefilled).toBe("0123456789ABCDEF");
+	expect(offered.replaced).toEqual(["/setup"]);
+	expect(offered.requests.map((request) => request.path)).toEqual([
+		"/_boot/auth/setup/options",
+		"/_boot/auth/setup/verify",
+	]);
+	expect(offered.requests[0]?.body).toEqual({ code: "0123456789ABCDEF" });
+	// Shown while the browser creates the passkey, as text: the status line is only ever written with textContent.
+	expect(offered.shown).toEqual([
+		`Waiting for your browser to create a passkey… It will also link your GitHub account ${label}.`,
+	]);
+	expect(authClient).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
+	expect(offered.assigned).toBe("/");
+	// With nothing offered, or from a board that names no identities, the code is still filled in and no
+	// identity line appears.
+	for (const options of [{ identities: [] }, {}]) {
+		const plain = await setupFromFragment(options);
+		expect(plain.prefilled).toBe("0123456789ABCDEF");
+		expect(plain.replaced).toEqual(["/setup"]);
+		expect(plain.shown).toEqual(["Waiting for your browser to create a passkey…"]);
+		expect(plain.assigned).toBe("/");
+	}
+});
+
+/** Open /setup#code=… and create the passkey, with the options response carrying `extra`. */
+const setupFromFragment = async (extra: Readonly<Record<string, unknown>>) => {
+	const status = { textContent: "" },
+		button = { disabled: false },
+		code = { value: "" };
+	let submit: (() => Promise<void>) | undefined;
+	const replaced: string[] = [];
+	const shown: string[] = [];
+	const requests: { path: string; body: unknown }[] = [];
+	let assigned = "";
+	class Attestation {
+		clientDataJSON = new Uint8Array([1]).buffer;
+		attestationObject = new Uint8Array([2]).buffer;
+	}
+	runInNewContext(authClient, {
+		document: {
+			querySelectorAll: () => [],
+			getElementById: (id: string) =>
+				id === "status"
+					? status
+					: id === "code"
+						? code
+						: {
+								dataset: { mode: "setup" },
+								querySelector: () => button,
+								addEventListener: (
+									_name: string,
+									callback: (event: { preventDefault: () => void }) => Promise<void>,
+								) => {
+									submit = () => callback({ preventDefault: () => {} });
+								},
+							},
+		},
+		window: {
+			isSecureContext: true,
+			location: {
+				origin: "https://comms.test",
+				pathname: "/setup",
+				search: "",
+				hash: "#code=0123456789ABCDEF",
+				assign: (value: string) => {
+					assigned = value;
+				},
+			},
+		},
+		history: {
+			replaceState: (_state: unknown, _title: string, url: string) => {
+				replaced.push(url);
+			},
+		},
+		navigator: {
+			credentials: {
+				create: async () => {
+					shown.push(status.textContent);
+					return {
+						id: "credential",
+						rawId: new Uint8Array([3]).buffer,
+						type: "public-key",
+						getClientExtensionResults: () => ({}),
+						response: new Attestation(),
+					};
+				},
+			},
+		},
+		AuthenticatorAttestationResponse: Attestation,
+		URL,
+		URLSearchParams,
+		atob,
+		btoa,
+		Uint8Array,
+		fetch: async (path: string, init: RequestInit) => {
+			requests.push({ path, body: JSON.parse(String(init.body)) });
+			return path.endsWith("/options")
+				? Response.json({ id: "challenge", options: { challenge: "YWJj", user: { id: "YWJj" } }, ...extra })
+				: Response.json({ expires_at: 1 });
+		},
+	});
+	// Read before submitting: the fragment is handled as the script loads.
+	const prefilled = code.value;
+	const replacedOnLoad = [...replaced];
+	if (!submit) throw new Error("Missing submit handler");
+	await submit();
+	return { prefilled, replaced: replacedOnLoad, shown, requests, assigned };
+};
+
+it("starts a rendered provider's sign-in from ?provider=, unless the browser is already signed in", async () => {
+	const run = async (
+		search: string,
+		authenticated: boolean | "unreachable" | "revoked" | "failing",
+		rendered = ["github"],
+	) => {
+		const status = { textContent: "" };
+		const requests: string[] = [];
+		const replaced: string[] = [];
+		let assigned = "";
+		runInNewContext(authClient, {
+			document: {
+				querySelectorAll: (selector: string) =>
+					selector === "button[data-provider]"
+						? rendered.map((provider) => ({ disabled: false, dataset: { provider }, addEventListener: () => {} }))
+						: [],
+				getElementById: (id: string) =>
+					id === "status"
+						? status
+						: id === "auth"
+							? { dataset: { mode: "login" }, querySelector: () => ({ disabled: false }), addEventListener: () => {} }
+							: null,
+			},
+			window: {
+				isSecureContext: true,
+				location: {
+					origin: "https://comms.test",
+					pathname: "/auth/login",
+					search,
+					hash: "",
+					assign: (value: string) => {
+						assigned = value;
+					},
+				},
+			},
+			history: {
+				replaceState: (_state: unknown, _title: string, url: string) => {
+					replaced.push(url);
+				},
+			},
+			URL,
+			URLSearchParams,
+			fetch: async (path: string) => {
+				requests.push(path);
+				if (path === "/_boot/auth/state") {
+					if (authenticated === "unreachable") throw new Error("offline");
+					if (authenticated === "revoked")
+						return Response.json({ error: { code: "session_invalid" } }, { status: 401 });
+					if (authenticated === "failing")
+						return Response.json({ error: { code: "boot_unavailable" } }, { status: 503 });
+					return Response.json({ setup_required: false, authenticated });
+				}
+				return Response.json({ authorization_url: "https://auth.chirp.wiki/authorize?state=x" });
+			},
+		});
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		return { assigned, requests, replaced };
+	};
+	expect(await run("?provider=github&next=/t/design", false)).toEqual({
+		assigned: "https://auth.chirp.wiki/authorize?state=x",
+		requests: ["/_boot/auth/state", "/_boot/auth/oidc/start"],
+		replaced: ["/auth/login?next=%2Ft%2Fdesign"],
+	});
+	// Already signed in: straight to the requested page, by the same same-origin rule as sign-in.
+	expect(await run("?provider=github&next=/t/design", true)).toEqual({
+		assigned: "/t/design",
+		requests: ["/_boot/auth/state"],
+		replaced: ["/auth/login?next=%2Ft%2Fdesign"],
+	});
+	expect((await run("?provider=github&next=//evil.example", true)).assigned).toBe("/");
+	// Only a provider whose button the page rendered starts, and nothing starts when boot cannot be asked.
+	for (const [search, rendered] of [
+		["?provider=google", ["github"]],
+		["?provider=github", []],
+		["?provider=__proto__", ["github"]],
+		["?next=/", ["github"]],
+	] as const)
+		expect(await run(search, false, [...rendered])).toEqual({ assigned: "", requests: [], replaced: [] });
+	expect((await run("?provider=github", "unreachable")).assigned).toBe("");
+	expect((await run("?provider=github", "unreachable")).requests).toEqual(["/_boot/auth/state"]);
+	expect((await run("?provider=github", "failing")).requests).toEqual(["/_boot/auth/state"]);
+	// A session boot no longer accepts (for example one ended by an unlink in another browser) counts as signed out.
+	expect(await run("?provider=github&next=/t/design", "revoked")).toEqual({
+		assigned: "https://auth.chirp.wiki/authorize?state=x",
+		requests: ["/_boot/auth/state", "/_boot/auth/oidc/start"],
+		replaced: ["/auth/login?next=%2Ft%2Fdesign"],
+	});
 });
 
 it("offers only linked providers, and starts their sign-in with JSON before navigating itself", async () => {

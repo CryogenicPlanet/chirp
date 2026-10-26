@@ -1,7 +1,12 @@
 import { BunHttpServer, BunSocket } from "@effect/platform-bun";
-import { Effect, FileSystem, Option, Path, Ref } from "effect";
+import { Effect, FileSystem, Option, Path, Ref, Schema } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
-import { Auth } from "./auth.ts";
+import { Auth, AuthError } from "./auth.ts";
+import { offeredIdentities, SetupOffer } from "./oidc-schema.ts";
+import { requestBytes } from "./request-bytes.ts";
+
+/** The operator command sends at most 2 KB; the listener reads no more than twice that. */
+const bodyLimit = 4096;
 
 /** Only the OS operator can reach this listener. It is never mounted on the public router. */
 export const setupCodeServer = Effect.fn("setupCodeServer")(function* (dataDirectory: string) {
@@ -63,7 +68,7 @@ export const setupCodeServer = Effect.fn("setupCodeServer")(function* (dataDirec
 	);
 	const server = yield* BunHttpServer.make({
 		unix: socket,
-		maxRequestBodySize: 0,
+		maxRequestBodySize: bodyLimit,
 		gracefulShutdownTimeout: "1 second",
 	});
 	yield* Ref.set(owned, yield* fs.stat(socket));
@@ -72,15 +77,41 @@ export const setupCodeServer = Effect.fn("setupCodeServer")(function* (dataDirec
 		Effect.gen(function* () {
 			const request = yield* HttpServerRequest.HttpServerRequest;
 			if (request.method !== "POST" || request.url !== "/setup-code") return HttpServerResponse.empty({ status: 404 });
-			return yield* auth.mintSetupCode.pipe(
-				Effect.map((result) => HttpServerResponse.jsonUnsafe(result, { headers: { "cache-control": "no-store" } })),
-				Effect.catchTag("AuthError", () =>
-					Effect.succeed(HttpServerResponse.jsonUnsafe({ error: "setup_closed" }, { status: 409 })),
+			// An empty body offers nothing. A malformed one is refused before the current code is touched. Without a
+			// length or chunked encoding there is no body, and the adapter refuses to stream one.
+			const length = request.headers["content-length"];
+			const empty = request.headers["transfer-encoding"] === undefined && (length === undefined || length === "0");
+			const offer = yield* (
+				empty
+					? Effect.succeed(Buffer.alloc(0))
+					: requestBytes(request, bodyLimit, new AuthError({ code: "invalid_request" }))
+			).pipe(
+				Effect.flatMap((bytes) =>
+					bytes.length === 0
+						? Effect.succeed([])
+						: Schema.decodeEffect(Schema.fromJsonString(SetupOffer))(bytes.toString("utf8"), {
+								onExcessProperty: "error",
+							}).pipe(Effect.map(offeredIdentities)),
 				),
-				Effect.catch(() =>
-					Effect.succeed(HttpServerResponse.jsonUnsafe({ error: "setup_code_unavailable" }, { status: 503 })),
-				),
+				Effect.timeout("5 seconds"),
+				Effect.mapError(() => new AuthError({ code: "invalid_request" })),
 			);
-		}),
+			return yield* auth
+				.mintSetupCode(offer)
+				.pipe(
+					Effect.map((result) => HttpServerResponse.jsonUnsafe(result, { headers: { "cache-control": "no-store" } })),
+				);
+		}).pipe(
+			Effect.catchTag("AuthError", (error) =>
+				Effect.succeed(
+					error.code === "invalid_request"
+						? HttpServerResponse.jsonUnsafe({ error: "invalid_request" }, { status: 400 })
+						: HttpServerResponse.jsonUnsafe({ error: "setup_closed" }, { status: 409 }),
+				),
+			),
+			Effect.catch(() =>
+				Effect.succeed(HttpServerResponse.jsonUnsafe({ error: "setup_code_unavailable" }, { status: 503 })),
+			),
+		),
 	);
 });

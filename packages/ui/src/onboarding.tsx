@@ -72,8 +72,8 @@ export function Onboarding() {
 			return;
 		}
 		setCode("");
-		// Registration alone is not authentication. Boot login verifies an assertion and sets the session cookie.
-		window.location.assign(login);
+		// Registration signs in: boot answered with the session cookie, so this page reopens on the next step.
+		window.location.assign(returnTo);
 	};
 	const copy = async () => {
 		try {
@@ -166,9 +166,7 @@ export function Onboarding() {
 										{busy ? "Creating passkey…" : "Create passkey"}
 									</Button>
 								</form>
-								<p className="mt-[1.8rem] mb-4 text-[0.85rem] text-[#a8b4b4]">
-									After creating it, sign in with the passkey to finish setup.
-								</p>
+								<p className="mt-[1.8rem] mb-4 text-[0.85rem] text-[#a8b4b4]">Creating it also signs you in.</p>
 							</>
 						) : state ? (
 							<>

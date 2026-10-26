@@ -145,7 +145,7 @@ const registerPasskey = (started: typeof Registration.Type) =>
 		};
 	});
 
-/** First registration proves possession but does not create a login session. */
+/** First registration also signs in: boot answers setup/verify with the session cookie. */
 export const setupPasskey = (code: string) =>
 	Effect.gen(function* () {
 		const started = yield* accountPost("/_boot/auth/setup/options", { code: code.trim() }).pipe(

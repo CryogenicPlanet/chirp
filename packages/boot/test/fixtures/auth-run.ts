@@ -120,7 +120,10 @@ const run = Effect.gen(function* () {
 			);
 			assert.equal((yield* sql`SELECT id FROM passkeys`).length, 0);
 		} else {
-			yield* boot.finishSetup(registration.id, device.registration(registration.options.challenge));
+			// Registration signs in: the human holding the setup code gets a working session at once.
+			const opened = yield* boot.finishSetup(registration.id, device.registration(registration.options.challenge));
+			assert.equal((yield* boot.authenticateSession(opened.token)).id, opened.id);
+			assert.deepEqual(yield* sql`SELECT id, origin FROM sessions`, [{ id: opened.id, origin: "https://comms.test" }]);
 			const login = yield* boot.startLogin;
 			if (scenario === "login-validation") {
 				yield* fails(
@@ -140,7 +143,8 @@ const run = Effect.gen(function* () {
 				yield* fails(boot.finishLogin(login.id, tampered), "authentication_invalid");
 				yield* sql`UPDATE auth_challenges SET expires_at = 0 WHERE id = ${login.id}`;
 				yield* fails(boot.finishLogin(login.id, device.assertion(login.options.challenge)), "challenge_invalid");
-				assert.equal((yield* sql`SELECT id FROM sessions`).length, 0);
+				// Only setup's session: no refused sign-in opened one.
+				assert.equal((yield* sql`SELECT id FROM sessions`).length, 1);
 			} else {
 				const response = device.assertion(login.options.challenge);
 				yield* sql`CREATE TRIGGER refuse_session BEFORE INSERT ON sessions BEGIN SELECT RAISE(ABORT, 'session disk failure'); END`;
