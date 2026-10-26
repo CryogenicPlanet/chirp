@@ -8,8 +8,14 @@ import { FlySetupApi, SetupCodeIssue } from "./fly-setup-api.ts";
 import { BoardNotFound } from "./operation.ts";
 import { boardDeployments, boardOperations, boardRoutes, boards } from "./schema.ts";
 
-/** Where "Open board" sends the owner, or the copy-code panel when the board cannot take a prefilled setup. */
-export type BoardOpen = { readonly url: string } | { readonly fallback: "setup_code" };
+/**
+ * Where "Open board" sends the owner, or the copy-code panel when the board cannot take a prefilled setup: an older
+ * image's panel shows the code this Open already issued, so no second exec replaces it.
+ */
+export type BoardOpen =
+	| { readonly url: string }
+	| { readonly fallback: "setup_code"; readonly code: string; readonly expires_at: string }
+	| { readonly fallback: "setup_code" };
 
 const unavailable = () => new SetupCodeIssue({ code: "setup_code_unavailable" });
 const hostnamePattern = /^(?:[a-z0-9][a-z0-9-]*\.)+[a-z]{2,63}$/;
@@ -181,17 +187,20 @@ const make = (organization: string) =>
 							? `https://${hostname}/auth/login?provider=${provider}&next=/`
 							: `https://${hostname}/auth/login`,
 					};
-					const fallback: BoardOpen = { fallback: "setup_code" };
 					// A public read that also wakes the board, so a board with a passkey never needs Fly exec.
 					if (!(yield* setup.setupRequired(hostname))) return login;
-					if (!identities.length) return fallback;
+					// Exactly one exec: a new image prefills /setup from the fragment whether or not it linked anyone.
 					return yield* issue(ownerId, boardId).pipe(
-						Effect.map((issued): BoardOpen => (issued.identities > 0 ? { url: issued.setup_url } : fallback)),
+						Effect.map((issued): BoardOpen =>
+							issued.identities === undefined
+								? { fallback: "setup_code", code: issued.code, expires_at: issued.expires_at }
+								: { url: issued.setup_url },
+						),
 						Effect.catchTag("SetupCodeIssue", (problem): Effect.Effect<BoardOpen, SetupCodeIssue> =>
 							problem.code === "setup_closed"
 								? Effect.succeed(login)
 								: problem.code === "setup_code_unsupported"
-									? Effect.succeed(fallback)
+									? Effect.succeed({ fallback: "setup_code" })
 									: Effect.fail(problem),
 						),
 					);

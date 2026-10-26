@@ -72,12 +72,19 @@ export const makeBoardSetupHttp = (dependencies: Dependencies) =>
 			{ headers },
 		);
 	});
-/** POST /api/boards/:boardId/open: the board address that signs its owner in, or `setup_code` for the copy-code panel. */
+/** POST /api/boards/:boardId/open: the board address that signs its owner in, or `setup_code` (with the code it issued) for the copy-code panel. */
 export const makeBoardOpenHttp = (dependencies: OpenDependencies) =>
 	ownerBoardPost(dependencies, "board_unavailable", async (ownerId, boardId, { headers, error }) => {
 		const result = await dependencies.open(ownerId, boardId);
 		if (!result.ok) return error(result.code === "not_found" ? 404 : 503, result.code);
-		return Response.json("url" in result ? { url: result.url } : { fallback: result.fallback }, { headers });
+		return Response.json(
+			"url" in result
+				? { url: result.url }
+				: "code" in result
+					? { fallback: result.fallback, code: result.code, expires_at: result.expires_at }
+					: { fallback: result.fallback },
+			{ headers },
+		);
 	});
 export const setupCodeHttp = makeBoardSetupHttp({
 	getSession: getAuthSessionWithHeaders,

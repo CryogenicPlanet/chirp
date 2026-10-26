@@ -80,6 +80,7 @@ test("open answers only a signed-in owner's same-origin empty POST, with a board
 	const answers = {
 		setup: { ok: true, url: "https://board.test/setup#code=private-setup-code" },
 		login: { ok: true, url: "https://board.test/auth/login?provider=github&next=/" },
+		issued: { ok: true, fallback: "setup_code", code: "private-setup-code", expires_at: "2026-09-21T12:15:00.000Z" },
 		fallback: { ok: true, fallback: "setup_code" },
 	} as const;
 	for (const [name, answer] of Object.entries(answers)) {
@@ -92,7 +93,7 @@ test("open answers only a signed-in owner's same-origin empty POST, with a board
 		const { ok: _ok, ...body } = answer;
 		expect(await response.json()).toEqual(body);
 	}
-	expect(opened).toEqual([`owner:${id}:setup`, `owner:${id}:login`, `owner:${id}:fallback`]);
+	expect(opened).toEqual([`owner:${id}:setup`, `owner:${id}:login`, `owner:${id}:issued`, `owner:${id}:fallback`]);
 	const never = http(async () => {
 		throw new Error("unexpected open");
 	});

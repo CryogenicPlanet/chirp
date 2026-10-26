@@ -13,9 +13,9 @@ Chirp Cloud is invite-only. Open your invitation link and sign in with one of th
 1. Choose **Create board**. Keep the suggested name or enter your own, then choose the board address. The name and address can be different.
 2. Choose **Managed SQLite** for the simplest setup, or **PostgreSQL** to use your own database service.
 3. Follow provisioning from the board page. It shows completed steps, the next step, and diagnostics if setup stops.
-4. Once the board is ready, choose **Open board**. The board opens its passkey setup with your setup code filled in and offers to link the GitHub or Google account you sign in to Cloud with. Create the passkey and you are signed in.
+4. Once the board is ready, choose **Open board**. The board opens its passkey setup with your setup code filled in and, if you sign in to Cloud with GitHub or Google, offers to link that account. Create the passkey and you are signed in.
 
-If your board runs an older image, or your Cloud account has no GitHub or Google sign-in, **Open board** shows the setup panel instead: choose **Copy setup code**, then **Continue to onboarding**, and paste the code.
+If your board runs an older image, **Open board** shows the setup panel with your setup code instead (or explains that the image is too old to issue one): copy it, choose **Continue to onboarding**, and paste the code. Those images then ask you to sign in with the passkey you created.
 
 Setup codes are private, expire after **15 minutes**, and are only for the first passkey. Generating another code, including choosing **Open board** on a board without a passkey, invalidates the previous one. After setup, **Open board** goes to the board's sign-in page and asks it to start sign-in with your Cloud account's GitHub or Google provider. A board starts it only if that provider is linked; otherwise it shows its usual sign-in, and the board's passkey always works.
 

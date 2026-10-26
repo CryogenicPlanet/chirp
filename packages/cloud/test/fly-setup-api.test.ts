@@ -109,22 +109,29 @@ const execLayer = (reply: (command: unknown) => Response) =>
 		),
 	);
 
-test("identities ride as one JSON argument; new and old images both decode", async () => {
+test("identities ride as one JSON argument; the identities key, not its count, marks a new image", async () => {
 	const now = Date.parse("2026-01-01T00:00:00.000Z");
 	vi.spyOn(Date, "now").mockReturnValue(now);
 	const identities = [
 		{ subject: "github:583231", label: 'Rahul "quoted" $(id)' },
 		{ subject: "google:1234567890", label: "Rahul" },
 	];
-	for (const [reply, expected] of [
-		[{ identities: 2 }, Result.succeed(2)],
-		[{}, Result.succeed(0)],
-		[{ identities: 3 }, Result.fail("setup_code_unavailable")],
-		[{ identities: 1, linked: ["github:583231"] }, Result.fail("setup_code_unavailable")],
+	const base = ["/usr/local/bin/bun", "/opt/comms/packages/boot/dist/setup-code.js"];
+	for (const [offered, reply, expected] of [
+		[identities, { identities: 2 }, Result.succeed(2)],
+		[identities, { identities: 0 }, Result.succeed(0)],
+		// An older image ignores the argument and omits the key.
+		[identities, {}, Result.succeed(undefined)],
+		[[], {}, Result.succeed(undefined)],
+		// A new image always answers with the key, even with no argument.
+		[[], { identities: 0 }, Result.succeed(0)],
+		[[], { identities: 1 }, Result.fail("setup_code_unavailable")],
+		[identities, { identities: 3 }, Result.fail("setup_code_unavailable")],
+		[identities, { identities: 1, linked: ["github:583231"] }, Result.fail("setup_code_unavailable")],
 	] as const) {
 		let command: unknown;
 		const result = await Effect.runPromise(
-			FlySetupApi.use((api) => Effect.result(api.issue("app", "machine", identities))).pipe(
+			FlySetupApi.use((api) => Effect.result(api.issue("app", "machine", offered))).pipe(
 				Effect.provide(
 					execLayer((sent) => {
 						command = sent;
@@ -136,14 +143,30 @@ test("identities ride as one JSON argument; new and old images both decode", asy
 				),
 			),
 		);
-		expect(command).toEqual([
-			"/usr/local/bin/bun",
-			"/opt/comms/packages/boot/dist/setup-code.js",
-			JSON.stringify({ identities }),
-		]);
+		expect(command).toEqual(offered.length ? [...base, JSON.stringify({ identities: offered })] : base);
 		expect(
 			Result.isSuccess(result) ? Result.succeed(result.success.identities) : Result.fail(result.failure.code),
 		).toEqual(expected);
+	}
+});
+
+test("an exit-1 reply or an unknown error is a failure, never a code", async () => {
+	const now = Date.parse("2026-01-01T00:00:00.000Z");
+	vi.spyOn(Date, "now").mockReturnValue(now);
+	const code = JSON.stringify({ code: "a".repeat(16), expires_at: now + 890000, identities: 1 });
+	for (const [exit_code, stdout] of [
+		// Boot's answer to a malformed offer.
+		[1, JSON.stringify({ error: "invalid_request" })],
+		[0, JSON.stringify({ error: "invalid_request" })],
+		[1, JSON.stringify({ error: "setup_code_unavailable" })],
+		[1, code],
+	] as const) {
+		const result = await Effect.runPromise(
+			FlySetupApi.use((api) =>
+				Effect.result(api.issue("app", "machine", [{ subject: "github:583231", label: "Rahul" }])),
+			).pipe(Effect.provide(execLayer(() => Response.json({ exit_code, stdout })))),
+		);
+		expect(result).toMatchObject({ failure: { code: "setup_code_unavailable" } });
 	}
 });
 

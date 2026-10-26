@@ -18,7 +18,7 @@ const ExecResult = Schema.Struct({
 	stdout: Schema.String.check(Schema.isMaxLength(1024)),
 	stderr: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4096))),
 });
-// Older images reply without `identities`: they ignore the argument and link nothing.
+// Images that link identities always reply with `identities`, 0 included; older ones ignore the argument and omit it.
 const decodePayload = Schema.decodeUnknownSync(
 	Schema.fromJsonString(
 		Schema.Union([
@@ -120,15 +120,20 @@ const make = (settings: FlyApiSettings) =>
 								result.stderr?.trim() === 'error: Module not found "/opt/comms/packages/boot/dist/setup-code.js"')
 						)
 							return yield* new SetupCodeIssue({ code: "setup_code_unsupported" });
+						// Any other failed exit, including boot's {"error":"invalid_request"} for a malformed offer, is never a code.
 						if (result.exit_code !== 0 || (result.exit_signal !== undefined && result.exit_signal !== 0))
 							return yield* unavailable();
 						const payload = yield* Effect.try({ try: () => decodePayload(result.stdout), catch: unavailable });
 						if ("error" in payload) return yield* new SetupCodeIssue({ code: "setup_closed" });
 						const now = Date.now();
 						if (payload.expires_at <= now || payload.expires_at > now + 960_000) return yield* unavailable();
-						const linked = payload.identities ?? 0;
-						if (linked > identities.length) return yield* unavailable();
-						return { code: payload.code, expires_at: new Date(payload.expires_at).toISOString(), identities: linked };
+						if (payload.identities !== undefined && payload.identities > identities.length) return yield* unavailable();
+						return {
+							code: payload.code,
+							expires_at: new Date(payload.expires_at).toISOString(),
+							// Undefined only from an older image, which cannot prefill /setup from the fragment.
+							identities: payload.identities,
+						};
 					}),
 				).pipe(Effect.timeout("8 seconds"), Effect.catchTag("TimeoutError", unavailable)),
 		};

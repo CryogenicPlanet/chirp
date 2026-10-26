@@ -3,22 +3,25 @@
 import { ArrowUpRight, Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTrack } from "./analytics.tsx";
-import { openBoardTarget } from "./open-board.ts";
+import { type IssuedSetupCode, openBoardTarget } from "./open-board.ts";
 
 /**
- * Asks Cloud where to sign the owner in, then goes there; `onSetupCode` shows the copy-code panel instead. If Cloud
- * cannot answer, the board's plain address is still offered, as the link this replaced always was.
+ * Asks Cloud where to sign the owner in, then goes there; `onSetupCode` shows the copy-code panel with the code Cloud issued. An
+ * Open can replace the board's code even when it fails, so `onOpening` clears any code on screen first. If Cloud cannot
+ * answer, the board's plain address is still offered, as the link this replaced always was.
  */
 export function OpenBoardButton({
 	boardId,
 	hostname,
 	className,
+	onOpening,
 	onSetupCode,
 }: {
 	readonly boardId: string;
 	readonly hostname: string;
 	readonly className: string;
-	readonly onSetupCode: () => void;
+	readonly onOpening: () => void;
+	readonly onSetupCode: (code: IssuedSetupCode | undefined) => void;
 }) {
 	const track = useTrack();
 	const [pending, setPending] = useState(false);
@@ -34,6 +37,7 @@ export function OpenBoardButton({
 	const open = async () => {
 		setPending(true);
 		setError(undefined);
+		onOpening();
 		track("board_opened", { board_id: boardId });
 		try {
 			const response = await fetch(`/api/boards/${encodeURIComponent(boardId)}/open`, {
@@ -47,7 +51,7 @@ export function OpenBoardButton({
 				window.location.assign(target.navigate);
 				return;
 			}
-			if (target) onSetupCode();
+			if (target) onSetupCode(target.setupCode);
 			else
 				setError(
 					response.status === 401

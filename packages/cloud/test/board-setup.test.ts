@@ -1,4 +1,4 @@
-import { Deferred, Effect, Fiber, Layer, Option } from "effect";
+import { Deferred, Effect, Fiber, Layer, Option, Result } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import { expect, test } from "vitest";
 import { BoardSetup, boardSetupLayer } from "../src/board-setup.ts";
@@ -207,7 +207,8 @@ const setupLayer = (
 	provider: ReturnType<typeof makeFakeProvider>,
 	api: {
 		readonly setupRequired?: Effect.Effect<boolean, SetupCodeIssue>;
-		readonly issue?: (identities: ReadonlyArray<SetupIdentity>) => Effect.Effect<number, SetupCodeIssue>;
+		// The reply's identities count; undefined is an older image's reply, which has no such key.
+		readonly issue?: (identities: ReadonlyArray<SetupIdentity>) => Effect.Effect<number | undefined, SetupCodeIssue>;
 	},
 ) =>
 	boardSetupLayer(settings.organization).pipe(
@@ -274,37 +275,78 @@ test("issue offers the owner's newest valid GitHub and Google identity, never an
 	);
 });
 
-test("open signs a passkey board in through its provider and sends a new board to prefilled setup", async () => {
+test("open: one exec for a board in setup; a new image gets prefilled setup, an older one the code it issued", async () => {
 	await runFresh(
 		Effect.gen(function* () {
 			const { board, provider, host, sql } = yield* provisioned;
+			const offered: Array<ReadonlyArray<SetupIdentity>> = [];
 			const open = (api: Parameters<typeof setupLayer>[1]) =>
-				Effect.result(
-					BoardSetup.use((service) => service.open(request.owner_id, board.id)).pipe(
-						Effect.provide(setupLayer(provider, api)),
-					),
-				);
-			// No GitHub or Google account: the plain sign-in page, or the copy-code panel without spending an exec.
-			expect(yield* open({ setupRequired: Effect.succeed(false) })).toMatchObject({
-				success: { url: `https://${host}/auth/login` },
+				Effect.gen(function* () {
+					const before = offered.length;
+					const issue = api.issue;
+					const result = yield* Effect.result(
+						BoardSetup.use((service) => service.open(request.owner_id, board.id)).pipe(
+							Effect.provide(
+								setupLayer(provider, {
+									...api,
+									...(issue
+										? {
+												issue: (identities: ReadonlyArray<SetupIdentity>) =>
+													Effect.suspend(() => {
+														offered.push(identities);
+														return issue(identities);
+													}),
+											}
+										: {}),
+								}),
+							),
+						),
+					);
+					return { result, execs: offered.length - before };
+				});
+			const newImage = (identities: ReadonlyArray<SetupIdentity>) => Effect.succeed(identities.length);
+			const oldImage = () => Effect.succeed(undefined);
+			const setupUrl = `https://${host}/setup#code=A1B2C3D4E5F60718`;
+			const issuedFallback = { fallback: "setup_code", code: "A1B2C3D4E5F60718", expires_at: expect.any(String) };
+
+			// No GitHub or Google account.
+			expect(yield* open({ setupRequired: Effect.succeed(false) })).toEqual({
+				result: Result.succeed({ url: `https://${host}/auth/login` }),
+				execs: 0,
 			});
-			expect(yield* open({ setupRequired: Effect.succeed(true) })).toMatchObject({
-				success: { fallback: "setup_code" },
+			expect(yield* open({ setupRequired: Effect.succeed(true), issue: newImage })).toEqual({
+				result: Result.succeed({ url: setupUrl }),
+				execs: 1,
 			});
+			expect(offered.at(-1)).toEqual([]);
+			expect(yield* open({ setupRequired: Effect.succeed(true), issue: oldImage })).toEqual({
+				result: Result.succeed(issuedFallback),
+				execs: 1,
+			});
+
 			yield* linkAccount(sql, "g", request.owner_id, "google", "109876543210", 0);
 			expect(yield* open({ setupRequired: Effect.succeed(false) })).toMatchObject({
-				success: { url: `https://${host}/auth/login?provider=google&next=/` },
+				result: { success: { url: `https://${host}/auth/login?provider=google&next=/` } },
+				execs: 0,
 			});
 			yield* linkAccount(sql, "h", request.owner_id, "github", "583231", 10);
 			expect(yield* open({ setupRequired: Effect.succeed(false) })).toMatchObject({
-				success: { url: `https://${host}/auth/login?provider=github&next=/` },
+				result: { success: { url: `https://${host}/auth/login?provider=github&next=/` } },
+				execs: 0,
 			});
-			expect(
-				yield* open({ setupRequired: Effect.succeed(true), issue: (identities) => Effect.succeed(identities.length) }),
-			).toMatchObject({ success: { url: `https://${host}/setup#code=A1B2C3D4E5F60718` } });
-			// An older image ignores the identities and replies without a count.
-			expect(yield* open({ setupRequired: Effect.succeed(true), issue: () => Effect.succeed(0) })).toMatchObject({
-				success: { fallback: "setup_code" },
+			expect(yield* open({ setupRequired: Effect.succeed(true), issue: newImage })).toEqual({
+				result: Result.succeed({ url: setupUrl }),
+				execs: 1,
+			});
+			expect(offered.at(-1)?.map((identity) => identity.subject)).toEqual(["github:583231", "google:109876543210"]);
+			// A new image that linked nobody still prefills /setup; only a reply without the key is an older image.
+			expect(yield* open({ setupRequired: Effect.succeed(true), issue: () => Effect.succeed(0) })).toEqual({
+				result: Result.succeed({ url: setupUrl }),
+				execs: 1,
+			});
+			expect(yield* open({ setupRequired: Effect.succeed(true), issue: oldImage })).toEqual({
+				result: Result.succeed(issuedFallback),
+				execs: 1,
 			});
 			// A passkey created between the state read and exec.
 			expect(
@@ -312,18 +354,18 @@ test("open signs a passkey board in through its provider and sends a new board t
 					setupRequired: Effect.succeed(true),
 					issue: () => Effect.fail(new SetupCodeIssue({ code: "setup_closed" })),
 				}),
-			).toMatchObject({ success: { url: `https://${host}/auth/login?provider=github&next=/` } });
+			).toMatchObject({ result: { success: { url: `https://${host}/auth/login?provider=github&next=/` } }, execs: 1 });
 			expect(
 				yield* open({
 					setupRequired: Effect.succeed(true),
 					issue: () => Effect.fail(new SetupCodeIssue({ code: "setup_code_unsupported" })),
 				}),
-			).toMatchObject({ success: { fallback: "setup_code" } });
+			).toEqual({ result: Result.succeed({ fallback: "setup_code" }), execs: 1 });
 			expect(
 				yield* open({ setupRequired: Effect.fail(new SetupCodeIssue({ code: "setup_code_unavailable" })) }),
-			).toMatchObject({ failure: { code: "setup_code_unavailable" } });
+			).toMatchObject({ result: { failure: { code: "setup_code_unavailable" } }, execs: 0 });
 			yield* sql`UPDATE board_routes SET hostname = 'foreign.test' WHERE board_id = ${board.id}`;
-			expect(yield* open({})).toMatchObject({ failure: { code: "setup_code_unavailable" } });
+			expect(yield* open({})).toMatchObject({ result: { failure: { code: "setup_code_unavailable" } }, execs: 0 });
 		}),
 	);
 });
