@@ -6,16 +6,37 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "./components/ui/button.tsx";
 import { Input } from "./components/ui/input.tsx";
 import { useTrack } from "./analytics.tsx";
+import type { IssuedSetupCode } from "./open-board.ts";
 
 const setupResponse = Schema.Struct({ code: Schema.String, expires_at: Schema.String, onboarding_url: Schema.String });
 const setupError = Schema.Struct({ error: Schema.Struct({ code: Schema.String }) });
 
-export function BoardSetupPanel({ boardId, hostname }: { readonly boardId: string; readonly hostname: string }) {
+export function BoardSetupPanel({
+	boardId,
+	hostname,
+	initialCode,
+	onIssued,
+	open,
+	onOpenChange,
+}: {
+	readonly boardId: string;
+	readonly hostname: string;
+	/** A code Open board already issued; showing it avoids an exec that would replace it. */
+	readonly initialCode?: IssuedSetupCode | undefined;
+	/** Keeps the parent's copy current, so a remount never shows a code this panel replaced or saw expire. */
+	readonly onIssued: (code: IssuedSetupCode | undefined) => void;
+	readonly open: boolean;
+	readonly onOpenChange: (open: boolean) => void;
+}) {
 	const track = useTrack();
-	const [issued, setIssued] = useState<typeof setupResponse.Type>();
+	const [issued, setIssued] = useState<IssuedSetupCode | undefined>(initialCode);
+	const show = (code: IssuedSetupCode | undefined) => {
+		setIssued(code);
+		onIssued(code);
+	};
 	const [pending, setPending] = useState(false);
 	const [copied, setCopied] = useState(false);
-	const [focusCode, setFocusCode] = useState(false);
+	const [focusCode, setFocusCode] = useState(initialCode !== undefined);
 	const [expired, setExpired] = useState(false);
 	const [closed, setClosed] = useState(false);
 	const [error, setError] = useState<string>();
@@ -36,7 +57,7 @@ export function BoardSetupPanel({ boardId, hostname }: { readonly boardId: strin
 	useEffect(() => {
 		if (!issued) return;
 		const expire = () => {
-			setIssued(undefined);
+			show(undefined);
 			setCopied(false);
 			setFocusCode(false);
 			setExpired(true);
@@ -70,7 +91,7 @@ export function BoardSetupPanel({ boardId, hostname }: { readonly boardId: strin
 		const controller = new AbortController();
 		request.current = controller;
 		setPending(true);
-		setIssued(undefined);
+		show(undefined);
 		setCopied(false);
 		setFocusCode(false);
 		setError(undefined);
@@ -107,7 +128,7 @@ export function BoardSetupPanel({ boardId, hostname }: { readonly boardId: strin
 				setError("We couldn't verify the setup code. Please try again.");
 				return;
 			}
-			setIssued(value);
+			show({ code: value.code, expires_at: value.expires_at });
 			setExpired(false);
 			track("setup_code_generated", { board_id: boardId });
 			await copy(value.code, controller.signal);
@@ -120,7 +141,11 @@ export function BoardSetupPanel({ boardId, hostname }: { readonly boardId: strin
 	};
 
 	return (
-		<details className="mt-4 rounded-md border border-border bg-card p-5">
+		<details
+			className="mt-4 rounded-md border border-border bg-card p-5"
+			open={open}
+			onToggle={(event) => onOpenChange(event.currentTarget.open)}
+		>
 			<summary className="cursor-pointer text-sm font-medium focus-visible:outline-ring">
 				{closed ? "Board passkey is set up" : "First-time board setup"}
 			</summary>
@@ -204,7 +229,7 @@ export function BoardSetupPanel({ boardId, hostname }: { readonly boardId: strin
 							{issued ? (
 								<Button asChild>
 									<a
-										href={issued.onboarding_url}
+										href={`https://${hostname}/onboarding`}
 										target="_blank"
 										rel="noreferrer"
 										onClick={() => track("onboarding_opened", { board_id: boardId })}

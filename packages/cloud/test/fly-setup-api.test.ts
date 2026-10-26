@@ -1,5 +1,5 @@
-import { Effect, Layer, Redacted, Result } from "effect";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { Context, Effect, Layer, Redacted, Result } from "effect";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { afterEach, expect, test, vi } from "vitest";
 import { FlySetupApi, flySetupApiLayer } from "../src/fly-setup-api.ts";
 
@@ -77,7 +77,7 @@ test("fixed exec argv, strict ephemeral payload and sanitized provider failures"
 			),
 		);
 		const result = await Effect.runPromise(
-			FlySetupApi.use((api) => Effect.result(api.issue("app", "machine"))).pipe(Effect.provide(layer)),
+			FlySetupApi.use((api) => Effect.result(api.issue("app", "machine", []))).pipe(Effect.provide(layer)),
 		);
 		expect(Result.isSuccess(result)).toBe(mode === "ok" || mode === "skewed");
 		expect(JSON.stringify(result)).not.toContain("raw-secret");
@@ -85,5 +85,127 @@ test("fixed exec argv, strict ephemeral payload and sanitized provider failures"
 			expect(result).toMatchObject({ failure: { code: "setup_code_unsupported" } });
 		if (mode === "near-missing-script") expect(result).toMatchObject({ failure: { code: "setup_code_unavailable" } });
 		if (mode === "closed") expect(result).toMatchObject({ failure: { code: "setup_closed" } });
+	}
+});
+
+const execLayer = (reply: (command: unknown) => Response) =>
+	flySetupApiLayer({ token: Redacted.make("secret"), baseUrl: "https://fly.test" }).pipe(
+		Layer.provide(
+			Layer.succeed(
+				HttpClient.HttpClient,
+				HttpClient.make((request) =>
+					Effect.succeed(
+						HttpClientResponse.fromWeb(
+							request,
+							reply(
+								request.body._tag === "Uint8Array"
+									? JSON.parse(new TextDecoder().decode(request.body.body)).command
+									: undefined,
+							),
+						),
+					),
+				),
+			),
+		),
+	);
+
+test("identities ride as one JSON argument; the identities key, not its count, marks a new image", async () => {
+	const now = Date.parse("2026-01-01T00:00:00.000Z");
+	vi.spyOn(Date, "now").mockReturnValue(now);
+	const identities = [
+		{ subject: "github:583231", label: 'Rahul "quoted" $(id)' },
+		{ subject: "google:1234567890", label: "Rahul" },
+	];
+	const base = ["/usr/local/bin/bun", "/opt/comms/packages/boot/dist/setup-code.js"];
+	for (const [offered, reply, expected] of [
+		[identities, { identities: 2 }, Result.succeed(2)],
+		[identities, { identities: 0 }, Result.succeed(0)],
+		// An older image ignores the argument and omits the key.
+		[identities, {}, Result.succeed(undefined)],
+		[[], {}, Result.succeed(undefined)],
+		// A new image always answers with the key, even with no argument.
+		[[], { identities: 0 }, Result.succeed(0)],
+		[[], { identities: 1 }, Result.fail("setup_code_unavailable")],
+		[identities, { identities: 3 }, Result.fail("setup_code_unavailable")],
+		[identities, { identities: 1, linked: ["github:583231"] }, Result.fail("setup_code_unavailable")],
+	] as const) {
+		let command: unknown;
+		const result = await Effect.runPromise(
+			FlySetupApi.use((api) => Effect.result(api.issue("app", "machine", offered))).pipe(
+				Effect.provide(
+					execLayer((sent) => {
+						command = sent;
+						return Response.json({
+							exit_code: 0,
+							stdout: JSON.stringify({ code: "a".repeat(16), expires_at: now + 890000, ...reply }),
+						});
+					}),
+				),
+			),
+		);
+		expect(command).toEqual(offered.length ? [...base, JSON.stringify({ identities: offered })] : base);
+		expect(
+			Result.isSuccess(result) ? Result.succeed(result.success.identities) : Result.fail(result.failure.code),
+		).toEqual(expected);
+	}
+});
+
+test("an exit-1 reply or an unknown error is a failure, never a code", async () => {
+	const now = Date.parse("2026-01-01T00:00:00.000Z");
+	vi.spyOn(Date, "now").mockReturnValue(now);
+	const code = JSON.stringify({ code: "a".repeat(16), expires_at: now + 890000, identities: 1 });
+	for (const [exit_code, stdout] of [
+		// Boot's answer to a malformed offer.
+		[1, JSON.stringify({ error: "invalid_request" })],
+		[0, JSON.stringify({ error: "invalid_request" })],
+		[1, JSON.stringify({ error: "setup_code_unavailable" })],
+		[1, code],
+	] as const) {
+		const result = await Effect.runPromise(
+			FlySetupApi.use((api) =>
+				Effect.result(api.issue("app", "machine", [{ subject: "github:583231", label: "Rahul" }])),
+			).pipe(Effect.provide(execLayer(() => Response.json({ exit_code, stdout })))),
+		);
+		expect(result).toMatchObject({ failure: { code: "setup_code_unavailable" } });
+	}
+});
+
+test("auth state is a bounded, non-redirecting public read of setup_required", async () => {
+	for (const [status, body, expected] of [
+		[200, JSON.stringify({ setup_required: true, authenticated: false }), Result.succeed(true)],
+		[200, JSON.stringify({ setup_required: false, authenticated: false, later: 1 }), Result.succeed(false)],
+		[200, JSON.stringify({ setup_required: "yes" }), Result.fail("setup_code_unavailable")],
+		[200, JSON.stringify({ setup_required: false, padding: "x".repeat(5000) }), Result.fail("setup_code_unavailable")],
+		[302, "", Result.fail("setup_code_unavailable")],
+		[503, JSON.stringify({ setup_required: false }), Result.fail("setup_code_unavailable")],
+	] as const) {
+		const layer = flySetupApiLayer({ token: Redacted.make("secret") }).pipe(
+			Layer.provide(
+				Layer.succeed(
+					HttpClient.HttpClient,
+					HttpClient.make((request, _url, _signal, fiber) => {
+						expect(Context.getOrUndefined(fiber.context, FetchHttpClient.RequestInit)?.redirect).toBe("manual");
+						expect(request.url).toBe("https://board.test/_boot/auth/state");
+						expect(request.method).toBe("GET");
+						expect(request.headers["authorization"]).toBeUndefined();
+						return Effect.succeed(
+							HttpClientResponse.fromWeb(
+								request,
+								new Response(status === 302 ? null : body, {
+									status,
+									headers: status === 302 ? { location: "https://elsewhere.test/" } : {},
+								}),
+							),
+						);
+					}),
+				),
+			),
+		);
+		const result = await Effect.runPromise(
+			FlySetupApi.use((api) => Effect.result(api.setupRequired("board.test"))).pipe(Effect.provide(layer)),
+		);
+		expect(Result.isSuccess(result) ? Result.succeed(result.success) : Result.fail(result.failure.code)).toEqual(
+			expected,
+		);
 	}
 });

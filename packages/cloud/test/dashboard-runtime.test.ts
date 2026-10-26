@@ -67,7 +67,12 @@ describe("dashboard request runtime", () => {
 				),
 			).pipe(
 				Layer.merge(invitationsStub),
-				Layer.merge(Layer.succeed(BoardSetup, { issue: () => Effect.die("Unexpected setup request") })),
+				Layer.merge(
+					Layer.succeed(BoardSetup, {
+						issue: () => Effect.die("Unexpected setup request"),
+						open: () => Effect.die("Unexpected open request"),
+					}),
+				),
 				Layer.merge(
 					Layer.succeed(BoardDeletion, BoardDeletion.of({ request: () => Effect.succeed({ deleted: true }) })),
 				),
@@ -113,7 +118,12 @@ describe("dashboard request runtime", () => {
 					}),
 				).pipe(
 					Layer.merge(invitationsStub),
-					Layer.merge(Layer.succeed(BoardSetup, { issue: () => Effect.die("Unexpected setup request") })),
+					Layer.merge(
+						Layer.succeed(BoardSetup, {
+							issue: () => Effect.die("Unexpected setup request"),
+							open: () => Effect.die("Unexpected open request"),
+						}),
+					),
 					Layer.merge(
 						Layer.succeed(BoardDeletion, BoardDeletion.of({ request: () => Effect.succeed({ deleted: true }) })),
 					),

@@ -1,17 +1,20 @@
 "use client";
 import Link from "next/link";
-import { ArrowUpRight, ArrowRight, Bot, Layers3, MessageSquare, RefreshCw } from "lucide-react";
+import { ArrowRight, Bot, Layers3, MessageSquare, RefreshCw } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import type { OAuthProvider } from "../auth-settings.ts";
 import { DashboardBoardsResponse, type DashboardBoardList } from "../dashboard-contract.ts";
-import { useAnalyticsIdentity, useTrack } from "./analytics.tsx";
+import { useAnalyticsIdentity } from "./analytics.tsx";
 import { AuthButtons } from "./auth-buttons.tsx";
+import { BoardSetupPanel } from "./board-setup-panel.tsx";
 import { Button } from "./components/ui/button.tsx";
 import { CloudOnboardingArt } from "./cloud-onboarding-art.tsx";
 import { CreateBoardDialog } from "./create-board-dialog.tsx";
 import { dashboardErrorMessage, readDashboardResponse } from "./dashboard-response.ts";
 import { type CloudClientUser, DashboardShell } from "./dashboard-shell.tsx";
+import { OpenBoardButton } from "./open-board-button.tsx";
+import type { IssuedSetupCode } from "./open-board.ts";
 import { StatusBadge } from "./status-badge.tsx";
 
 const boardSubtitle = (board: DashboardBoardList["boards"][number]) => {
@@ -29,7 +32,13 @@ export function CloudApp({
 	readonly providers: ReadonlyArray<OAuthProvider>;
 	readonly sessionUser: CloudClientUser | null;
 }) {
-	const track = useTrack();
+	// The board whose Open board fell back to the copy-code panel, shown under its card with the code it issued.
+	const [setup, setSetup] = useState<{
+		readonly boardId: string;
+		readonly code: IssuedSetupCode | undefined;
+		readonly generation: number;
+		readonly open: boolean;
+	}>();
 	const [listing, setListing] = useState<DashboardBoardList>();
 	const [loadError, setLoadError] = useState<string>();
 	const reducedMotion = useReducedMotion();
@@ -191,16 +200,20 @@ export function CloudApp({
 										{`Created ${new Date(board.created_at).toLocaleDateString()}`}
 									</span>
 									{board.hostname && board.phase === "ready" ? (
-										<a
-											className="flex items-center gap-1 text-xs text-primary hover:underline"
-											href={`https://${board.hostname}`}
-											target="_blank"
-											rel="noreferrer"
-											onClick={() => track("board_opened", { board_id: board.id })}
-										>
-											Open board
-											<ArrowUpRight className="size-3.5" />
-										</a>
+										<OpenBoardButton
+											boardId={board.id}
+											hostname={board.hostname}
+											className="flex cursor-pointer items-center gap-1 text-xs text-primary hover:underline disabled:cursor-wait disabled:opacity-70"
+											onOpening={() => setSetup((current) => (current?.boardId === board.id ? undefined : current))}
+											onSetupCode={(code) =>
+												setSetup((current) => ({
+													boardId: board.id,
+													code,
+													generation: (current?.generation ?? 0) + 1,
+													open: true,
+												}))
+											}
+										/>
 									) : (
 										<Link
 											className="text-xs text-muted-foreground hover:text-foreground"
@@ -210,6 +223,19 @@ export function CloudApp({
 										</Link>
 									)}
 								</div>
+								{setup?.boardId === board.id && board.hostname && board.phase === "ready" ? (
+									<div className="border-t px-5 pb-5">
+										<BoardSetupPanel
+											key={`${board.id}:${setup.generation}`}
+											boardId={board.id}
+											hostname={board.hostname}
+											initialCode={setup.code}
+											onIssued={(code) => setSetup((current) => current && { ...current, code })}
+											open={setup.open}
+											onOpenChange={(open) => setSetup((current) => current && { ...current, open })}
+										/>
+									</div>
+								) : null}
 							</motion.article>
 						))}
 					</div>

@@ -177,3 +177,15 @@ Asked: Should auth.chirp.wiki ask for consent on every sign-in?
 Selected: Every time (Recommended)
 
 Shown: One extra click. Without it, any website could quietly send a visitor through auth.chirp.wiki and learn their GitHub identity, because GitHub approves silently after the first time.
+
+_Superseded 2026-10-25._
+
+## 2026-10-25 — Sign-in that works across Cloud and boards
+
+> idk that is still a bit jank of a user experience for users right hard to explain all that i think it should just work across
+
+## 2026-10-26 — Reusing Cloud's OAuth apps for auth.chirp.wiki
+
+> what is this new secret you want? like just use the old github and google creds will just update the urls once you make the change on cloud login to work with this auth service
+
+> actually github also supports multiple redirect uri now so the cloud chirp should be fine too

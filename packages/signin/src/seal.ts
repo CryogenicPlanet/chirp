@@ -6,8 +6,11 @@ import { Crypto, Effect, Redacted, Schema } from "effect";
 
 export class SealError extends Schema.TaggedError<SealError>()("SealError", {}) {}
 
-/** The purpose is authenticated data, so a transaction cookie can never be redeemed as a code or the reverse. */
-type Purpose = "transaction" | "code";
+/**
+ * The purpose is authenticated data, so a transaction cookie can never be redeemed as a code, a session cookie can
+ * never be opened as either, and the reverse.
+ */
+type Purpose = "transaction" | "code" | "session";
 const aad = (purpose: Purpose) => Buffer.from(`chirp-signin-${purpose}-v1`);
 const nonceBytes = 12;
 const tagBytes = 16;
