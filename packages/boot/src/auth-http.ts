@@ -319,7 +319,7 @@ export const sessionToken = (request: HttpServerRequest.HttpServerRequest) => {
 	return value && /^[A-Za-z0-9_-]{43}$/.test(value) ? value : null;
 };
 
-/** A successful passkey sign-in or code redemption issues the human session cookie. */
+/** A successful passkey sign-in, setup or code redemption issues the human session cookie. */
 export const sessionResponse = (session: { readonly token: string; readonly expiresAt: number }) =>
 	HttpServerResponse.jsonUnsafe(
 		{ expires_at: session.expiresAt },
@@ -471,7 +471,7 @@ export const authRoute = (auth: Auth["Service"], requestId: string) =>
 				}
 				if (path === "/_boot/auth/setup/verify") {
 					const input = yield* body(registration);
-					return HttpServerResponse.jsonUnsafe(yield* ceremonies.finishSetup(input.id, input.response));
+					return sessionResponse(yield* ceremonies.finishSetup(input.id, input.response));
 				}
 				if (path === "/_boot/auth/login/options") {
 					yield* body(Schema.Struct({}));

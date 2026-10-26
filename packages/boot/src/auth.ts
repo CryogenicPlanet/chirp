@@ -32,6 +32,7 @@ import { allowedParties, makeOriginManagement, passkeyOriginMismatch, type Relyi
 import { makeActionAssertions, restartBinding } from "./action-assertions.ts";
 import { makePasskeyCodes } from "./passkey-code.ts";
 import { makeIdentityLinks } from "./identity-links.ts";
+import { identityId, identityPrefix, LinkedIdentity, type OfferedIdentity } from "./oidc-schema.ts";
 import type { OidcConfig } from "./oidc-client.ts";
 import { Events } from "./events.ts";
 import { humanAgent } from "./human-agent.ts";
@@ -141,11 +142,13 @@ const makeAuth = (config: AuthConfig) =>
 		const bootConsole = yield* Console.Console;
 		const events = yield* Events;
 		const mutex = yield* Semaphore.make(1);
+		// Identities offered with an operator code live only here: every rotation, expiry and restart drops them.
 		const setup = yield* Ref.make<{
 			readonly code: string;
 			readonly generation: string;
 			readonly failures: number;
 			readonly expiresAt: number | null;
+			readonly identities: ReadonlyArray<OfferedIdentity>;
 		} | null>(null);
 		const { hash, random } = authSecrets(crypto);
 		// REOPEN_SETUP=1 lets one setup add a passkey while passkeys exist, once per boot process.
@@ -154,15 +157,16 @@ const makeAuth = (config: AuthConfig) =>
 			const rows = yield* sql`SELECT id FROM passkeys LIMIT 1`;
 			return rows.length === 0;
 		});
-		const rotateSetup = (expiresAt: number | null = null) =>
+		const rotateSetup = (expiresAt: number | null = null, identities: ReadonlyArray<OfferedIdentity> = []) =>
 			Effect.gen(function* () {
 				const bytes = yield* crypto.randomBytes(8);
 				const code = Buffer.from(bytes).toString("hex").toUpperCase();
 				const generation = yield* random;
 				yield* sql`DELETE FROM auth_challenges WHERE ceremony = 'setup'`;
-				yield* Ref.set(setup, { code, generation, failures: 0, expiresAt });
+				const state = { code, generation, failures: 0, expiresAt, identities };
+				yield* Ref.set(setup, state);
 				if (expiresAt === null) yield* Effect.sync(() => bootConsole.log(`chirp: /setup is open, code ${code}`));
-				return { code, generation, failures: 0, expiresAt };
+				return state;
 			});
 		const setupState = Effect.gen(function* () {
 			if (!(yield* noPasskeys) && !(yield* Ref.get(reopenAvailable))) {
@@ -259,9 +263,9 @@ const makeAuth = (config: AuthConfig) =>
 				Effect.gen(function* () {
 					const state = yield* setupState;
 					if (!state) return yield* refuse("setup_closed");
+					const reopened = !(yield* noPasskeys);
 					// A reopened setup only adds a passkey for the primary origin.
-					if (!(yield* noPasskeys) && party.expectedOrigin !== config.expectedOrigin)
-						return yield* refuse("origin_invalid");
+					if (reopened && party.expectedOrigin !== config.expectedOrigin) return yield* refuse("origin_invalid");
 					if (state.expiresAt !== null && state.expiresAt <= (yield* Clock.currentTimeMillis))
 						return yield* refuse("setup_code_invalid");
 					if (!same(code, state.code)) {
@@ -281,9 +285,17 @@ const makeAuth = (config: AuthConfig) =>
 							}),
 						catch: () => new AuthError({ code: "registration_failed" }),
 					});
-					return { id: yield* saveChallenge(options.challenge, "setup", state.generation, state.expiresAt), options };
+					return {
+						id: yield* saveChallenge(options.challenge, "setup", state.generation, state.expiresAt),
+						options,
+						// What finishing links, so the page can say so before the browser creates the passkey.
+						identities: reopened ? [] : state.identities.map(({ provider, label }) => ({ provider, label })),
+					};
 				}),
 			);
+		/** Registration signs the human in: whoever holds the setup code could sign in with the new passkey at once. A
+		 * first setup also links the identities offered with its code, in the passkey's commit; the generation check
+		 * ties them to this challenge's code. A reopened setup never links any. */
 		const finishSetup = (party: RelyingParty) => (id: string, response: RegistrationResponseJSON) =>
 			mutex.withPermit(
 				sql
@@ -339,7 +351,38 @@ const makeAuth = (config: AuthConfig) =>
 									message_id: null,
 									payload: { origin: party.expectedOrigin, rp_id: party.rpId },
 								});
-							return { credentialId: credential.id };
+							const issuer = config.oidc?.issuer;
+							if (!reopened && issuer !== undefined)
+								for (const offered of state.identities) {
+									const identity = yield* identityId(issuer, offered.subject).pipe(
+										Effect.provideService(Crypto.Crypto, crypto),
+									);
+									const key = `${identityPrefix}${identity}`;
+									// A row kept from before the passkey table was emptied names this issuer and subject already.
+									if ((yield* sql`SELECT value FROM settings WHERE ${sql("key")}=${key}`).length > 0) continue;
+									const value = yield* Schema.encodeEffect(Schema.fromJsonString(LinkedIdentity))({
+										issuer,
+										subject: offered.subject,
+										provider: offered.provider,
+										label: offered.label,
+										created_at: now,
+										last_used_at: null,
+									});
+									yield* sql`INSERT INTO settings (${sql("key")}, value) VALUES (${key}, ${value})`;
+									yield* events.writeBoot({
+										at: now,
+										type: "auth.identity_linked",
+										level: "info",
+										actor: humanAgent,
+										instance: null,
+										generation: 0,
+										request_id: null,
+										topic: null,
+										message_id: null,
+										payload: { identity, provider: offered.provider, issuer, via: "setup" },
+									});
+								}
+							return yield* newSession(party.expectedOrigin);
 						}),
 					)
 					.pipe(
@@ -348,18 +391,20 @@ const makeAuth = (config: AuthConfig) =>
 						Effect.tap(() => Ref.set(reopenAvailable, false)),
 					),
 			);
-		// This private operator capability is deliberately narrower than REOPEN_SETUP recovery.
-		const mintSetupCode = mutex.withPermit(
-			sql.withTransaction(
-				Effect.gen(function* () {
-					yield* lockBootWrite(sql);
-					if (!(yield* noPasskeys)) return yield* refuse("setup_closed");
-					const expiresAt = (yield* Clock.currentTimeMillis) + 15 * 60_000;
-					const state = yield* rotateSetup(expiresAt);
-					return { code: state.code, expires_at: expiresAt };
-				}),
-			),
-		);
+		/** This private operator capability is deliberately narrower than REOPEN_SETUP recovery. Its offer replaces any
+		 * earlier code's; with OIDC off boot keeps none. */
+		const mintSetupCode = (offer: ReadonlyArray<OfferedIdentity> = []) =>
+			mutex.withPermit(
+				sql.withTransaction(
+					Effect.gen(function* () {
+						yield* lockBootWrite(sql);
+						if (!(yield* noPasskeys)) return yield* refuse("setup_closed");
+						const expiresAt = (yield* Clock.currentTimeMillis) + 15 * 60_000;
+						const state = yield* rotateSetup(expiresAt, config.oidc === undefined ? [] : offer);
+						return { code: state.code, expires_at: expiresAt, identities: state.identities.length };
+					}),
+				),
+			);
 		const startLogin = (party: RelyingParty) =>
 			mutex.withPermit(
 				Effect.gen(function* () {

@@ -142,7 +142,8 @@ const run = Effect.gen(function* () {
 	}
 	const device = authenticator();
 	const setup = yield* auth.startSetup(output[0]?.split("code ")[1] ?? "");
-	yield* auth.finishSetup(setup.id, device.registration(setup.options.challenge));
+	// Setup signs in; approvals here need no session, so it ends that one.
+	yield* auth.logout((yield* auth.finishSetup(setup.id, device.registration(setup.options.challenge))).token);
 	const enrollment = yield* auth.createEnrollment({ name: "codex", kind: "codex", host: "laptop" });
 	const params: EnrollmentDecision = {
 		id: enrollment.id,

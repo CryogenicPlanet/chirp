@@ -161,7 +161,7 @@ const routes = [
 		"get",
 		["/setup"],
 		"public",
-		"First-passkey setup page; available only before setup completes, or for one recovery passkey on the primary origin per boot process while the operator sets REOPEN_SETUP=1.",
+		"First-passkey setup page; available only before setup completes, or for one recovery passkey on the primary origin per boot process while the operator sets REOPEN_SETUP=1. A #code= fragment fills in the setup code and is removed from the address.",
 	],
 	[
 		"get",
@@ -169,18 +169,23 @@ const routes = [
 		"public",
 		"Whether first-passkey setup is required and whether the caller has a verified human session. Explicit credentials are authenticated; no credential or passkey details are returned.",
 	],
-	["get", ["/auth/login"], "public", "Human passkey sign-in page."],
+	[
+		"get",
+		["/auth/login"],
+		"public",
+		"Human passkey sign-in page. ?provider=github or google starts that provider's sign-in when an identity from it is linked, or goes straight to ?next= when the browser is already signed in.",
+	],
 	[
 		"post",
 		["/_boot/auth/setup/options"],
 		"public",
-		"Start first-passkey registration with {code} from boot stdout and exact Origin.",
+		"Start first-passkey registration with {code} from boot stdout or the operator command, and exact Origin. Returns {id,options,identities}: identities lists {provider,label} for each GitHub or Google identity the operator offered with that code, which finishing links; it is empty without an offer and for a reopened setup.",
 	],
 	[
 		"post",
 		["/_boot/auth/setup/verify"],
 		"public",
-		"Complete setup with {id,response} registration proof and exact Origin.",
+		"Complete setup with {id,response} registration proof and exact Origin. Stores the passkey, links any identities offered with the code in the same commit, and issues a secure human session cookie, as passkey sign-in does.",
 	],
 	[
 		"post",

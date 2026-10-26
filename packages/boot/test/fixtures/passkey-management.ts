@@ -52,7 +52,8 @@ const run = Effect.gen(function* () {
 	const code = output.at(-1)?.split("code ")[1];
 	assert.ok(code);
 	const setup = yield* auth.startSetup(code);
-	yield* auth.finishSetup(setup.id, first.registration(setup.options.challenge));
+	// Setup signs in; this fixture works from a passkey sign-in instead, so it ends setup's session.
+	yield* auth.logout((yield* auth.finishSetup(setup.id, first.registration(setup.options.challenge))).token);
 	const login = yield* auth.startLogin;
 	const session = yield* auth.finishLogin(login.id, first.assertion(login.options.challenge, 1));
 	let counter = 1;
