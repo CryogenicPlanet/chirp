@@ -85,8 +85,10 @@ export const authClient = `(() => {
   query.delete("provider");
   const search = query.toString();
   history.replaceState(null, "", window.location.pathname + (search ? "?" + search : ""));
+  // A 401 means this browser holds a session boot no longer accepts (revoked, or ended by an unlink elsewhere): that
+  // is signed out, so the sign-in continues. Any other failure starts nothing.
   fetch("/_boot/auth/state", {redirect:"manual", headers:{accept:"application/json"}})
-   .then(response => response.ok ? response.json() : null)
+   .then(response => response.ok ? response.json() : response.status === 401 ? {authenticated:false} : null)
    .then(state => { if (state?.authenticated === true) window.location.assign(next); else if (state?.authenticated === false) autoStart(); })
    .catch(() => {});
  }

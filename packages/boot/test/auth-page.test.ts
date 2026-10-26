@@ -295,7 +295,11 @@ const setupFromFragment = async (extra: Readonly<Record<string, unknown>>) => {
 };
 
 it("starts a rendered provider's sign-in from ?provider=, unless the browser is already signed in", async () => {
-	const run = async (search: string, authenticated: boolean | "unreachable", rendered = ["github"]) => {
+	const run = async (
+		search: string,
+		authenticated: boolean | "unreachable" | "revoked" | "failing",
+		rendered = ["github"],
+	) => {
 		const status = { textContent: "" };
 		const requests: string[] = [];
 		const replaced: string[] = [];
@@ -336,6 +340,10 @@ it("starts a rendered provider's sign-in from ?provider=, unless the browser is 
 				requests.push(path);
 				if (path === "/_boot/auth/state") {
 					if (authenticated === "unreachable") throw new Error("offline");
+					if (authenticated === "revoked")
+						return Response.json({ error: { code: "session_invalid" } }, { status: 401 });
+					if (authenticated === "failing")
+						return Response.json({ error: { code: "boot_unavailable" } }, { status: 503 });
 					return Response.json({ setup_required: false, authenticated });
 				}
 				return Response.json({ authorization_url: "https://auth.chirp.wiki/authorize?state=x" });
@@ -366,6 +374,13 @@ it("starts a rendered provider's sign-in from ?provider=, unless the browser is 
 		expect(await run(search, false, [...rendered])).toEqual({ assigned: "", requests: [], replaced: [] });
 	expect((await run("?provider=github", "unreachable")).assigned).toBe("");
 	expect((await run("?provider=github", "unreachable")).requests).toEqual(["/_boot/auth/state"]);
+	expect((await run("?provider=github", "failing")).requests).toEqual(["/_boot/auth/state"]);
+	// A session boot no longer accepts (for example one ended by an unlink in another browser) counts as signed out.
+	expect(await run("?provider=github&next=/t/design", "revoked")).toEqual({
+		assigned: "https://auth.chirp.wiki/authorize?state=x",
+		requests: ["/_boot/auth/state", "/_boot/auth/oidc/start"],
+		replaced: ["/auth/login?next=%2Ft%2Fdesign"],
+	});
 });
 
 it("offers only linked providers, and starts their sign-in with JSON before navigating itself", async () => {
