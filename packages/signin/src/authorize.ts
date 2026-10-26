@@ -2,8 +2,17 @@ import { Clock, Duration, Effect, Schema } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { ClientMetadata } from "./client-metadata.ts";
 import { Issuer } from "./issuer.ts";
-import { consentPage, errorPage } from "./pages.ts";
+import { consentPage, errorPage, signedOutPage } from "./pages.ts";
 import { open, randomToken, s256, sameSecret, seal } from "./seal.ts";
+import {
+	consentKey,
+	cookieOptions,
+	forgetSessions,
+	readCookie,
+	readSession,
+	rememberConsent,
+	sessionEnd,
+} from "./session.ts";
 import { Settings } from "./settings.ts";
 import { Identity, type Provider, providers, Upstream } from "./upstream.ts";
 
@@ -70,26 +79,15 @@ const clientMessages = {
 	unregistered_redirect_uri: "The redirect_uri is not listed in the client's redirect_uris.",
 } as const;
 
-// __Host- cookies need Secure and Path=/ and no Domain, including when they are expired.
-const cookieOptions = { httpOnly: true, secure: true, sameSite: "lax", path: "/" } as const;
 // A bare number for maxAge would be milliseconds.
 const transactionCookie = (value: string) =>
 	HttpServerResponse.setCookieUnsafe(cookie, value, { ...cookieOptions, maxAge: transactionLifetime });
 const clearCookie = HttpServerResponse.expireCookieUnsafe(cookie, cookieOptions);
 
-/** Exactly one transaction cookie; a duplicate means another cookie was planted beside ours. */
-const readCookie = (request: HttpServerRequest.HttpServerRequest) => {
-	const values = (request.headers.cookie ?? "")
-		.split(";")
-		.map((part) => part.trim())
-		.filter((part) => part.startsWith(`${cookie}=`));
-	return values.length === 1 ? values[0]?.slice(cookie.length + 1) : undefined;
-};
-
 const openTransaction = (request: HttpServerRequest.HttpServerRequest) =>
 	Effect.gen(function* () {
 		const settings = yield* Settings;
-		const sealed = readCookie(request);
+		const sealed = readCookie(request, cookie);
 		if (!sealed) return yield* new Refused({ status: 400, message: restart });
 		const transaction = yield* open(settings.sealKey, "transaction", Transaction, sealed).pipe(
 			Effect.mapError(() => new Refused({ status: 400, message: restart })),
@@ -120,12 +118,58 @@ const finish = <R>(flow: Effect.Effect<HttpServerResponse.HttpServerResponse, Re
 		);
 	});
 
+/**
+ * Ask before the code goes out. The identity waits in the sealed transaction cookie, never in the form. A question
+ * asked from a session expires with it, so Continue cannot issue a code after the session has ended.
+ */
+const askConsent = (board: BoardRequest, identity: Identity, authTime: number) =>
+	Effect.gen(function* () {
+		const settings = yield* Settings;
+		const csrf = yield* randomToken(32);
+		const sealed = yield* seal(settings.sealKey, "transaction", Transaction, {
+			stage: "consent",
+			request: board,
+			identity,
+			auth_time: authTime,
+			csrf,
+			exp: Math.min((yield* Clock.currentTimeMillis) + Duration.toMillis(transactionLifetime), sessionEnd(authTime)),
+		});
+		return consentPage({ destination: board.redirect_origin, clientId: board.client_id, identity, csrf }).pipe(
+			transactionCookie(sealed),
+		);
+	});
+
+/** Issue a code and send it to the validated redirect_uri with the board's state and RFC 9207 iss. */
+const deliver = (board: BoardRequest, identity: Identity, authTime: number) =>
+	Effect.gen(function* () {
+		const settings = yield* Settings;
+		const code = yield* (yield* Issuer).issueCode({
+			client_id: board.client_id,
+			redirect_uri: board.redirect_uri,
+			code_challenge: board.code_challenge,
+			nonce: board.nonce,
+			auth_time: authTime,
+			identity,
+		});
+		const url = new URL(board.redirect_uri);
+		url.searchParams.set("code", code);
+		if (board.state !== undefined) url.searchParams.set("state", board.state);
+		url.searchParams.set("iss", settings.issuer);
+		return HttpServerResponse.redirect(url.href, {
+			status: 303,
+			headers: { "cache-control": "no-store", "referrer-policy": "no-referrer" },
+		});
+	});
+
 const queryOf = (request: HttpServerRequest.HttpServerRequest, issuer: string) =>
 	new URL(request.url, issuer).searchParams;
 const bounded = (value: string | null, max: number) =>
 	value !== null && value.length > 0 && value.length <= max ? value : undefined;
 
-/** Validate the board, then hand the browser to GitHub or Google with our own state and PKCE. */
+/**
+ * Validate the board. A live session for the provider that already consented to this board gets a code at once and
+ * one that has not is asked here; otherwise hand the browser to GitHub or Google with our own state and PKCE.
+ */
 export const authorizeRoute = finish(
 	Effect.gen(function* () {
 		const settings = yield* Settings;
@@ -169,6 +213,15 @@ export const authorizeRoute = finish(
 			provider,
 		};
 
+		// Only now, with the client document fetched and the redirect_uri checked, may a session answer for the person.
+		const session = yield* readSession(request, provider);
+		if (session !== undefined) {
+			const consented = session.consented.includes(yield* consentKey(board.client_id, board.redirect_origin));
+			return yield* consented
+				? deliver(board, session.identity, session.auth_time)
+				: askConsent(board, session.identity, session.auth_time);
+		}
+
 		const upstreamState = yield* randomToken(32);
 		const upstreamVerifier = yield* randomToken(32);
 		const sealed = yield* seal(settings.sealKey, "transaction", Transaction, {
@@ -190,7 +243,7 @@ export const authorizeRoute = finish(
 	}),
 );
 
-/** Finish the upstream sign-in and ask for consent. The identity waits in the sealed cookie, never in the form. */
+/** Finish the upstream sign-in and ask for consent. */
 export const callbackRoute = (provider: Provider) =>
 	finish(
 		Effect.gen(function* () {
@@ -226,23 +279,14 @@ export const callbackRoute = (provider: Provider) =>
 				),
 				Effect.mapError(() => decline("server_error", board)),
 			);
-			const now = yield* Clock.currentTimeMillis;
-			const csrf = yield* randomToken(32);
-			const sealed = yield* seal(settings.sealKey, "transaction", Transaction, {
-				stage: "consent",
-				request: board,
-				identity,
-				auth_time: Math.floor(now / 1000),
-				csrf,
-				exp: now + Duration.toMillis(transactionLifetime),
-			});
-			return consentPage({ destination: board.redirect_origin, clientId: board.client_id, identity, csrf }).pipe(
-				transactionCookie(sealed),
-			);
+			return yield* askConsent(board, identity, Math.floor((yield* Clock.currentTimeMillis) / 1000));
 		}),
 	);
 
-/** Same-origin form POST with the page's CSRF token. Continue issues the code; cancel declines. */
+/**
+ * Same-origin form POST with the page's CSRF token. Continue issues the code and remembers the consent in the
+ * provider's session cookie; cancel declines and leaves the session as it was.
+ */
 export const consentRoute = finish(
 	Effect.gen(function* () {
 		const settings = yield* Settings;
@@ -264,20 +308,25 @@ export const consentRoute = finish(
 		if (decision.length === 1 && decision[0] === "cancel") return yield* decline("access_denied", board);
 		if (decision.length !== 1 || decision[0] !== "continue")
 			return yield* new Refused({ status: 400, message: "Choose Continue or Cancel." });
-		const code = yield* (yield* Issuer).issueCode({
-			client_id: board.client_id,
-			redirect_uri: board.redirect_uri,
-			code_challenge: board.code_challenge,
-			nonce: board.nonce,
-			auth_time: transaction.auth_time,
-			identity: transaction.identity,
-		});
-		const url = new URL(board.redirect_uri);
-		url.searchParams.set("code", code);
-		if (board.state !== undefined) url.searchParams.set("state", board.state);
-		url.searchParams.set("iss", settings.issuer);
-		return HttpServerResponse.redirect(url.href, { status: 303, headers: { "cache-control": "no-store" } }).pipe(
-			clearCookie,
+		const remember = yield* rememberConsent(
+			yield* readSession(request, board.provider),
+			transaction.identity,
+			transaction.auth_time,
+			yield* consentKey(board.client_id, board.redirect_origin),
 		);
+		return (yield* deliver(board, transaction.identity, transaction.auth_time)).pipe(clearCookie, remember);
 	}),
 );
+
+/**
+ * Same-origin form POST from the sign-out page, so a board cannot sign anyone out with a link or a form of its own.
+ * Ends every provider's session and any sign-in in progress, whose consent page could otherwise still continue.
+ * Boards keep their own sessions.
+ */
+export const signOutRoute = Effect.gen(function* () {
+	const settings = yield* Settings;
+	const request = yield* HttpServerRequest.HttpServerRequest;
+	if (request.headers.origin !== settings.issuer)
+		return errorPage(403, "This sign-out did not come from the sign-out page.");
+	return signedOutPage.pipe(forgetSessions, clearCookie);
+});
