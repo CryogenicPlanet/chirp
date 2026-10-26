@@ -5,7 +5,10 @@ import { useEffect, useState } from "react";
 import { useTrack } from "./analytics.tsx";
 import { openBoardTarget } from "./open-board.ts";
 
-/** Asks Cloud where to sign the owner in, then goes there; `onSetupCode` shows the copy-code panel instead. */
+/**
+ * Asks Cloud where to sign the owner in, then goes there; `onSetupCode` shows the copy-code panel instead. If Cloud
+ * cannot answer, the board's plain address is still offered, as the link this replaced always was.
+ */
 export function OpenBoardButton({
 	boardId,
 	hostname,
@@ -68,7 +71,10 @@ export function OpenBoardButton({
 			</button>
 			{error ? (
 				<span role="alert" className="max-w-64 text-right text-xs text-destructive">
-					{error}
+					{error}{" "}
+					<a className="underline" href={`https://${hostname}`}>
+						Go to the board instead
+					</a>
 				</span>
 			) : null}
 		</span>

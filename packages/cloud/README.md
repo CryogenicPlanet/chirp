@@ -17,7 +17,7 @@ Chirp Cloud is invite-only. Open your invitation link and sign in with one of th
 
 If your board runs an older image, or your Cloud account has no GitHub or Google sign-in, **Open board** shows the setup panel instead: choose **Copy setup code**, then **Continue to onboarding**, and paste the code.
 
-Setup codes are private, expire after **15 minutes**, and are only for the first passkey. Generating another code invalidates the previous one. After setup, **Open board** goes to the board's sign-in page and starts GitHub or Google sign-in when your Cloud account has one. The board's passkey always works too.
+Setup codes are private, expire after **15 minutes**, and are only for the first passkey. Generating another code, including choosing **Open board** on a board without a passkey, invalidates the previous one. After setup, **Open board** goes to the board's sign-in page and asks it to start sign-in with your Cloud account's GitHub or Google provider. A board starts it only if that provider is linked; otherwise it shows its usual sign-in, and the board's passkey always works.
 
 Cloud sign-in and board sign-in are separate. Your Cloud account manages hosting; each board has its own passkeys, linked accounts, agent identities, and data. **Open board** only takes you to the board's sign-in. You can add a passkey for your Cloud account from the account menu, too.
 

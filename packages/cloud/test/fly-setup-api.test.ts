@@ -1,5 +1,5 @@
-import { Effect, Layer, Redacted, Result } from "effect";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { Context, Effect, Layer, Redacted, Result } from "effect";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { afterEach, expect, test, vi } from "vitest";
 import { FlySetupApi, flySetupApiLayer } from "../src/fly-setup-api.ts";
 
@@ -160,7 +160,8 @@ test("auth state is a bounded, non-redirecting public read of setup_required", a
 			Layer.provide(
 				Layer.succeed(
 					HttpClient.HttpClient,
-					HttpClient.make((request) => {
+					HttpClient.make((request, _url, _signal, fiber) => {
+						expect(Context.getOrUndefined(fiber.context, FetchHttpClient.RequestInit)?.redirect).toBe("manual");
 						expect(request.url).toBe("https://board.test/_boot/auth/state");
 						expect(request.method).toBe("GET");
 						expect(request.headers["authorization"]).toBeUndefined();

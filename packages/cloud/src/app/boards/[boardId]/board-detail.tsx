@@ -43,6 +43,9 @@ export function BoardDetail({
 }) {
 	const router = useRouter();
 	const [setupOpen, setSetupOpen] = useState(openSetup);
+	// Open board's fallback may have replaced a code this panel shows, so it remounts empty.
+	const [setupGeneration, setSetupGeneration] = useState(0);
+	const setupRevealed = useRef(false);
 	const deletionObserved = useRef(false);
 	const [board, setBoard] = useState<DashboardBoard>();
 	useAnalyticsIdentity(sessionUser);
@@ -88,6 +91,14 @@ export function BoardDetail({
 		});
 		return () => controller.abort();
 	}, [load, pollVersion, sessionUser, router]);
+
+	// Arriving from the dashboard's Open board with ?setup=1: show the panel once, then drop the flag from the address.
+	useEffect(() => {
+		if (!openSetup || setupRevealed.current || board?.phase !== "ready" || !board.hostname) return;
+		setupRevealed.current = true;
+		document.getElementById("board-setup")?.scrollIntoView({ block: "center" });
+		window.history.replaceState(null, "", window.location.pathname);
+	}, [board, openSetup]);
 
 	const refresh = () => {
 		setError(undefined);
@@ -184,7 +195,10 @@ export function BoardDetail({
 										hostname={board.hostname}
 										className="inline-flex min-h-9 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent bg-primary px-3.5 py-2 text-[13px] font-medium leading-none text-primary-foreground no-underline hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-wait disabled:opacity-70"
 										onSetupCode={() => {
-											flushSync(() => setSetupOpen(true));
+											flushSync(() => {
+												setSetupOpen(true);
+												setSetupGeneration((generation) => generation + 1);
+											});
 											document.getElementById("board-setup")?.scrollIntoView({ block: "center" });
 										}}
 									/>
@@ -264,7 +278,7 @@ export function BoardDetail({
 					</div>
 					{board.phase === "ready" && board.hostname ? (
 						<BoardSetupPanel
-							key={board.id}
+							key={`${board.id}:${setupGeneration}`}
 							boardId={board.id}
 							hostname={board.hostname}
 							open={setupOpen}
