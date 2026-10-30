@@ -16,6 +16,9 @@ Effect.gen(function* () {
 	for (const launcher of ["main.ts", "start.ts"]) yield* fs.remove(path.join(target, launcher));
 	for (const file of ["package.json", "bun.lock"])
 		yield* fs.copyFile(path.join(server, "runtime", file), path.join(target, file));
+	// Bun applies the nearest tsconfig.json above a file. Without one here, a data directory
+	// inside this repository resolves @comms/* through its root paths to a second copy of effect.
+	yield* fs.writeFileString(path.join(target, "tsconfig.json"), "{}\n");
 	for (const workspace of ["protocol", "storage"]) {
 		const source = path.resolve(server, `../${workspace}`);
 		yield* fs.makeDirectory(path.join(target, workspace));
