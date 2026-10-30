@@ -84,7 +84,10 @@ export const rehearseRestoreGeneration = Effect.fn("rehearseRestoreGeneration")(
 								rehearsed.process.health.pipe(
 									Effect.timeout("30 seconds"),
 									Effect.catch(() =>
-										Ref.get(rehearsed.process.stderr).pipe(
+										// Stop before reading: closure drains the reason still in the pipe.
+										rehearsed.process.stop.pipe(
+											Effect.ignore,
+											Effect.andThen(Ref.get(rehearsed.process.stderr)),
 											Effect.flatMap((stderr) =>
 												Effect.fail(new ChildError({ code: "restore_rehearsal_failed", stderr })),
 											),

@@ -1,4 +1,4 @@
-import { kernelProtocolHeader, writerEpochHeader } from "@comms/protocol/headers";
+import { healthReadyHeader, kernelProtocolHeader, writerEpochHeader } from "@comms/protocol/headers";
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
@@ -11,6 +11,7 @@ import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import type { TestContext } from "vitest";
 import { seedSession, sessionFetch } from "./fixtures/session.ts";
+import { sourcePut } from "./fixtures/source-put.ts";
 import { Generation } from "../src/generations.ts";
 
 const execute = promisify(execFile);
@@ -37,6 +38,15 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
 }});
 console.log("COMMS_CHILD_PORT=" + server.port);
 `;
+
+// Like the server's failed probe: log the reason, then answer at once. Closure then
+// interrupts the still-running child, whose last words must survive both pipes too.
+const failedProbeSource = `import { writeSync } from "node:fs";
+process.on("SIGTERM", () => { writeSync(2, "closed after failed probe\\n"); process.exit(1); });
+${entrySource.replace(
+	' if (path === "/health" ||',
+	` if (path === "/health") { process.stderr.write("probe failed: stage=probe\\n"); return Response.json({ status: "failed" }, { status: 503, headers: { "${healthReadyHeader}": "1" } }); }\n if (path === "/health" ||`,
+)}`;
 
 async function fixture(test: TestContext) {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "comms-generations-")));
@@ -244,6 +254,40 @@ await helper.exited;
 		expect((await app.history()).items[0]).toMatchObject({ status: "failed", good: 0 });
 		expect((await app.fetch(app.url)).status).toBe(503);
 	}, 15000);
+
+	it("records the reason a generation logs just before failing its health probe", async (test) => {
+		const env = await fixture(test);
+		await writeFile(join(env.seed, "server.ts"), failedProbeSource);
+		const app = await launch(test, env);
+		await expect
+			.poll(async () => (await app.state()).child, { timeout: 6000 })
+			.toMatchObject({ state: "failed", attempt: 3 });
+		expect((await app.state()).child.stderr).toContain("probe failed: stage=probe");
+		await expect.poll(async () => (await app.history()).items[0]).toMatchObject({ n: 1, status: "failed", good: 0 });
+		expect((await app.history()).items[0]?.error).toContain("health_failed");
+		expect((await app.history()).items[0]?.stderr).toContain("probe failed: stage=probe");
+		expect((await app.history()).items[0]?.stderr).toContain("closed after failed probe");
+	}, 15000);
+
+	it("records the reason a reload rehearsal logs just before failing its health probe", async (test) => {
+		const env = await fixture(test);
+		const app = await launch(test, env);
+		await expect
+			.poll(async () => (await app.state()).child, { timeout: 15000 })
+			.toMatchObject({ state: "live", generation: 1 });
+		expect((await app.fetch(`${app.url}/api/lock`, { method: "POST", body: "{}" })).status).toBe(200);
+		const staged = await sourcePut(
+			`${app.url}/api/fs/app/server.ts?reload=0`,
+			{ method: "PUT", body: failedProbeSource },
+			app.fetch,
+		);
+		expect(staged.status).toBe(200);
+		await app.fetch(`${app.url}/api/reload`, { method: "POST", body: "{}" });
+		const failed = (await app.history()).items.find((item) => item.n === 2);
+		expect(failed).toMatchObject({ status: "failed", good: 0 });
+		expect(failed?.stderr).toContain("probe failed: stage=probe");
+		expect(failed?.stderr).toContain("closed after failed probe");
+	}, 30000);
 
 	it("records a broken first startup and a new durable id after repairing the editable tree", async (test) => {
 		const env = await fixture(test);

@@ -1,7 +1,7 @@
 import { childIdentity, prepareApp } from "./linux-ownership.ts";
 import { ChildConfiguration } from "./keeper-configuration.ts";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
-import { Config, Console, Effect, Exit, FileSystem, Path, Redacted, Schema, Scope, Stdio, Stream } from "effect";
+import { Config, Console, Effect, Exit, Fiber, FileSystem, Path, Redacted, Schema, Scope, Stdio, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 // Immutable owner of one editable app process group, including ordinary descendants.
@@ -95,17 +95,24 @@ const keeper = Effect.gen(function* () {
 				}
 				if (!absent) return yield* Effect.die("Child group closure could not be verified");
 			});
+			// Forward stderr past closure: the child's last diagnostics can still be in the pipe.
+			const stderrScope = yield* Scope.make();
+			const forwarding = yield* child.stderr.pipe(Stream.run(stdio.stderr()), Effect.forkIn(stderrScope));
 			yield* Effect.addFinalizer(() =>
 				Effect.gen(function* () {
 					yield* localClosure;
 					if (isolated && config.env.STATE === "rehearsal")
 						yield* fs.remove(`/data/rehearsals/${config.attempt}`, { recursive: true }).pipe(Effect.orDie);
 					yield* receipt;
-				}).pipe(Effect.ensuring(Scope.close(scope, Exit.void)), Effect.orDie),
+					yield* Fiber.await(forwarding).pipe(Effect.timeout("500 millis"), Effect.ignore);
+				}).pipe(
+					Effect.ensuring(Scope.close(stderrScope, Exit.void)),
+					Effect.ensuring(Scope.close(scope, Exit.void)),
+					Effect.orDie,
+				),
 			);
 			yield* Console.log(`COMMS_CHILD_PID=${child.pid}`);
 			yield* child.stdout.pipe(Stream.run(stdio.stdout()), Effect.forkScoped);
-			yield* child.stderr.pipe(Stream.run(stdio.stderr()), Effect.forkScoped);
 			yield* restore(Effect.raceFirst(child.exitCode.pipe(Effect.exit), stdio.stdin.pipe(Stream.runDrain)));
 		}),
 	);
