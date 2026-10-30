@@ -14,11 +14,11 @@ Effect.gen(function* () {
 	yield* fs.copy(path.join(server, "pages"), pages);
 	yield* fs.copy(path.resolve(server, "../../examples/extensions/mcp"), path.join(pages, "tooling", "mcp"));
 	for (const launcher of ["main.ts", "start.ts"]) yield* fs.remove(path.join(target, launcher));
-	for (const file of ["package.json", "bun.lock"])
+	// Bun applies the nearest tsconfig.json above a file. The app's own keeps a data directory
+	// inside this repository from resolving @comms/* through the root paths to a second effect.
+	for (const file of ["package.json", "bun.lock", "tsconfig.json"])
 		yield* fs.copyFile(path.join(server, "runtime", file), path.join(target, file));
-	// Bun applies the nearest tsconfig.json above a file. Without one here, a data directory
-	// inside this repository resolves @comms/* through its root paths to a second copy of effect.
-	yield* fs.writeFileString(path.join(target, "tsconfig.json"), "{}\n");
+	yield* fs.copyFile(path.resolve(server, "../../tsconfig.base.json"), path.join(target, "tsconfig.base.json"));
 	for (const workspace of ["protocol", "storage"]) {
 		const source = path.resolve(server, `../${workspace}`);
 		yield* fs.makeDirectory(path.join(target, workspace));
