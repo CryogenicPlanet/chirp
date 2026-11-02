@@ -67,8 +67,18 @@ export const launchChild = Effect.fn("launchChild")(function* (options: Launch, 
 	const path = yield* Path.Path;
 	const extension = import.meta.url.endsWith(".ts") ? "ts" : "js";
 	const entry = yield* path.fromFileUrl(new URL(`./child-keeper.${extension}`, import.meta.url));
-	const scope = yield* Scope.fork(yield* Effect.scope);
+	const outer = yield* Effect.scope;
+	const scope = yield* Scope.fork(outer);
 	const stderr = yield* Ref.make("");
+	// Closing the process must not cut off stderr still in the pipe, such as the reason logged just
+	// before a failed health answer. The reader outlives the process scope until EOF, briefly.
+	const stderrScope = yield* Scope.fork(outer);
+	const stderrClosed = yield* Deferred.make<void>();
+	const settleStderr = Deferred.await(stderrClosed).pipe(
+		Effect.timeout("1 second"),
+		Effect.ignore,
+		Effect.andThen(Scope.close(stderrScope, Exit.void)),
+	);
 	const applicationManagedIngress = yield* Ref.make(false);
 	const redact = logRedactor([options.env.APP_STORE ?? "", options.env.BOOT_SECRET ?? ""]);
 	return yield* Effect.gen(function* () {
@@ -87,7 +97,11 @@ export const launchChild = Effect.fn("launchChild")(function* (options: Launch, 
 					},
 				),
 			)
-			.pipe(Effect.provideService(Scope.Scope, scope));
+			.pipe(
+				Effect.provideService(Scope.Scope, scope),
+				// No stream exists to drain when the spawn itself fails.
+				Effect.onError(() => Deferred.succeed(stderrClosed, undefined)),
+			);
 		if (isolated)
 			yield* Effect.addFinalizer(() =>
 				handle.isRunning.pipe(
@@ -138,7 +152,8 @@ export const launchChild = Effect.fn("launchChild")(function* (options: Launch, 
 				}),
 			),
 			Effect.andThen(Effect.suspend(() => retain(oversized ? "[diagnostic line too long]" : errorLine))),
-			Effect.forkIn(scope),
+			Effect.ensuring(Deferred.succeed(stderrClosed, undefined)),
+			Effect.forkIn(stderrScope),
 		);
 		// Ownership preparation copies/seals files before editable code exists. Its
 		// bounded I/O phase must not consume the child's five-second readiness budget.
@@ -219,7 +234,7 @@ export const launchChild = Effect.fn("launchChild")(function* (options: Launch, 
 					.readFileString(options.receipt)
 					.pipe(Effect.mapError(() => new ChildError({ code: "child_closure_unproven" })));
 				if (receipt !== options.attempt) return yield* new ChildError({ code: "child_closure_unproven" });
-			}).pipe(Effect.uninterruptible),
+			}).pipe(Effect.ensuring(settleStderr), Effect.uninterruptible),
 		);
 		return {
 			port,
@@ -234,7 +249,7 @@ export const launchChild = Effect.fn("launchChild")(function* (options: Launch, 
 			exited: handle.exitCode.pipe(Effect.exit),
 		};
 	}).pipe(
-		Effect.onError(() => Scope.close(scope, Exit.void)),
+		Effect.onError(() => Scope.close(scope, Exit.void).pipe(Effect.andThen(settleStderr))),
 		Effect.catchCause((cause) => {
 			const reason = cause.reasons[0];
 			if (cause.reasons.length !== 1 || reason?._tag !== "Fail" || !Schema.is(ChildError)(reason.error))

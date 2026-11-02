@@ -439,10 +439,13 @@ export const supervise = Effect.fn("supervise")(function* (
 								stderr,
 							}));
 							yield* retire(active);
+							// Retirement drains the tail; status and history then report the same diagnostics.
+							const drained = redact(yield* Ref.get(active.process.stderr));
+							yield* Ref.update(status, (value): ChildStatus => ({ ...value, stderr: drained }));
 							yield* (yield* Generations).failed(
 								active.generation.n,
 								unresponsive ? "child_unresponsive" : "Child exited",
-								redact(yield* Ref.get(active.process.stderr)),
+								drained,
 							);
 							yield* Effect.sleep((yield* Ref.get(tried))[active.generation.n] === 1 ? "250 millis" : "500 millis");
 							yield* requestRecovery;

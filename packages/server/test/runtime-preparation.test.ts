@@ -11,6 +11,12 @@ it("keeps writes live through failed preparation and serves an edited UI from a 
 	await promisify(execFile)("bun", [join(import.meta.dirname, "../stage-runtime.ts")]);
 	const seed = join(import.meta.dirname, "../dist/runtime-seed");
 	const fixture = await conversation(test);
+	// A data directory inside a TypeScript project, such as this repository, must not remap the app's imports.
+	await writeFile(
+		join(fixture.root, "tsconfig.json"),
+		JSON.stringify({ compilerOptions: { paths: { "@comms/protocol/*": ["./outside-app.ts"] } } }),
+	);
+	await writeFile(join(fixture.root, "outside-app.ts"), 'throw new Error("resolved outside the app");');
 	const app = await fixture.launch(join(seed, "server.ts"));
 	await app.setup();
 	const cookie = await app.login();

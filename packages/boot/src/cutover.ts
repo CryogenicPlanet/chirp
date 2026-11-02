@@ -273,6 +273,8 @@ export const cutover = Effect.fn("cutover")(function* (options: ApplicationSourc
 															return Effect.failCause(cause);
 														const error = reason.error;
 														return Effect.gen(function* () {
+															// Stop before reading: closure drains the reason still in the pipe.
+															yield* rehearsed.process.stop.pipe(Effect.ignore);
 															return yield* new ChildError({
 																code:
 																	(request.undo?.generation !== undefined || request.trustedSource !== undefined) &&
@@ -426,13 +428,6 @@ export const cutover = Effect.fn("cutover")(function* (options: ApplicationSourc
 					(incompatibleSeed ? "; image seed is incompatible with current data; apply a forward source fix" : "");
 				const persisted = yield* read;
 				const { generation: failedGeneration, candidate: failedCandidate } = rollback;
-				const stderr = supervisor.child.redact(
-					failure._tag === "Success" && Schema.is(ChildError)(failure.success) && failure.success.stderr !== undefined
-						? failure.success.stderr
-						: failedCandidate
-							? yield* Ref.get(failedCandidate.process.stderr)
-							: "",
-				);
 				const acceptedGeneration =
 					persisted?.phase === "accepted"
 						? persisted.candidate
@@ -460,6 +455,14 @@ export const cutover = Effect.fn("cutover")(function* (options: ApplicationSourc
 					return { generation: selected.n, status: "live", lock: (yield* lock.inspect).value };
 				}
 				if (failedCandidate) yield* stop(failedCandidate);
+				// Read after the stop: closure drains the reason still in the pipe.
+				const stderr = supervisor.child.redact(
+					failure._tag === "Success" && Schema.is(ChildError)(failure.success) && failure.success.stderr !== undefined
+						? failure.success.stderr
+						: failedCandidate
+							? yield* Ref.get(failedCandidate.process.stderr)
+							: "",
+				);
 				if (persisted) {
 					yield* supervisor.withdraw;
 					yield* closePrior;
