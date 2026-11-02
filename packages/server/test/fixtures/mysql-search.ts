@@ -27,7 +27,10 @@ async function main() {
 				('superset','deploy service',NULL,1),
 				('stopword','the service',NULL,1),
 				('old','gamma','alpha beta',20),
-				('future','alpha beta','gamma',20)`;
+				('future','alpha beta','gamma',20),
+				('spaced','the reading list',NULL,1),
+				('hyphened','my reading-list',NULL,1),
+				('plural','two reading lists',NULL,1)`;
 				const config = yield* mysqlSearchConfig(sql);
 				assert(config);
 				phase = "native stopword collation";
@@ -61,7 +64,13 @@ async function main() {
 				phase = "stopword query preserves the documented superset";
 				assert.deepEqual(yield* find("the deploy"), [{ id: "exact" }, { id: "superset" }]);
 				assert.deepEqual(yield* find("ok deploy"), [{ id: "exact" }, { id: "superset" }]);
-				assert.equal((yield* find("the ok")).length, 8);
+				assert.equal((yield* find("the ok")).length, 11);
+				phase = "plural and hyphen variants";
+				const reading = [{ id: "hyphened" }, { id: "plural" }, { id: "spaced" }];
+				assert.deepEqual(yield* find("reading list"), reading);
+				assert.deepEqual(yield* find("reading lists"), reading);
+				assert.deepEqual(yield* find("reading-list"), [{ id: "hyphened" }, { id: "spaced" }]);
+				assert.deepEqual(yield* find('"reading lists"'), [{ id: "plural" }]);
 				// Settings are session-only and indexes are rebuilt in this exclusively allocated scratch store.
 				yield* sql.withTransaction(
 					Effect.gen(function* () {

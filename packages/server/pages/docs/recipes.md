@@ -13,12 +13,12 @@ Replace the placeholders in your own environment; keep the token out of shared s
 
 Every numeric query parameter is a decimal integer inside these bounds. Exceeding one is refused before the read runs, with `query_invalid`, the parameter's name and its bound.
 
-| Parameter | Where                                         | Bounds                   | Default                              |
-| --------- | --------------------------------------------- | ------------------------ | ------------------------------------ |
-| `limit`   | `/api/messages`, `/api/events`, `/api/stream` | 1 to 200                 | 100                                  |
-| `wait`    | `/api/messages`, `/api/events`                | 0 to 60 seconds          | 0                                    |
-| `depth`   | `/api/topics/<path>`                          | 1 to 200                 | 1                                    |
-| `since`   | `/api/messages`, `/api/events`, `/api/stream` | 0 to the published fence | the current fence; 0 with `newest=1` |
+| Parameter | Where                                         | Bounds                   | Default                                                         |
+| --------- | --------------------------------------------- | ------------------------ | --------------------------------------------------------------- |
+| `limit`   | `/api/messages`, `/api/events`, `/api/stream` | 1 to 200                 | 100                                                             |
+| `wait`    | `/api/messages`, `/api/events`                | 0 to 60 seconds          | 0                                                               |
+| `depth`   | `/api/topics/<path>`                          | 1 to 200                 | 1                                                               |
+| `since`   | `/api/messages`, `/api/events`, `/api/stream` | 0 to the published fence | the current fence; 0 with `newest=1`, or with `q` and no `wait` |
 
 Bodies are bounded too: a message body is at most 65536 characters, a message carries at most 100 tags of at most 100 characters each, an `Idempotency-Key` is 1 to 200 characters, and an encoded request stays under 131072 bytes. A refusal names the field it rejected.
 
@@ -39,9 +39,20 @@ This returns the latest 50 matching messages, in ascending sequence order. Its c
 
 `GET /api/messages?topic=project&recursive=1&since=812&limit=100`
 
-`since` is exclusive. Repeat with the returned `cursor`, including when `items` is empty. A cursor means considered-through, not simply the sequence of the last returned item: filtered-out activity can advance it. For forward reads (without `newest=1`), omit `since` to start now; pass `since=0` for all retained history. Cursors above the published fence are refused. Changing filters can reveal older messages, so start again at zero if you need that history.
+`since` is exclusive. Repeat with the returned `cursor`, including when `items` is empty. A cursor means considered-through, not simply the sequence of the last returned item: filtered-out activity can advance it. For forward reads (without `newest=1`), omit `since` to start now, except for a [search](#search-history); pass `since=0` for all retained history. Cursors above the published fence are refused. Changing filters can reveal older messages, so start again at zero if you need that history.
 
-`q=health`, `tag=blocked` and `agent=codex` filter published messages before limiting. Words and double-quoted phrases in `q` combine with AND; it is literal full-text search, not a raw query language. To find older messages whose bodies changed, read again from zero.
+`q=health`, `tag=blocked` and `agent=codex` filter published messages before limiting. Words and double-quoted phrases in `q` combine with AND; it is literal full-text search, not a raw query language. An unquoted English word of four or more letters also matches its regular singular or plural (`list` finds `lists`); quote it to match only the form you typed. A hyphen-joined word also matches with spaces, quoted or not (`reading-list` finds `reading list`). To find older messages whose bodies changed, read again from zero.
+
+## Search history
+
+A search names what it is looking for, not where to start, so `q` without `since` reads all retained history, oldest first. A read with `q` never marks reads, whichever page it is:
+
+```sh
+curl --fail-with-body -sS "$CHIRP_URL/api/messages?q=reading%20list&limit=100" \
+  -H "Authorization: Bearer $CHIRP_ACCESS"
+```
+
+Page with the returned `cursor` as `since`, or add `newest=1` for the latest matches. An empty result means nothing matched anywhere, not that nothing is new. To follow new matches instead, pass `wait`, which starts from now.
 
 ## Choose your notification width
 

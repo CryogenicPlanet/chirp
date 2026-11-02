@@ -63,3 +63,46 @@ it("combines published message filters before pagination and keeps them across l
 		expect.arrayContaining(["tag", "agent", "q"]),
 	);
 }, 30000);
+
+it("matches plural and hyphen variants and searches history when no cursor is given", async (test) => {
+	const fixture = await conversation(test),
+		app = await fixture.launch();
+	await app.setup();
+	const reader = await app.login(),
+		author = await app.login();
+	await app.ready(reader);
+	const create = async (body: string) => {
+		const response = await app.post("/api/messages", { topic: "home", body }, author);
+		expect(response.status).toBe(200);
+		return ((await response.json()) as { readonly seq: number }).seq;
+	};
+	const search = async (query: string) => {
+		const response = await fetch(`${app.url}/api/messages?${query}`, { headers: { cookie: reader } });
+		expect(response.status, await response.clone().text()).toBe(200);
+		return ((await response.json()) as { readonly items: ReadonlyArray<{ readonly seq: number }> }).items.map(
+			(item) => item.seq,
+		);
+	};
+	const q = (text: string) => `q=${encodeURIComponent(text)}`;
+	const spaced = await create("Added the article to the reading list");
+	const hyphened = await create("My reading-list keeps growing");
+	const plural = await create("Two reading lists now");
+	await create("Nothing to read here");
+
+	// No cursor and no wait: a search reads all history, oldest first.
+	expect(await search(q("reading list"))).toEqual([spaced, hyphened, plural]);
+	expect(await search(q("reading lists"))).toEqual([spaced, hyphened, plural]);
+	expect(await search(q("reading-list"))).toEqual([spaced, hyphened]);
+	expect(await search(q('"reading lists"'))).toEqual([plural]);
+	expect(await search(`${q("reading list")}&newest=1&limit=1`)).toEqual([plural]);
+	expect(await search(`${q("reading list")}&since=${hyphened}`)).toEqual([plural]);
+	// Following new matches still starts now.
+	expect(await search(`${q("reading list")}&wait=1`)).toEqual([]);
+
+	// A search inside a topic, on any page, leaves the reader's unread messages alone.
+	const marks = () => fixture.sql("SELECT instance,topic,seq FROM reads ORDER BY instance,topic");
+	const before = await marks();
+	expect(await search(`topic=home&${q("growing")}`)).toEqual([hyphened]);
+	expect(await search(`topic=home&${q("reading list")}&since=${spaced}`)).toEqual([hyphened, plural]);
+	expect(await marks()).toEqual(before);
+}, 30000);

@@ -2,7 +2,7 @@ import { KernelError } from "../../../src/kernel/boot-channel.ts";
 import { Effect, Schema } from "effect";
 import { Statement } from "effect/unstable/sql";
 import { expect, it } from "vitest";
-import { searchMessages } from "../../../src/ext/core/search.ts";
+import { searchMessages, wordForms } from "../../../src/ext/core/search.ts";
 
 const constructor = (dialect: "sqlite" | "pg" | "mysql") =>
 	Statement.make(
@@ -33,8 +33,8 @@ it("keeps caller search operators bound and selects the published image on every
 		expect(text).toContain("updated_seq>");
 		expect(values.filter((value) => value === 42)).toHaveLength(2);
 		if (name === "sqlite") {
-			expect(values).toContain('body : ("alpha" AND "OR" AND "-beta" AND "blue the moon")');
-			expect(values).toContain('previous_body : ("alpha" AND "OR" AND "-beta" AND "blue the moon")');
+			expect(values).toContain('body : (("alpha" OR "alphas") AND "OR" AND "-beta" AND "blue the moon")');
+			expect(values).toContain('previous_body : (("alpha" OR "alphas") AND "OR" AND "-beta" AND "blue the moon")');
 		} else if (name === "pg") {
 			expect(text).toContain("body_tsv @@");
 			expect(text).toContain("previous_body_tsv @@");
@@ -43,12 +43,55 @@ it("keeps caller search operators bound and selects the published image on every
 			expect(text).not.toContain("websearch_to_tsquery");
 			expect(values).toContain("OR");
 			expect(values).toContain("-beta");
+			expect(values).toContain("alphas");
 		} else {
 			expect(text).toContain("MATCH(body) AGAINST");
 			expect(text).toContain("MATCH(previous_body) AGAINST");
-			expect(values).toContain('+"alpha" +"OR" +"beta" +"blue the moon"');
+			expect(values).toContain('+("alpha" "alphas") +"OR" +"beta" +"blue the moon"');
 		}
 	}
+});
+
+it("adds an English word's regular singular or plural and leaves everything else as typed", () => {
+	for (const [word, ...forms] of [
+		["list", "lists"],
+		["lists", "list"],
+		["Notes", "Note"],
+		["cases", "case"],
+		["boxes", "box", "boxe"],
+		["sizes", "siz", "size"],
+		["classes", "class", "classe"],
+		["class", "classes"],
+		["status", "statuses"],
+		["statuses", "status", "statuse"],
+		["viruses", "virus", "viruse"],
+		["houses", "hous", "house"],
+		["policy", "policies"],
+		["movies", "movy", "movie"],
+		["days", "day"],
+		["match", "matches"],
+	])
+		expect(wordForms(word ?? "")).toEqual([word, ...forms]);
+	for (const part of ["its", "has", "OR", "café", "дом", "v2", "-beta", "reading-list", "foo@bar.com", '"lists"'])
+		expect(wordForms(part)).toEqual([part]);
+});
+
+it("searches a hyphen-joined word as written or as the phrase of its parts on PostgreSQL", async () => {
+	const sql = constructor("pg");
+	const fragment = await Effect.runPromise(searchMessages(sql, 'reading-list "lists" -beta', 42));
+	const [text, values] = sql`SELECT id FROM visible_messages WHERE ${fragment}`.compile();
+	expect(values).toContain("reading list");
+	expect(values).toContain("reading-list");
+	expect(values).toContain("lists");
+	expect(values).not.toContain("list");
+	expect(values).toContain("-beta");
+	expect(text.match(/phraseto_tsquery/g)).toHaveLength(4);
+	const mysql = constructor("mysql");
+	const config = { minimum: 3, maximum: 84, stopwords: [], characterSet: "utf8mb4", collation: "utf8mb4_0900_ai_ci" };
+	const exact = await Effect.runPromise(searchMessages(mysql, 'reading-list "lists" notes', 42, false, config));
+	expect(mysql`SELECT id FROM visible_messages WHERE ${exact}`.compile()[1]).toContain(
+		'+"reading list" +"lists" +("notes" "note")',
+	);
 });
 
 it("rejects invalid search syntax before any engine receives a query", async () => {
@@ -76,9 +119,9 @@ it("drops wholly unindexed MySQL parts while preserving AND and phrase words", a
 	const sql = constructor("mysql");
 	const config = { minimum: 4, maximum: 84, stopwords: [], characterSet: "utf8mb4", collation: "utf8mb4_0900_ai_ci" };
 	for (const [query, expression] of [
-		["the deploy alpha", '+"deploy" +"alpha"'],
-		['"the deploy" alpha', '+"the deploy" +"alpha"'],
-		["ok deploy", '+"deploy"'],
+		["the deploy alpha", '+("deploy" "deploys") +("alpha" "alphas")'],
+		['"the deploy" alpha', '+"the deploy" +("alpha" "alphas")'],
+		["ok deploy", '+("deploy" "deploys")'],
 	]) {
 		const fragment = await Effect.runPromise(searchMessages(sql, query ?? "", 42, false, config));
 		const [text, values] = sql`SELECT id FROM visible_messages WHERE ${fragment}`.compile();
