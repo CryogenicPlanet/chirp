@@ -28,7 +28,7 @@ it.each(["complete", "wrong-code", "cancel", "verify-failed"])("first-passkey re
 		if (scenario === "cancel") throw new DOMException("private browser message", "NotAllowedError");
 		return new Credential();
 	});
-	vi.stubGlobal("window", { location: { origin: "https://board.test" } });
+	vi.stubGlobal("window", { isSecureContext: true, location: { origin: "https://board.test" } });
 	vi.stubGlobal("navigator", { credentials: { create } });
 	vi.stubGlobal("PublicKeyCredential", Credential);
 	vi.stubGlobal("AuthenticatorAttestationResponse", Attestation);
@@ -70,5 +70,7 @@ it.each(["complete", "wrong-code", "cancel", "verify-failed"])("first-passkey re
 		if (result._tag === "Failure") expect(result.failure.message).toContain("deployment logs");
 	}
 	if (scenario === "cancel" && result._tag === "Failure")
-		expect(result.failure.message).not.toContain("private browser message");
+		expect(result.failure.message).toBe(
+			"The passkey prompt was closed, timed out, or blocked by the browser. Try again. (NotAllowedError)",
+		);
 });
