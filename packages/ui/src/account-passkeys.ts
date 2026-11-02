@@ -33,11 +33,34 @@ const encode = (value: ArrayBuffer | Uint8Array) =>
 		.replace(/\+/g, "-")
 		.replace(/\//g, "_")
 		.replace(/=+$/g, "");
-const ceremonyError = () =>
-	new BoardError({
+/** The browser's reason, by DOMException name only: its message text is browser-specific and stays private. */
+const ceremonyMessage = (ceremony: "create" | "get", name: string) => {
+	if (!window.isSecureContext) return "Passkeys need HTTPS or http://localhost. Open this board over HTTPS.";
+	switch (name) {
+		case "InvalidStateError":
+			return "This device or password manager already has a passkey for this board, so there is nothing to add here. Use that passkey, or add one from a device that does not share it.";
+		case "NotAllowedError":
+			return ceremony === "create"
+				? "The passkey prompt was closed, timed out, or blocked by the browser. Try again."
+				: "The passkey prompt was closed or timed out, or this device has no passkey for this address. Try again; if this device has none, confirm from one that does, or generate an add-passkey code there to add one here.";
+		case "SecurityError":
+			return "This address cannot use the board's passkeys. Open the board at its configured address.";
+		case "NotSupportedError":
+			return "This browser has no passkey provider for this request. Try another browser or device.";
+		case "AbortError":
+			return "The passkey request was interrupted. Try again.";
+		default:
+			return "Your browser could not complete the passkey request. Try again.";
+	}
+};
+const ceremonyError = (ceremony: "create" | "get") => (cause?: unknown) => {
+	const name = cause instanceof DOMException ? cause.name : "";
+	return new BoardError({
 		status: 0,
-		message: "Passkey confirmation was canceled or unavailable. Use HTTPS or localhost and try again.",
+		message: ceremonyMessage(ceremony, name) + (name ? ` (${name})` : ""),
+		...(name ? { code: name } : {}),
 	});
+};
 export const confirmAccountAction = (action: string, params: unknown) =>
 	Effect.gen(function* () {
 		const started = yield* accountPost("/_boot/auth/challenge", { action, params }).pipe(
@@ -56,13 +79,13 @@ export const confirmAccountAction = (action: string, params: unknown) =>
 						})),
 					},
 				}),
-			catch: ceremonyError,
+			catch: ceremonyError("get"),
 		});
 		if (
 			!(credential instanceof PublicKeyCredential) ||
 			!(credential.response instanceof AuthenticatorAssertionResponse)
 		)
-			return yield* ceremonyError();
+			return yield* ceremonyError("get")();
 		const response = credential.response;
 		const extensions = yield* Schema.decodeUnknownEffect(Schema.JsonObject)(
 			credential.getClientExtensionResults(),
@@ -122,13 +145,13 @@ const registerPasskey = (started: typeof Registration.Type) =>
 						authenticatorSelection: { residentKey: "required", userVerification: "required" },
 					},
 				}),
-			catch: ceremonyError,
+			catch: ceremonyError("create"),
 		});
 		if (
 			!(credential instanceof PublicKeyCredential) ||
 			!(credential.response instanceof AuthenticatorAttestationResponse)
 		)
-			return yield* ceremonyError();
+			return yield* ceremonyError("create")();
 		const extensions = yield* Schema.decodeUnknownEffect(Schema.JsonObject)(
 			credential.getClientExtensionResults(),
 		).pipe(Effect.catchTag("SchemaError", () => unreadable));
