@@ -162,7 +162,8 @@ export const makeMessages = (
 	const list = (input: MessageQuery) =>
 		read((ceiling) =>
 			Effect.gen(function* () {
-				const since = input.since ?? (input.newest ? 0 : ceiling);
+				// A search without a starting point means history: a forward read from now could only come back empty.
+				const since = input.since ?? (input.newest || input.q !== undefined ? 0 : ceiling);
 				const excluded = typeof input.exclude === "string" ? [input.exclude] : (input.exclude ?? []);
 				if (
 					!Number.isSafeInteger(since) ||

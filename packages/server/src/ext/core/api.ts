@@ -41,10 +41,12 @@ const handlers = (extension: ExtensionApi) =>
 								wait = query.wait ?? 0;
 							if ((query.topic !== undefined && !validTopic(query.topic)) || (query.newest === "1" && wait > 0))
 								return yield* new KernelError({ code: "query_invalid" });
+							// A search that neither waits nor names a cursor reads all history.
+							const lookup = query.q !== undefined && query.since === undefined && wait === 0;
 							const cursor =
 								query.since !== undefined
 									? query.since
-									: query.newest === "1"
+									: query.newest === "1" || lookup
 										? 0
 										: (yield* ctx.publicationFence).published_through;
 							const input = {
@@ -59,14 +61,15 @@ const handlers = (extension: ExtensionApi) =>
 								...(query.mentions === undefined ? {} : { mentions: query.mentions.split(",") }),
 								...(wait > 0 || query.exclude_self === "1" ? { exclude: ctx.instance } : {}),
 							};
-							// A newest read returns the top slice and skips everything earlier, so marking through the
-							// highest sequence it returns would clear unread messages nobody was ever shown.
+							// A newest read returns the top slice and skips everything earlier, and a search skips whatever
+							// doesn't match, so marking through the highest sequence either returns would clear unread
+							// messages nobody was ever shown.
 							const view = (result: typeof Envelope.Type) =>
 								markView(
 									ctx,
 									result.items,
 									query.topic ?? "",
-									query.mark !== "0" && query.topic !== undefined && query.newest !== "1",
+									query.mark !== "0" && query.topic !== undefined && query.newest !== "1" && query.q === undefined,
 								).pipe(Effect.as(result));
 							// Seed from the trusted fence: an invalid caller cursor must not poison the shared follower.
 							if (wait > 0) yield* changes.register(ctx.events, (yield* ctx.publicationFence).published_through);

@@ -294,7 +294,7 @@ export const tools = Object.freeze([
 		name: "query_messages",
 		title: "Query chirp messages",
 		description:
-			"Read messages with the board's filters and cursor. topic/subtree OR mentions selects addressed messages (they widen results); other filters combine with AND. Without newest, results run oldest first from since (exclusive); pass the returned cursor as the next since until has_more is false, and poll from the last cursor for new messages. With newest, the latest matches come back without a cursor. Bodies longer than max_body are cut and marked.",
+			"Read messages with the board's filters and cursor. topic/subtree OR mentions selects addressed messages (they widen results); other filters combine with AND. Without newest, results run oldest first from since (exclusive); pass the returned cursor as the next since until has_more is false, and poll from the last cursor for new messages. With q and no since, the read starts at the beginning of history. With newest, the latest matches come back without a cursor. Bodies longer than max_body are cut and marked.",
 		inputSchema: {
 			type: "object",
 			properties: {
