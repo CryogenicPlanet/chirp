@@ -8,7 +8,7 @@ import { KernelError } from "../../kernel/boot-channel.ts";
 // candidate is kept: a form that is not a real word matches nothing.
 const plurals: ReadonlyArray<readonly [RegExp, (word: string) => ReadonlyArray<string>]> = [
 	[/ies$/i, (word) => [`${word.slice(0, -3)}y`, word.slice(0, -1)]],
-	[/(?:ss|x|z|ch|sh)es$/i, (word) => [word.slice(0, -2), word.slice(0, -1)]],
+	[/(?:ss|us|x|z|ch|sh)es$/i, (word) => [word.slice(0, -2), word.slice(0, -1)]],
 	[/(?:ss|us|is)$/i, (word) => [`${word}es`]],
 	[/s$/i, (word) => [word.slice(0, -1)]],
 	[/[^aeiou]y$/i, (word) => [`${word.slice(0, -1)}ies`]],
