@@ -42,7 +42,7 @@ const ceremonyMessage = (ceremony: "create" | "get", name: string) => {
 		case "NotAllowedError":
 			return ceremony === "create"
 				? "The passkey prompt was closed, timed out, or blocked by the browser. Try again."
-				: "No passkey for this address confirmed the request. Use a device that has one; to add a passkey to a device without one, generate an add-passkey code on a device that has one.";
+				: "The passkey prompt was closed or timed out, or this device has no passkey for this address. Try again; if this device has none, confirm from one that does, or generate an add-passkey code there to add one here.";
 		case "SecurityError":
 			return "This address cannot use the board's passkeys. Open the board at its configured address.";
 		case "NotSupportedError":
