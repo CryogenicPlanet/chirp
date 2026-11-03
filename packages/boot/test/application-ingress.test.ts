@@ -1,5 +1,7 @@
 import { agentHeader, applicationBearerPattern, ingressTargetHeader } from "@comms/protocol/headers";
+import { readFile, stat } from "node:fs/promises";
 import { request } from "node:http";
+import { join } from "node:path";
 import { expect, it } from "vitest";
 import { applicationCookies, isReservedIngressPath } from "../src/application-ingress.ts";
 import { launch } from "./fixtures/proxy-launch.ts";
@@ -56,6 +58,8 @@ it.for([
 	});
 	// With nothing served anonymously, the app's own cookies are not narrowed to chirp_app_.
 	expect((await app.fetch(`${app.url}/cookies`)).headers.getSetCookie().join(";")).toContain("app-preference=dark");
+	// A file that exists when the board is first seeded, valid or not, is the operator's and is never replaced.
+	expect(await readFile(join(app.data, "boot.config.json"), "utf8")).toBe(config);
 });
 
 it("answers anonymous ingress with the sign-in challenge while no app is live", async (test) => {
@@ -66,13 +70,39 @@ it("answers anonymous ingress with the sign-in challenge while no app is live", 
 	expect(browser.headers.get("location")).toBe("/auth/login?next=%2Fshared");
 	expect((await fetch(`${app.url}/shared`)).status).toBe(401);
 	// An application bearer is the app's own client, so it learns the app is down rather than to sign in.
-	expect(
-		(await fetch(`${app.url}/shared`, { headers: { authorization: `Bearer chirp_app_${"a".repeat(43)}` } })).status,
-	).toBe(503);
+	const bearer = await fetch(`${app.url}/shared`, { headers: { authorization: `Bearer chirp_app_${"a".repeat(43)}` } });
+	expect(bearer.status).toBe(503);
+	expect(bearer.headers.get("retry-after")).toBe("2");
 });
 
+it("writes a new board's setting when it first seeds the app, serving MCP alone", async (test) => {
+	const app = await launch(test, "ingress");
+	await expect.poll(async () => (await app.state()).state).toBe("live");
+	const filename = join(app.data, "boot.config.json");
+	expect(await readFile(filename, "utf8")).toBe('{"applicationManagedIngress":["mcp"]}\n');
+	expect((await stat(filename)).mode & 0o777).toBe(0o600);
+	expect(await (await app.fetch(`${app.url}/_boot/status`)).json()).toMatchObject({
+		ingress: { applicationManagedIngress: ["mcp"], error: null },
+	});
+	expect((await fetch(`${app.url}/shared`)).status).toBe(200);
+});
+
+it.for(["ingress-unechoed", "ingress-misechoed"])(
+	"refuses anonymous ingress to a kernel that does not echo the setting it was given: %s",
+	async (mode, test) => {
+		const app = await launch(test, mode);
+		await expect.poll(async () => (await app.state()).state).toBe("live");
+		expect((await fetch(`${app.url}/shared`)).status).toBe(401);
+		expect(
+			(await fetch(`${app.url}/shared`, { headers: { authorization: `Bearer chirp_app_${"a".repeat(43)}` } })).status,
+		).toBe(401);
+		// A child that serves no anonymous traffic keeps its own cookies.
+		expect((await app.fetch(`${app.url}/cookies`)).headers.getSetCookie().join(";")).toContain("app-preference=dark");
+	},
+);
+
 it.for([undefined, '{"applicationManagedIngress":["mcp"]}', '{"applicationManagedIngress":true}'])(
-	"delegates anonymous traffic when the file is absent, lists extensions or allows all: %s",
+	"delegates anonymous traffic on a new board, or when the file lists extensions or allows all: %s",
 	async (config, test) => {
 		const app = await launch(test, "ingress", false, {}, config);
 		await expect.poll(async () => (await app.state()).state).toBe("live");

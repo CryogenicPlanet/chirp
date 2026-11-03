@@ -190,6 +190,6 @@ _Superseded 2026-10-25._
 
 > actually github also supports multiple redirect uri now so the cloud chirp should be fine too
 
-## 2026-11-03 — MCP by default
+## 2026-11-02 — MCP by default
 
 > make the mcp extension enabled by default

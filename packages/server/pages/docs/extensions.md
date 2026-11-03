@@ -95,9 +95,10 @@ api.route("GET", "/example", {
 });
 ```
 
-Anonymous requests reach such routes only for extensions that boot's ingress setting allows.
-Without `DATA_DIR/boot.config.json`, boot allows only `mcp`, the board's MCP extension. To
-change that, the operator writes the setting to that file and restarts boot:
+Anonymous requests reach such routes only for extensions that boot's ingress setting allows,
+in `DATA_DIR/boot.config.json`. Boot writes `{"applicationManagedIngress":["mcp"]}` there when
+it first seeds a new board, allowing only the board's MCP extension; without the file, none is
+allowed. To change it, the operator edits the file and restarts boot:
 `{"applicationManagedIngress":["mcp","example.ts"]}` names extensions as `GET /api/ext` lists
 them, `true` allows every extension and `false` none. The file is outside the editable app;
 malformed configuration allows none, with a boot diagnostic, while recovery remains available.
@@ -149,9 +150,12 @@ reports may lack these fields. Health and rehearsal prove the app works, not tha
 policy is correct. This is a trusted extension boundary, not isolation from the app database
 or raw SQL. Keep base boot authentication and recovery routes reserved.
 
-Upgrading an existing board requires both boot and editable runtime support. A runtime without ingress protocol version 3
-cannot tell extensions apart, so it receives delegated traffic only when the setting is `true`; one without version 2
-never does, because earlier dispatchers did not preserve application bearers. Legacy settings `public_paths` and topic
+Upgrading an existing board requires both boot and editable runtime support. Boot forwards anonymous traffic only to
+a runtime whose dispatcher echoes back exactly the setting boot sent, so a tree that mixes old and new kernel files
+receives none. A runtime without ingress protocol version 3 cannot tell extensions apart, so it receives delegated
+traffic only when the setting is `true`; one without version 2 never does, because earlier dispatchers did not
+preserve application bearers. Anonymous requests never wait while a reload, backup or restore holds the board:
+they are told to retry (`503` with `Retry-After`), or get the sign-in challenge when no live app could answer. Legacy settings `public_paths` and topic
 `meta.public` no longer grant public access; implement the desired policy in an explicit
 managed extension and allow it in the ingress setting. No sharing, password or approval workflow is built
 into this primitive.

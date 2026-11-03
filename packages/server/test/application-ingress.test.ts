@@ -1,5 +1,5 @@
 import { assertionHeader, ingressChallengeHeader } from "@comms/protocol/headers";
-import { cp, writeFile } from "node:fs/promises";
+import { cp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { conversation } from "./fixtures/conversation.ts";
@@ -67,7 +67,10 @@ export default api => {
 	await boardChallenge(app.url);
 	await boardQueryValidation(app.url, cookie);
 	const authorization = `Bearer chirp_app_${"a".repeat(43)}`;
-	// Without boot.config.json only the seed's MCP extension serves anonymous traffic.
+	// A new board gets an explicit setting in which only the seed's MCP extension serves anonymous traffic.
+	const setting = join(fixture.root, "boot.config.json");
+	expect(await readFile(setting, "utf8")).toBe('{"applicationManagedIngress":["mcp"]}\n');
+	expect((await stat(setting)).mode & 0o777).toBe(0o600);
 	expect((await fetch(`${app.url}/.well-known/oauth-authorization-server`)).status).toBe(200);
 	expect((await fetch(`${app.url}/managed/hello`)).status).toBe(401);
 	expect((await fetch(`${app.url}/managed/hello`, { headers: { authorization } })).status).toBe(401);
@@ -75,6 +78,16 @@ export default api => {
 	expect((await fetch(`${app.url}/onboarding`)).status).toBeGreaterThanOrEqual(400);
 	// An unlisted extension's managed routes still answer a signed-in request, as with ingress off.
 	expect((await fetch(`${app.url}/managed/hello`, { headers: { cookie } })).status).toBe(200);
+	await app.stop();
+	// A board that already exists and has no file is off: boot writes the default only when it first seeds the app.
+	await rm(setting);
+	app = await fixture.launch(join(seed, "server.ts"));
+	cookie = await app.login();
+	await app.ready(cookie);
+	await boardChallenge(app.url);
+	expect((await fetch(`${app.url}/.well-known/oauth-authorization-server`)).status).toBe(401);
+	expect((await fetch(`${app.url}/managed/hello`)).status).toBe(401);
+	await expect(stat(setting)).rejects.toThrow();
 	await app.stop();
 	await writeFile(
 		join(fixture.root, "boot.config.json"),
@@ -240,15 +253,82 @@ export default api => {
 	expect((await fetch(`${app.url}/managed/hello`)).status).toBe(500);
 	expect((await fetch(`${app.url}/managed/hello`, { headers: { authorization } })).status).toBe(500);
 	await app.stop();
+	// true allows every extension's managed routes, the seed's MCP included.
+	await writeFile(setting, JSON.stringify({ applicationManagedIngress: true }));
 	app = await fixture.launch(join(seed, "server.ts"));
 	cookie = await app.login();
 	await app.ready(cookie);
+	expect((await fetch(`${app.url}/.well-known/oauth-authorization-server`)).status).toBe(200);
+	expect((await fetch(`${app.url}/managed/hello`)).status).toBe(200);
+	await boardChallenge(app.url);
 	expect(await fixture.sql("SELECT body,agent FROM messages WHERE topic='managed' ORDER BY seq")).toEqual([
 		{ body: "durable anonymous", agent: "system" },
 		{ body: "bearer service", agent: "system" },
 		{ body: "signed service", agent: "system" },
 	]);
-}, 60000);
+}, 90000);
+
+/** A seed whose kernel files can be swapped for stale versions, with one unlisted managed extension. */
+const mixedSeed = async (root: string, edit: (file: "server.ts" | "kernel/ext.ts", source: string) => string) => {
+	const seed = join(root, "mixed-seed");
+	await cp(join(import.meta.dirname, "../src"), seed, { recursive: true });
+	await writeFile(
+		join(seed, "ext/managed.ts"),
+		`export default api => api.route("GET","/managed",{description:"Unlisted managed route",access:"application-managed",handler:async()=>Response.json("leaked")});`,
+	);
+	for (const file of ["server.ts", "kernel/ext.ts"] as const)
+		await writeFile(join(seed, file), edit(file, await readFile(join(seed, file), "utf8")));
+	return seed;
+};
+const replaced = (source: string, from: string, to: string) => {
+	if (!source.includes(from)) throw new Error(`Kernel source no longer contains ${from}`);
+	return source.replace(from, to);
+};
+
+it("forwards no anonymous traffic to a dispatcher from before the allow list in an otherwise current tree", async (test) => {
+	const fixture = await conversation(test);
+	// The earlier dispatcher matched every extension's managed routes and reported no setting.
+	const seed = await mixedSeed(fixture.root, (file, source) =>
+		file === "kernel/ext.ts"
+			? replaced(
+					replaced(
+						source,
+						"selectRequest(matcher, incoming, (route) => admits(route.extension))",
+						"selectRequest(matcher, incoming)",
+					),
+					"ingressSetting: encodeIngressSetting(ingress),",
+					"",
+				)
+			: source,
+	);
+	const app = await fixture.launch(join(seed, "server.ts"));
+	await app.setup();
+	const cookie = await app.login();
+	await app.ready(cookie);
+	expect((await fetch(`${app.url}/managed`)).status).toBe(401);
+	expect((await fetch(`${app.url}/.well-known/oauth-authorization-server`)).status).toBe(401);
+	expect((await fetch(`${app.url}/managed`, { headers: { cookie } })).status).toBe(200);
+}, 25000);
+
+it("never serves a current dispatcher to a server entry from before ingress settings", async (test) => {
+	const fixture = await conversation(test);
+	// The earlier entry built the dispatcher without settings and sent no echo, whatever protocol it advertised.
+	const seed = await mixedSeed(fixture.root, (file, source) =>
+		file === "server.ts"
+			? replaced(replaced(source, "settings.board,", ""), 'typeof extensions.ingressSetting === "string"', "false")
+			: source,
+	);
+	const app = await fixture.launch(join(seed, "server.ts"));
+	await app.setup();
+	const cookie = await app.login();
+	await expect
+		.poll(async () => (await (await fetch(`${app.url}/_boot/status`, { headers: { cookie } })).json()).child.state, {
+			timeout: 15000,
+		})
+		.toBe("failed");
+	expect((await fetch(`${app.url}/managed`)).status).toBe(401);
+	expect((await fetch(`${app.url}/.well-known/oauth-authorization-server`)).status).toBe(401);
+}, 30000);
 
 it("closes anonymous ingress when a failed factory could have owned a narrower route", async (test) => {
 	const fixture = await conversation(test);

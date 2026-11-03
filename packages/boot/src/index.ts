@@ -38,7 +38,7 @@ import { layer as attemptsLayer, ChildAttempts } from "./child-attempts.ts";
 import { cutover } from "./cutover.ts";
 import { DbOps, layer as backupLayer } from "./db-ops.ts";
 import { BootHttp, type RecoveryPhase } from "./boot-http.ts";
-import { ingressConfiguration } from "./ingress-configuration.ts";
+import { ingressConfiguration, seedIngressConfiguration, type IngressConfiguration } from "./ingress-configuration.ts";
 import { layer as preparationLayer } from "./generation-preparation.ts";
 import { layer as preparationProcessLayer } from "./preparation-process.ts";
 import { makeBackupInventory } from "./backup-inventory.ts";
@@ -83,8 +83,18 @@ export const boot = Effect.fn("boot")(function* (options: ApplicationSource & { 
 		(value) => value === "1" || value === "true",
 	);
 	yield* fs.makeDirectory(options.dataDirectory, { recursive: true, mode: 0o700 });
-	const ingress = yield* ingressConfiguration(options.dataDirectory, isolated);
-	if (ingress.error) yield* Effect.logWarning(`Application-managed ingress disabled: ${ingress.error}`);
+	const initialIngress = yield* ingressConfiguration(options.dataDirectory, isolated);
+	if (initialIngress.error) yield* Effect.logWarning(`Application-managed ingress disabled: ${initialIngress.error}`);
+	const ingress = yield* Ref.make<IngressConfiguration>(initialIngress);
+	// A brand-new board gets an explicit, operator-editable setting that serves MCP; the setting then reads as usual.
+	// Failure leaves the board as an existing board without a file: off.
+	const firstSeed = seedIngressConfiguration(options.dataDirectory).pipe(
+		Effect.andThen(ingressConfiguration(options.dataDirectory, isolated)),
+		Effect.flatMap((value) => Ref.set(ingress, value)),
+		Effect.catchCause((cause) =>
+			Effect.logWarning("New-board ingress setting not written; application-managed ingress stays off", cause),
+		),
+	);
 	const configuration =
 		configured._tag === "file"
 			? configured
@@ -106,10 +116,12 @@ export const boot = Effect.fn("boot")(function* (options: ApplicationSource & { 
 		handle: publicRoute.pipe(Effect.map((response) => response ?? authErrorResponse("boot_unavailable"))),
 		shutdown: Effect.void,
 	});
-	const supervisor = yield* supervise(options, remote, redact, {
-		origin: options.auth.expectedOrigin,
-		ingress: ingress.applicationManagedIngress,
-	});
+	const supervisor = yield* supervise(
+		options,
+		{ origin: options.auth.expectedOrigin, ingress, firstSeed },
+		remote,
+		redact,
+	);
 	const { child, run, fail } = supervisor;
 	const initialized = Layer.effectDiscard(
 		initializeBootSchema.pipe(

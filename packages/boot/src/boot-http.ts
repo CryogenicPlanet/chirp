@@ -20,7 +20,7 @@ export class BootHttp extends Context.Service<
 	BootHttp,
 	{
 		readonly child: SupervisedChild;
-		readonly ingress?: IngressConfiguration;
+		readonly ingress: Ref.Ref<IngressConfiguration>;
 		readonly storeIdentity?: AppRecovery["Service"]["identityStatus"];
 		readonly authConfig: AuthConfig;
 		readonly editing: Omit<Editing, "writable">;

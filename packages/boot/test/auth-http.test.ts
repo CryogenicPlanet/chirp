@@ -183,8 +183,7 @@ it("creates a passkey and a protected session, forwards verified identity, and l
 	// The app cannot plant a sign-in binding either.
 	expect(cookies.join(";")).not.toContain("__Host-chirp_oidc");
 	expect(cookies.join(";")).toContain("chirp_app_preference=dark");
-	// A board serves MCP anonymously by default, so the app may set only its own chirp_app_ cookies.
-	expect(cookies.join(";")).not.toContain("app-preference");
+	expect(cookies.join(";")).toContain("app-preference=dark");
 	expect(
 		(
 			await fetch(`${app.url}/api/reload`, { method: "POST", headers: { ...headers, origin: "https://comms.test" } })

@@ -252,6 +252,19 @@ async function run() {
 	await writeFile(`${stateFile}.session.tmp`, JSON.stringify({ cookie }), { mode: 0o600, flag: "wx" });
 	await rename(`${stateFile}.session.tmp`, `${stateFile}.session`);
 	await ready(cookie);
+	// Startup headroom: the first generation runs every seed migration inside boot's five-second health window.
+	const live = Schema.decodeUnknownSync(
+		Schema.Struct({
+			items: Schema.Array(Schema.Struct({ payload: Schema.Struct({ health_ms: Schema.optionalKey(Schema.Int) }) })),
+		}),
+	)(
+		await (
+			await ok(await request("/api/events?since=0&types=generation.live", undefined, cookie), "Generation events")
+		).json(),
+	);
+	console.log(
+		`First generation became healthy in ${live.items[0]?.payload.health_ms ?? "an unrecorded number of"} ms of the 5000 ms health window`,
+	);
 	const key = crypto.randomUUID();
 	const input = { topic: `acceptance/${key}`, body: "A preserved — café 🐘 数据" };
 	const first = Schema.decodeUnknownSync(message)(

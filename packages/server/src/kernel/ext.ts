@@ -24,6 +24,7 @@ import { extensionData } from "./extension-data.ts";
 import { runEvents } from "./extension-events.ts";
 import { discoverExtensions } from "./extension-discovery.ts";
 import type { Api, CronContext, EventHandler, Hook, RouteOptions, ExtensionServices } from "./extension-api.ts";
+import { type BoardSettings, encodeIngressSetting } from "./board-settings.ts";
 
 interface CronJob {
 	readonly expression: string;
@@ -57,20 +58,14 @@ const factory = Schema.Struct({
 	),
 });
 
-/** What boot tells the app about its board. An older boot names neither. */
-export interface BoardSettings {
-	readonly origin?: string;
-	/** Whose managed routes anonymous traffic reaches: every extension's, none, or the named ones'. Absent means every. */
-	readonly ingress?: boolean | ReadonlyArray<string>;
-}
-
 /** Owns one generation's optional extensions; resources exist only in a live scope. */
 export class Extensions extends Context.Service<Extensions, Effect.Success<ReturnType<typeof make>>>()(
 	"comms/server/Extensions",
 ) {}
 const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect.Effect<void>, board: BoardSettings) =>
 	Effect.gen(function* () {
-		const ingress = board.ingress ?? true;
+		// Read eagerly: a stale caller that passes no settings fails here rather than admitting every extension.
+		const ingress = board.ingress;
 		const admits = (extension: string) => (typeof ingress === "boolean" ? ingress : ingress.includes(extension));
 		const path = yield* Path.Path;
 		const sql = yield* SqlClient.SqlClient;
@@ -477,6 +472,8 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 		for (const route of selected) matcher.on(route.method, route.path, route);
 		return {
 			ingressReady,
+			/** The setting dispatch enforces, echoed to boot, which forwards anonymous traffic only when it matches. */
+			ingressSetting: encodeIngressSetting(ingress),
 			registrations: selected,
 			openapi: document(selected, documents),
 			diagnostics: Ref.get(diagnostics),
@@ -646,9 +643,10 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 				}),
 		};
 	});
+/** Every argument is required, so a caller from before ingress settings fails instead of admitting everything. */
 export const layer = (
 	directory: string,
 	capabilities: CapabilityFactory,
-	onWork: Effect.Effect<void> = Effect.void,
-	board: BoardSettings = {},
+	onWork: Effect.Effect<void>,
+	board: BoardSettings,
 ) => Layer.effect(Extensions, make(directory, capabilities, onWork, board)).pipe(Layer.provide(FetchHttpClient.layer));

@@ -3,6 +3,7 @@ import {
 	allExtensionsIngressProtocolVersion,
 	ingressProtocolHeader,
 	ingressProtocolVersion,
+	ingressSettingHeader,
 	ingressTargetHeader,
 	applicationIngressPath,
 	assertionHeader,
@@ -43,7 +44,17 @@ export function serve(mode: string) {
 					headers: {
 						[writerEpochHeader]: process.env.WRITER_EPOCH ?? "",
 						[kernelProtocolHeader]: "2",
-						...(mode === "ingress" ? { [ingressProtocolHeader]: ingressProtocolVersion } : {}),
+						// A current kernel echoes the setting it enforces; the other modes are mixed or stale trees.
+						...(mode === "ingress"
+							? {
+									[ingressProtocolHeader]: ingressProtocolVersion,
+									[ingressSettingHeader]: process.env.APPLICATION_MANAGED_INGRESS ?? "",
+								}
+							: {}),
+						...(mode === "ingress-unechoed" ? { [ingressProtocolHeader]: ingressProtocolVersion } : {}),
+						...(mode === "ingress-misechoed"
+							? { [ingressProtocolHeader]: ingressProtocolVersion, [ingressSettingHeader]: "true" }
+							: {}),
 						...(mode === "ingress-v1" ? { [ingressProtocolHeader]: "1" } : {}),
 						// A kernel from before per-extension ingress: it would admit every extension's managed routes.
 						...(mode === "ingress-v2" ? { [ingressProtocolHeader]: allExtensionsIngressProtocolVersion } : {}),

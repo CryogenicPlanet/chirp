@@ -47,6 +47,12 @@ it("runs kernel KV mutation/read and rolls back every probe row without publishi
 			"boot.db",
 		),
 	).toEqual([{ type: "generation.starting" }, { type: "generation.live" }]);
+	// How much of the five-second health window startup used, as the remote board job reports it.
+	const live = await (
+		await fetch(`${app.url}/api/events?since=0&types=generation.live`, { headers: { cookie } })
+	).json();
+	expect(live.items[0].payload.health_ms).toBeGreaterThanOrEqual(0);
+	expect(live.items[0].payload.health_ms).toBeLessThanOrEqual(5000);
 	const posted = await app.post("/api/messages", { topic: "after-health", body: "ordinary writes publish" }, cookie);
 	expect(posted.status).toBe(200);
 	expect(await fixture.sql("SELECT COUNT(*) count FROM messages WHERE instance<>'extension:system.ts'")).toEqual([

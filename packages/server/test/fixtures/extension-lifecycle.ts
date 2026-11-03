@@ -79,7 +79,7 @@ const run = Effect.gen(function* () {
 		Effect.provide(
 			Layer.unwrap(
 				Effect.map(extensionCapabilities.pipe(Effect.provideService(BootGrants, noGrants)), (capabilities) =>
-					extensionsLayer(directory, capabilities),
+					extensionsLayer(directory, capabilities, Effect.void, { origin: undefined, ingress: true }),
 				),
 			).pipe(
 				Layer.provide(

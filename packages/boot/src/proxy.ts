@@ -133,6 +133,19 @@ const serviceWorkerRefused = () =>
 		},
 		{ status: 403, headers: { "cache-control": "no-store", "clear-site-data": '"storage"' } },
 	);
+/** Anonymous managed traffic is never queued: while the board is frozen, or an app bearer finds no live app, it is told to retry. */
+const busy = () =>
+	HttpServerResponse.jsonUnsafe(
+		{
+			error: {
+				code: "board_busy",
+				message: "The board is starting, reloading or restoring.",
+				hint: "Retry after the Retry-After interval.",
+				retriable: true,
+			},
+		},
+		{ status: 503, headers: { "cache-control": "no-store", "retry-after": "2" } },
+	);
 const varyOnServiceWorker = (headers: Record<string, string>) => {
 	const current = headers.vary;
 	if (current !== undefined && current.split(",").some((item) => item.trim().toLowerCase() === serviceWorkerHeader))
@@ -141,8 +154,9 @@ const varyOnServiceWorker = (headers: Record<string, string>) => {
 };
 
 export const proxy = Effect.gen(function* () {
-	const { child, authConfig, editing, requests, backups, restores, captures, phase, restart, storeIdentity, ingress } =
+	const { child, authConfig, editing, requests, backups, restores, captures, phase, restart, storeIdentity } =
 		yield* BootHttp;
+	const ingress = yield* Ref.get((yield* BootHttp).ingress);
 	const auth = yield* Auth;
 	const events = yield* Events;
 	const request = yield* HttpServerRequest.HttpServerRequest;
@@ -233,7 +247,7 @@ export const proxy = Effect.gen(function* () {
 					return expires(
 						HttpServerResponse.jsonUnsafe({
 							revision: yield* buildRevision,
-							ingress: ingress ?? { applicationManagedIngress: false, error: null },
+							ingress,
 							authenticated: true,
 							child: safeState,
 							source_recovery_error: yield* Ref.get(child.sourceError).pipe(
@@ -310,6 +324,25 @@ export const proxy = Effect.gen(function* () {
 					// only ever reaches the live generation whose attempt it was validated against.
 					if (grantEpoch === undefined || !reachesAttempt(destination, grantEpoch))
 						return authErrorResponse("board_busy");
+				} else if (managedIngress) {
+					// Anonymous traffic never waits in the freeze queue or the write gate, where it could crowd out signed-in
+					// requests. Only a live app that accepts it is offered it; otherwise it gets the answer it would get with
+					// ingress off. An application bearer belongs to the app's own clients, so it learns the app is unavailable.
+					const live = yield* Ref.get(child.traffic.route);
+					if (!live?.applicationManagedIngress)
+						return applicationBearer
+							? live
+								? authErrorResponse("credential_required", 401)
+								: busy()
+							: yield* new AuthError({ code: "session_invalid" });
+					const admitted = yield* child.traffic.requests.admitNow;
+					if (!admitted) return busy();
+					destination = admitted.destination;
+					if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+						const mutation = yield* child.traffic.admitNow;
+						if (!mutation) return busy();
+						destination = mutation.destination;
+					}
 				} else {
 					const requestAdmission = yield* child.traffic.requests.awaitDestination.pipe(Effect.result);
 					if (requestAdmission._tag === "Failure") return expires(unavailable());
@@ -321,8 +354,7 @@ export const proxy = Effect.gen(function* () {
 						if (admitted.waited && identity) identity = yield* authenticate(auth, request);
 					}
 				}
-				// With no live app to delegate to, anonymous ingress gets the challenge it would get with ingress off, so a
-				// browser is still sent to sign in while the app starts or is broken. An application bearer learns it is down.
+				// The route can change between the check above and admission; recheck what was actually admitted.
 				if (!destination)
 					return managedIngress && !applicationBearer
 						? yield* new AuthError({ code: "session_invalid" })
@@ -331,6 +363,7 @@ export const proxy = Effect.gen(function* () {
 					return applicationBearer
 						? authErrorResponse("credential_required", 401)
 						: yield* new AuthError({ code: "session_invalid" });
+				const delivered = destination;
 				const connectionHeaders = new Set(
 					(request.headers.connection ?? "")
 						.toLowerCase()
@@ -370,7 +403,7 @@ export const proxy = Effect.gen(function* () {
 							...(managedIngress && applicationBearer && !connectionHeaders.has("authorization")
 								? { authorization: request.headers.authorization }
 								: {}),
-							...(ingressEnabled(ingress) &&
+							...(delivered.applicationManagedIngress &&
 							!connectionHeaders.has("cookie") &&
 							applicationCookies(request.headers.cookie)
 								? { cookie: applicationCookies(request.headers.cookie) }
@@ -468,7 +501,8 @@ export const proxy = Effect.gen(function* () {
 												(cookie) =>
 													cookie.name !== sessionCookie &&
 													cookie.name !== oidcCookie &&
-													(!ingressEnabled(ingress) || cookie.name.startsWith(applicationCookiePrefix)),
+													// Narrowed only while the live app serves anonymous traffic.
+													(!delivered.applicationManagedIngress || cookie.name.startsWith(applicationCookiePrefix)),
 											),
 										),
 							}).pipe(

@@ -118,7 +118,7 @@ const make = Effect.gen(function* () {
 				),
 			),
 		rehearsed: (n: number, report: RehearsalReport) => sql.withTransaction(record(n, "rehearsed", report)),
-		healthy: (n: number) =>
+		healthy: (n: number, payload: Schema.Json = {}) =>
 			Effect.gen(function* () {
 				const now = yield* DateTime.nowAsDate;
 				yield* transition(
@@ -126,6 +126,7 @@ const make = Effect.gen(function* () {
 					sql`status='live',good=1,healthy_at=${now.getTime()},error=NULL,stderr=''`,
 					sql`status<>'live'`,
 					"live",
+					payload,
 				);
 			}),
 		failed: (n: number, error: string, stderr: string, attempts?: number) =>

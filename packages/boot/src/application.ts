@@ -69,7 +69,10 @@ export const snapshotStoreEntry = Effect.fn("snapshotStoreEntry")(function* (
 });
 
 /** Seeds only an absent editable tree. Every attempted new snapshot has a durable reservation. */
-export const prepareGeneration = Effect.fn("prepareGeneration")(function* (options: ApplicationSource) {
+export const prepareGeneration = Effect.fn("prepareGeneration")(function* (
+	options: ApplicationSource,
+	firstSeed: Effect.Effect<void, never, FileSystem.FileSystem | Path.Path>,
+) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	const generations = yield* Generations;
@@ -98,6 +101,8 @@ export const prepareGeneration = Effect.fn("prepareGeneration")(function* (optio
 					reason: "Editable source is missing; refusing to replace it with seed",
 				});
 			}
+			// Before the seed is recorded: an interrupted first seed retries this, and a seeded board never reaches it.
+			yield* firstSeed;
 			yield* Effect.scoped(
 				Effect.gen(function* () {
 					const temporary = yield* fs.makeTempDirectoryScoped({ directory: options.dataDirectory, prefix: ".seed-" });

@@ -58,6 +58,7 @@ const run = Effect.gen(function* () {
 						directory,
 						capabilities,
 						Ref.update(wakeups, (count) => count + 1),
+						{ origin: undefined, ingress: true },
 					),
 				),
 			).pipe(
