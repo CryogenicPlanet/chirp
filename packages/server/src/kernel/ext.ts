@@ -506,7 +506,14 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 					const selection = yield* selectRequest(matcher, incoming, (route) => admits(route.extension)).pipe(
 						Effect.result,
 					);
-					if (selection._tag === "Failure")
+					// The allow list is checked again here, in the file that echoes it to boot, so a stale matcher that ignores
+					// the predicate still cannot hand anonymous traffic to an extension the setting leaves out.
+					const refused =
+						selection._tag === "Failure" ||
+						(selection.success?.envelope === true &&
+							(selection.success.matched.handler.access !== "application-managed" ||
+								!admits(selection.success.matched.handler.extension)));
+					if (refused)
 						return HttpServerResponse.jsonUnsafe(
 							{
 								error: {

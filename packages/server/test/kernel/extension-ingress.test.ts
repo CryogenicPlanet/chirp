@@ -4,6 +4,8 @@ import { FindMyWay, HttpServerRequest } from "effect/unstable/http";
 import { expect, it } from "vitest";
 import { selectRequest, exposeRequest } from "../../src/kernel/extension-ingress.ts";
 
+const everyExtension = () => true;
+
 it("uses normal route precedence and never falls back from the anonymous envelope", async () => {
 	const matcher = FindMyWay.make<{ readonly access: "board" | "application-managed" }>();
 	matcher.on("GET", "/api/private", { access: "board" });
@@ -16,6 +18,7 @@ it("uses normal route precedence and never falls back from the anonymous envelop
 				HttpServerRequest.fromWeb(
 					new Request(`http://child${applicationIngressPath}`, { method, headers: { [ingressTargetHeader]: target } }),
 				),
+				everyExtension,
 			),
 		);
 	expect((await select("/api/open?x=1"))?.matched.handler.access).toBe("application-managed");
@@ -34,7 +37,7 @@ it("uses normal route precedence and never falls back from the anonymous envelop
 		await expect(select(path)).rejects.toThrow();
 	await expect(select("/api/open", "POST")).rejects.toThrow();
 	const regular = await Effect.runPromise(
-		selectRequest(matcher, HttpServerRequest.fromWeb(new Request("http://child/health"))),
+		selectRequest(matcher, HttpServerRequest.fromWeb(new Request("http://child/health")), everyExtension),
 	);
 	expect(regular).toBeNull();
 });
@@ -98,7 +101,7 @@ it("selects the owning core route for ordinary queries requiring handler validat
 	matcher.on("GET", "/api/topics", handler);
 	for (const target of ["/api/messages?topic=gen\\eral", "/api/topics?cursor=a\\b"]) {
 		const request = HttpServerRequest.fromWeb(new Request(`http://child${target}`));
-		const selected = await Effect.runPromise(selectRequest(matcher, request));
+		const selected = await Effect.runPromise(selectRequest(matcher, request, everyExtension));
 		expect(selected?.matched.handler).toBe(handler);
 		expect(selected?.target).toBe(target);
 		expect(selected?.envelope).toBe(false);
@@ -111,7 +114,7 @@ it("rejects empty named parameters without rejecting an empty terminal wildcard"
 	matcher.on("GET", "/api/:id/end", { access: "board" });
 	for (const target of ["/", "/api//end"]) {
 		const regular = await Effect.runPromise(
-			selectRequest(matcher, HttpServerRequest.fromWeb(new Request(`http://child${target}`))),
+			selectRequest(matcher, HttpServerRequest.fromWeb(new Request(`http://child${target}`)), everyExtension),
 		);
 		expect(regular).toBeNull();
 		await expect(
@@ -121,6 +124,7 @@ it("rejects empty named parameters without rejecting an empty terminal wildcard"
 					HttpServerRequest.fromWeb(
 						new Request(`http://child${applicationIngressPath}`, { headers: { [ingressTargetHeader]: target } }),
 					),
+					everyExtension,
 				),
 			),
 		).rejects.toThrow();
@@ -132,7 +136,7 @@ it("rejects empty named parameters without rejecting an empty terminal wildcard"
 	});
 	wildcardMatcher.on("GET", "/prefix/:bucket/*", { access: "application-managed" });
 	const wildcard = await Effect.runPromise(
-		selectRequest(wildcardMatcher, HttpServerRequest.fromWeb(new Request("http://child/prefix/docs/"))),
+		selectRequest(wildcardMatcher, HttpServerRequest.fromWeb(new Request("http://child/prefix/docs/")), everyExtension),
 	);
 	expect(wildcard?.matched.params).toEqual({ bucket: "docs", "*": "" });
 });

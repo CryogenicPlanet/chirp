@@ -23,24 +23,30 @@ export const ingressEnabled = (ingress: IngressConfiguration) =>
 		: ingress.applicationManagedIngress.length > 0;
 
 /**
- * Writes a new board's explicit setting, only when no file exists, and reports whether it did. Boot calls this once,
- * when it first seeds the app, so an existing board without a file stays off. The file is complete before it appears
- * under its name, owned by boot and mode 0600, so it passes the isolated-mode checks below.
+ * Writes a new board's explicit setting, only when nothing has that name, and reports whether it did. Boot calls this
+ * once, before it records the first seed of the app, so an existing board without a file stays off. The file is owned
+ * by boot and mode 0600, so it passes the isolated-mode checks below, and both it and its directory entry are synced
+ * before this returns. An interrupted write can leave a short file, which reads as invalid: off, with a diagnostic.
  */
 export const seedIngressConfiguration = (directory: string) =>
 	Effect.gen(function* () {
 		const fs = yield* FileSystem.FileSystem;
 		const path = yield* Path.Path;
 		const root = yield* fs.realPath(directory);
-		const filename = path.join(root, "boot.config.json");
-		const staged = path.join(root, ".boot.config.json.new");
-		yield* fs.remove(staged, { force: true });
-		yield* fs.writeFileString(staged, newBoardConfiguration, { flag: "wx", mode: 0o600 });
-		// A hard link never replaces an existing name, so an operator's file, or anything else there, always wins.
-		const linked = yield* fs.link(staged, filename).pipe(Effect.result);
-		yield* fs.remove(staged);
-		if (linked._tag === "Failure" && linked.failure.reason._tag !== "AlreadyExists") return yield* linked.failure;
-		return linked._tag === "Success";
+		// Exclusive create never replaces an existing name, so an operator's file, or anything else there, always wins.
+		const created = yield* Effect.scoped(
+			Effect.gen(function* () {
+				const file = yield* fs.open(path.join(root, "boot.config.json"), { flag: "wx", mode: 0o600 });
+				yield* file.writeAll(new TextEncoder().encode(newBoardConfiguration));
+				yield* file.sync;
+			}),
+		).pipe(Effect.result);
+		if (created._tag === "Failure") {
+			if (created.failure.reason._tag === "AlreadyExists") return false;
+			return yield* created.failure;
+		}
+		yield* Effect.scoped(Effect.flatMap(fs.open(root), (handle) => handle.sync));
+		return true;
 	});
 
 /** Operator-owned startup policy. A missing or broken setting means off and never takes recovery or authentication down. */

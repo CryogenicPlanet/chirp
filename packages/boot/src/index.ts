@@ -92,7 +92,10 @@ export const boot = Effect.fn("boot")(function* (options: ApplicationSource & { 
 		Effect.andThen(ingressConfiguration(options.dataDirectory, isolated)),
 		Effect.flatMap((value) => Ref.set(ingress, value)),
 		Effect.catchCause((cause) =>
-			Effect.logWarning("New-board ingress setting not written; application-managed ingress stays off", cause),
+			Effect.logError(
+				`Could not write ${options.dataDirectory}/boot.config.json for this new board, so MCP and every other extension stay private. Write {"applicationManagedIngress":["mcp"]} there and restart boot to serve MCP.`,
+				cause,
+			),
 		),
 	);
 	const configuration =

@@ -154,7 +154,8 @@ without disabling recovery.
 Allowing an extension grants that trusted editable code the ability to admit anonymous requests
 on the routes it explicitly declares `access: "application-managed"`. It does not publish an
 existing folder. These handlers can intentionally write, so review their admission rules and
-method declarations.
+method declarations, and check that they bound how long they read an anonymous body, as MCP
+does: a reload or backup waits for admitted requests to finish.
 Passkeys, board tokens, board sessions, editing and recovery keep boot's authentication.
 See the [extension guide](../packages/server/pages/docs/extensions.md#application-managed-routes)
 for app credentials, cookies and handler authority.

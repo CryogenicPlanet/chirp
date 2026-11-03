@@ -269,14 +269,15 @@ export default api => {
 }, 90000);
 
 /** A seed whose kernel files can be swapped for stale versions, with one unlisted managed extension. */
-const mixedSeed = async (root: string, edit: (file: "server.ts" | "kernel/ext.ts", source: string) => string) => {
+type KernelFile = "server.ts" | "kernel/ext.ts" | "kernel/extension-ingress.ts";
+const mixedSeed = async (root: string, edit: (file: KernelFile, source: string) => string) => {
 	const seed = join(root, "mixed-seed");
 	await cp(join(import.meta.dirname, "../src"), seed, { recursive: true });
 	await writeFile(
 		join(seed, "ext/managed.ts"),
 		`export default api => api.route("GET","/managed",{description:"Unlisted managed route",access:"application-managed",handler:async()=>Response.json("leaked")});`,
 	);
-	for (const file of ["server.ts", "kernel/ext.ts"] as const)
+	for (const file of ["server.ts", "kernel/ext.ts", "kernel/extension-ingress.ts"] as const)
 		await writeFile(join(seed, file), edit(file, await readFile(join(seed, file), "utf8")));
 	return seed;
 };
@@ -307,6 +308,28 @@ it("forwards no anonymous traffic to a dispatcher from before the allow list in 
 	await app.ready(cookie);
 	expect((await fetch(`${app.url}/managed`)).status).toBe(401);
 	expect((await fetch(`${app.url}/.well-known/oauth-authorization-server`)).status).toBe(401);
+	expect((await fetch(`${app.url}/managed`, { headers: { cookie } })).status).toBe(200);
+}, 25000);
+
+it("admits no unlisted extension anonymously through a matcher from before the allow list", async (test) => {
+	const fixture = await conversation(test);
+	// The earlier matcher took no allow-list predicate and admitted every managed route through the envelope.
+	const seed = await mixedSeed(fixture.root, (file, source) =>
+		file === "kernel/extension-ingress.ts"
+			? replaced(
+					replaced(source, "\tadmitted: (route: Route) => boolean,\n", ""),
+					'(matched.handler.access !== "application-managed" || !admitted(matched.handler))',
+					'matched.handler.access !== "application-managed"',
+				)
+			: source,
+	);
+	const app = await fixture.launch(join(seed, "server.ts"));
+	await app.setup();
+	const cookie = await app.login();
+	await app.ready(cookie);
+	// The dispatcher still echoes ["mcp"], so MCP is served, and it rechecks the list itself.
+	expect((await fetch(`${app.url}/.well-known/oauth-authorization-server`)).status).toBe(200);
+	expect((await fetch(`${app.url}/managed`)).status).toBe(401);
 	expect((await fetch(`${app.url}/managed`, { headers: { cookie } })).status).toBe(200);
 }, 25000);
 

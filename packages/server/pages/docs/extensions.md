@@ -139,7 +139,9 @@ Other app credentials can use a custom header outside the reserved `x-chirp-*` n
 or your request body. Set app cookies with HttpOnly, Secure, appropriate
 SameSite and Path attributes. Ordinary board routes do not receive app cookies. Extensions
 own validation, credential storage, CSRF defenses, rate limits and their additional admission
-rules; a managed route that does no checks is intentionally public.
+rules; a managed route that does no checks is intentionally public. Bound how long a handler
+reads an anonymous body, as MCP does with five seconds: an admitted request holds the board's
+admission until its response ends, and a reload or backup waits for it.
 
 `GET /api/ext` reports each route's access policy, and `/api` marks managed operations with
 `x-chirp-access: "application-managed"` rather than claiming board credentials are required.

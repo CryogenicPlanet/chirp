@@ -16,7 +16,7 @@ import { requestPath, reserved } from "./extension-routes.ts";
 export const selectRequest = <Route extends { readonly access?: "board" | "application-managed" }>(
 	matcher: FindMyWay.Router<Route>,
 	request: HttpServerRequest.HttpServerRequest,
-	admitted: (route: Route) => boolean = () => true,
+	admitted: (route: Route) => boolean,
 ) =>
 	Effect.gen(function* () {
 		const envelope = request.url === applicationIngressPath;
