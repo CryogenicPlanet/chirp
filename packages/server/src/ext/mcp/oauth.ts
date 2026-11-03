@@ -104,6 +104,12 @@ const one = (value: string | ReadonlyArray<string> | undefined) => (typeof value
 // kept requesting read alone after write was added, and so could never post.
 const granted: ReadonlyArray<"read" | "write"> = ["read", "write"];
 const loopback: ReadonlyArray<string> = ["127.0.0.1", "[::1]", "localhost"];
+/**
+ * A host as the URL parser leaves a real one: lowercase letters, digits, dots and dashes (IDNs come out as punycode), or
+ * a bracketed IPv6 literal. The parser lets through characters such as `;` and `'`, and a callback's origin is written
+ * into consent's CSP.
+ */
+const plainHost = /^(?:[a-z0-9.-]+|\[[0-9a-f:.]+\])$/;
 const validRedirect = (value: string) => {
 	try {
 		const url = new URL(value);
@@ -111,6 +117,7 @@ const validRedirect = (value: string) => {
 			!url.hash &&
 			!url.username &&
 			!url.password &&
+			plainHost.test(url.hostname) &&
 			(url.protocol === "https:" || (url.protocol === "http:" && loopback.includes(url.hostname)))
 		);
 	} catch {
@@ -221,26 +228,44 @@ const lookup = (ctx: Context, id: string, kind: string) =>
 		Effect.map((rows) => rows[0]),
 	);
 /**
- * Registration is anonymous, so a registered client no human has approved lapses a day after registering, and at most
- * this many wait at once. Approving one at consent keeps it (expires_at 0), as every client from before this rule is.
+ * Registration is anonymous, so a registered client no human has approved lapses an hour after registering, and at most
+ * this many wait at once; past that, a registration evicts the oldest. Approving one at consent keeps it (expires_at 0),
+ * as every client from before this rule is.
  */
-const pendingLifetime = 24 * 60 * 60 * 1000;
+const pendingLifetime = 60 * 60 * 1000;
 const pendingClients = 500;
-const lapsed = (row: typeof Stored.Type, now: number) => row.expires_at !== 0 && row.expires_at <= now;
+/**
+ * The registered clients among `ids` that a code, consent or token names. Approval keeps a client before issuing
+ * anything, but a generation from before that rule, run again after a rollback, approves without keeping; a client with
+ * credentials stays registered whatever its expiry says.
+ */
+const referenced = (ctx: Context, ids: ReadonlyArray<string>) =>
+	ids.length === 0
+		? Effect.succeed(new Set<string>())
+		: ctx.db`SELECT DISTINCT client_id FROM example_mcp_oauth WHERE kind IN ('code','consent','access','refresh','used_refresh') AND client_id IN ${ctx.db.in(ids)}`.pipe(
+				Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ client_id: Schema.String })))),
+				Effect.map((rows) => new Set(rows.map((row) => row.client_id))),
+			);
+/** A registration past its expiry that nothing it was issued still names. */
+const lapsed = (ctx: Context, row: typeof Stored.Type) =>
+	Effect.gen(function* () {
+		if (row.expires_at === 0 || row.expires_at > (yield* Clock.currentTimeMillis)) return false;
+		return !(yield* referenced(ctx, [row.id])).has(row.id);
+	});
 const client = (ctx: Context, clientId: string) =>
 	Effect.gen(function* () {
 		const row = yield* lookup(ctx, clientId, "client");
-		if (!row || lapsed(row, yield* Clock.currentTimeMillis)) return undefined;
+		if (!row || (yield* lapsed(ctx, row))) return undefined;
 		return yield* Schema.decodeEffect(Schema.fromJsonString(Client))(row.payload);
 	});
 /**
  * Keeps a registered client a human just approved. Run inside the ctx.mutate that stores its code or consent; false
- * when it lapsed after consent checked it, so nothing is issued for a client that is gone.
+ * when it lapsed or was evicted after consent checked it, so nothing is issued for a client that is gone.
  */
 const keep = (ctx: Context, clientId: string) =>
 	Effect.gen(function* () {
 		const row = yield* lookup(ctx, clientId, "client");
-		if (!row || lapsed(row, yield* Clock.currentTimeMillis)) return false;
+		if (!row || (yield* lapsed(ctx, row))) return false;
 		if (row.expires_at !== 0)
 			yield* ctx.db`UPDATE example_mcp_oauth SET expires_at=0 WHERE id=${clientId} AND kind='client'`;
 		return true;
@@ -418,22 +443,22 @@ const longDate = (at: number) => DateTime.formatUtc(DateTime.makeUnsafe(at), { l
 /** What the human is told on the way back from boot's approval page. */
 const outcome = (editing: Editing, name: string, approve: string) => {
 	const client = escape(name);
-	const without = `so ${client} can read and post but not edit. It can ask again later.`;
+	const choice = `You can still connect ${client} to read this board and post to it, without editing, or not connect it.`;
 	if (editing.status === "active") {
 		const powers = [
 			...(editing.scopes.includes("write") ? ["edit and delete its own posts and manage topics"] : []),
 			...(editing.scopes.includes("fs") ? ["edit pages and the board's own code"] : []),
 		];
 		return powers.length === 0
-			? `<p>You allowed reading only, ${without}</p>`
+			? `<p>You allowed reading only, so ${client} can read and post but not edit. It can ask again later.</p>`
 			: `<p>Editing is approved. ${client} can ${powers.join(", and ")} as <strong>${escape(editing.agent ?? "")}</strong> until ${escape(longDate(editing.expires_at ?? 0))}. You can turn this off from your account.</p>`;
 	}
 	if (editing.status === "pending")
-		return `<p>Editing is still waiting for your approval. <a href="${escape(approve)}">Approve it with your passkey</a>, or connect without it: ${client} can still read and post, and can ask again later.</p>`;
-	if (editing.status === "expired") return `<p>The editing request expired before it was approved, ${without}</p>`;
-	if (editing.status === "revoked") return `<p>Editing was turned off, ${without}</p>`;
-	if (editing.status === "denied") return `<p>Editing wasn't approved, ${without}</p>`;
-	return `<p>Editing wasn't set up, ${without}</p>`;
+		return `<p>Editing is still waiting for your approval. <a href="${escape(approve)}">Approve it with your passkey</a>, or decide here. ${choice}</p>`;
+	if (editing.status === "expired") return `<p>The editing request expired before it was approved. ${choice}</p>`;
+	if (editing.status === "revoked") return `<p>Editing was turned off. ${choice}</p>`;
+	if (editing.status === "denied") return `<p>Editing wasn't approved. ${choice}</p>`;
+	return `<p>Editing wasn't set up. ${choice}</p>`;
 };
 
 export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) =>
@@ -676,19 +701,32 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 						client_name: input.client_name.trim(),
 						redirect_uris: input.redirect_uris,
 					});
-					// Lapsed registrations are purged here, and the count and insert share the mutation, so concurrent
-					// registrations cannot pass the cap. Returns when the oldest waiting registration lapses if full.
-					const full = yield* ctx.mutate(
+					// A plain read, outside the write lock, picks what to drop: every lapsed registration, and while the cap is
+					// full the oldest still waiting. Registering never fails, so a burst only pushes out other unapproved
+					// registrations. Registrations racing this read can overshoot the cap; the next one evicts back down.
+					const waiting =
+						yield* ctx.db`SELECT id,expires_at FROM example_mcp_oauth WHERE kind='client' AND expires_at>0 ORDER BY expires_at LIMIT ${pendingClients * 2}`.pipe(
+							Effect.flatMap(
+								Schema.decodeUnknownEffect(
+									Schema.Array(Schema.Struct({ id: Schema.String, expires_at: Schema.Finite })),
+								),
+							),
+						);
+					const live = waiting.filter((row) => row.expires_at > now);
+					const candidates = [
+						...waiting.filter((row) => row.expires_at <= now),
+						...live.slice(0, Math.max(0, live.length - pendingClients + 1)),
+					].map((row) => row.id);
+					// One that a code, consent or token names is kept instead.
+					const credited = yield* referenced(ctx, candidates);
+					const dropped = candidates.filter((id) => !credited.has(id));
+					yield* ctx.mutate(
 						Effect.gen(function* () {
-							yield* ctx.db`DELETE FROM example_mcp_oauth WHERE kind='client' AND expires_at>0 AND expires_at<=${now}`;
-							// LIMIT is a literal, pendingClients, since MySQL refuses a bound one in a prepared statement.
-							const waiting =
-								yield* ctx.db`SELECT expires_at FROM example_mcp_oauth WHERE kind='client' AND expires_at>0 ORDER BY expires_at LIMIT 500`.pipe(
-									Effect.flatMap(
-										Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ expires_at: Schema.Finite }))),
-									),
-								);
-							if (waiting.length >= pendingClients) return waiting[0]?.expires_at ?? now + pendingLifetime;
+							if (credited.size > 0)
+								yield* ctx.db`UPDATE example_mcp_oauth SET expires_at=0 WHERE kind='client' AND id IN ${ctx.db.in([...credited])}`;
+							// expires_at>0 spares a registration a human approved after the read: approval keeps it first.
+							if (dropped.length > 0)
+								yield* ctx.db`DELETE FROM example_mcp_oauth WHERE kind='client' AND expires_at>0 AND id IN ${ctx.db.in(dropped)}`;
 							yield* store(ctx, {
 								id: clientId,
 								kind: "client",
@@ -697,25 +735,8 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 								payload,
 								expires: now + pendingLifetime,
 							});
-							return undefined;
 						}),
 					);
-					// 429 with an OAuth error body: MCP SDKs surface too_many_requests and its description to the person, and
-					// Retry-After tells any client when a slot opens. invalid_client_metadata would blame the client's metadata.
-					if (full !== undefined)
-						return Response.json(
-							{
-								error: "too_many_requests",
-								error_description: `This board has ${pendingClients} registered clients waiting for a person to approve them. Try again later.`,
-							},
-							{
-								status: 429,
-								headers: {
-									"cache-control": "no-store",
-									"retry-after": String(Math.max(1, Math.ceil((full - now) / 1000))),
-								},
-							},
-						);
 					return Response.json(
 						{
 							...input,
@@ -776,9 +797,9 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 						: "";
 					return page({
 						title: `Connect ${name}`,
-						body: `<h1>Connect ${escape(name)} to chirp</h1><p>${escape(name)} will be able to read this board and post to it.${returns}${publisher}</p><form method="post" action="/mcp/oauth/authorize">${[...hidden].map(([field, value]) => `<input type="hidden" name="${escape(field)}" value="${escape(value)}">`).join("")}${posting}<div class="actions"><button name="decision" value="approve">Connect</button><button class="secondary" name="decision" value="deny" formnovalidate>Cancel</button></div></form>`,
+						body: `<h1>Connect ${escape(name)} to chirp</h1><p>${escape(name)} will be able to read this board and post to it.${returns}${publisher}</p><form id="consent" method="post" action="/mcp/oauth/authorize">${[...hidden].map(([field, value]) => `<input type="hidden" name="${escape(field)}" value="${escape(value)}">`).join("")}${posting}<div class="actions"><button name="decision" value="approve">Connect</button><button class="secondary" name="decision" value="deny" formnovalidate>Cancel</button></div></form>`,
 						formAction: `'self' ${callback.origin}`,
-						...(posting ? { script: "reveal" as const } : {}),
+						script: "consent",
 					});
 				}),
 		});
@@ -912,20 +933,25 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 					const editing = yield* editingState(ctx, holder, { readOnly: true }).pipe(
 						Effect.catchTag("KernelError", () => storedEditing(ctx, holder)),
 					);
-					// Boot returns here once the human decided, and the form then sends itself. Only a request still waiting,
-					// reached some other way, leaves the choice to the human.
-					const waiting = editing.status === "pending";
+					// Boot returns here once the human decided. Only an approval finishes by itself. After a denial, an expiry
+					// or a revocation, the human chooses between connecting without editing and not connecting at all, since
+					// denying at boot may have meant either; a request still waiting can also be approved from here.
+					const approved = editing.status === "active";
 					const callback = new URL(consent.redirect_uri);
+					const buttons = approved
+						? `<button id="finish-button" data-busy="Returning you to ${escape(callback.host)}…">Continue to ${escape(name)}</button>`
+						: `<div class="actions"><button name="decision" value="connect">Connect without editing</button><button class="secondary" name="decision" value="cancel">Don't connect</button></div>`;
 					return page({
 						title: `Finish connecting ${name}`,
-						body: `<h1>Finish connecting ${escape(name)}</h1>${outcome(editing, name, editing.approve_url ? approveLink(editing.approve_url, token) : "")}<form id="finish" method="post" action="/mcp/oauth/continue"><input type="hidden" name="consent" value="${escape(token)}"><button id="finish-button" data-busy="Returning you to ${escape(callback.host)}…">${waiting ? "Connect without editing" : `Continue to ${escape(name)}`}</button></form>`,
+						body: `<h1>Finish connecting ${escape(name)}</h1>${outcome(editing, name, editing.approve_url ? approveLink(editing.approve_url, token) : "")}<form id="finish" method="post" action="/mcp/oauth/continue"><input type="hidden" name="consent" value="${escape(token)}">${buttons}</form>`,
 						formAction: `'self' ${callback.origin}`,
-						...(waiting ? {} : { script: "finish" as const }),
+						...(approved ? { script: "finish" as const } : {}),
 					});
 				}),
 		});
 		api.route("POST", "/mcp/oauth/continue", {
-			description: "Finish connecting an MCP client after boot's editing approval, whatever the human decided there.",
+			description:
+				"Finish connecting an MCP client after boot's editing approval, with or without editing, or end it without connecting.",
 			access: "application-managed",
 			handler: (request, ctx) =>
 				Effect.gen(function* () {
@@ -934,8 +960,10 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 						return oauthError("invalid_request", "Content-Type must be application/x-www-form-urlencoded.", 415);
 					const text = yield* boundedText(request);
 					if (text === null) return oauthError("invalid_request", "Request body is too large or timed out.");
-					const token = new URLSearchParams(text).get("consent");
+					const form = new URLSearchParams(text);
+					const token = form.get("consent");
 					if (!token) return usedLink();
+					const connect = form.get("decision") !== "cancel";
 					const id = yield* digest(crypto, token);
 					const subject = ctx.identity.agent;
 					const now = yield* Clock.currentTimeMillis;
@@ -951,11 +979,17 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 								holder: { clientId: row.client_id, subject: consent.subject, agent: consent.agent },
 								redirectUri: grant.redirect_uri,
 								state,
-								code: yield* issue(ctx, row.client_id, grant),
+								code: connect ? yield* issue(ctx, row.client_id, grant) : undefined,
 							};
 						}),
 					);
 					if (!finished) return usedLink();
+					// Not connecting spends the token and answers the client as a denial at consent would.
+					if (finished.code === undefined)
+						return redirect(origin, finished.redirectUri, {
+							error: "access_denied",
+							...(finished.state === undefined ? {} : { state: finished.state }),
+						});
 					// Record the decision now, so the client's first tool call need not ask boot.
 					yield* editingState(ctx, {
 						...finished.holder,

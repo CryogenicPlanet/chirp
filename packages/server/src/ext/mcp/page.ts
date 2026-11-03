@@ -40,7 +40,7 @@ button{display:flex;align-items:center;justify-content:center;width:100%;min-hei
 .change{color:#5c6577;font-size:14.5px;text-decoration:underline;text-decoration-color:rgb(92 101 119/.35);text-underline-offset:3px}.name summary:hover .change{color:#202a3a}.name label{margin-top:12px}.hint{margin:6px 0 2px;color:#5c6577;font-size:14px}
 .check{display:flex;align-items:flex-start;gap:10px;margin:20px 0 0;font-size:15.5px;font-weight:400;text-wrap:pretty}.check input{flex:none;width:18px;height:18px;margin:3px 0 0;accent-color:#202a3a}
 .note{margin:6px 0 0 28px;color:#5c6577;font-size:14.5px}.muted{color:#5c6577;font-size:14.5px}
-.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px}.actions button{flex:1 1 180px;margin:0}
+.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px}.actions button{flex:1 1 180px;margin:0;white-space:nowrap}
 @media(max-width:600px){.sky{padding-top:16px;padding-bottom:104px}.auth-shell{margin-top:-72px;padding:24px 20px}h1{font-size:26px}}
 `;
 
@@ -54,15 +54,22 @@ const scripts = {
 	finish: pinned(
 		`const button=document.getElementById("finish-button");button.disabled=true;button.textContent=button.dataset.busy;document.getElementById("finish").submit();`,
 	),
-	/** Consent's posting name sits in a closed details, where Chrome blocks an invalid one without showing it. */
-	reveal: pinned(
-		`const agent=document.getElementById("agent");agent.addEventListener("invalid",()=>{agent.closest("details").open=true;});`,
+	/**
+	 * Consent's posting name sits in a closed details, where Chrome blocks an invalid one without showing it, so an
+	 * invalid name opens it. And a send is ignored until the page has been visible and focused for half a second, so a
+	 * page that opens consent in a popup under the cursor cannot turn a double click into Connect. The buttons render
+	 * enabled and look the same throughout; without scripts the form simply sends.
+	 */
+	consent: pinned(
+		`const agent=document.getElementById("agent");if(agent)agent.addEventListener("invalid",()=>{agent.closest("details").open=true;});const armed={at:Infinity};const arm=()=>{armed.at=document.visibilityState==="visible"&&document.hasFocus()?performance.now()+500:Infinity;};arm();addEventListener("focus",arm);addEventListener("blur",()=>{armed.at=Infinity;});document.addEventListener("visibilitychange",arm);document.getElementById("consent").addEventListener("submit",(event)=>{if(armed.at>performance.now())event.preventDefault();});`,
 	),
 } as const;
 
 /**
  * A page of the connect flow. `formAction` is where its form may lead: Chromium applies form-action to the redirect
- * after a submit, so it names the client's callback origin as well.
+ * after a submit, so it names the client's callback origin as well. A page whose form posts sends no referrer across
+ * origins but keeps it within the board: under no-referrer, browsers send `Origin: null` with a form post, which boot
+ * refuses.
  */
 export const page = (options: {
 	readonly title: string;
@@ -79,6 +86,8 @@ export const page = (options: {
 			headers: {
 				"content-type": "text/html; charset=utf-8",
 				"cache-control": "no-store",
+				"referrer-policy": options.formAction === "'none'" ? "no-referrer" : "same-origin",
+				"x-content-type-options": "nosniff",
 				"content-security-policy": [
 					"default-src 'none'",
 					"style-src 'unsafe-inline'",
