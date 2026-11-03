@@ -160,6 +160,8 @@ The replay delivers at most the 100 newest missed messages the subscription woul
 
 **Request log.** `GET /api/mcp/requests` (fs scope) lists the last 100 MCP requests, newest first: client, method, protocol version, outcome (answered, failed or cancelled), HTTP status and JSON-RPC error code. It is kept in memory only, never holds tokens or bodies, and shows which handshake a client really uses. A typed failure inside the handler is answered as a JSON-RPC error: 503 with `retriable` for a retryable store error, otherwise 500.
 
+**Anonymous request bodies.** Boot never queues anonymous requests, but an admitted one holds the board's admission until its response ends, and a reload or backup waits for it to drain. That is why `POST /mcp` stops reading a body after five seconds and 128 KiB, and the OAuth routes after five seconds and 16 KiB; keep those bounds if you change the handlers.
+
 **Changing the package.** ChatGPT keeps a frozen copy of the tool list and only finds events through a rescan over `2026-07-28`, so refresh or reconnect the connector after changing the package.
 
 **Local development.** `allowLocalMetadata` in `oauth.ts` and `allowLocalCallbacks` in `events.ts` accept HTTP and private addresses for metadata documents and callbacks. Use them only for local development and tests.
