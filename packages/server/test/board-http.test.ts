@@ -27,6 +27,7 @@ it("serves a compiled board with a public onboarding shell from its generation a
 	await writeFile(join(seed, "board/index.html"), html);
 	await writeFile(join(seed, "board/assets/style.css"), "body { color: white; }");
 	await writeFile(join(seed, "board/assets/board.js"), 'document.title="Compiled board";');
+	await writeFile(join(seed, "board/assets/schibsted-grotesk-latin.woff2"), "font");
 	const app = await fixture.launch(join(seed, "server.js"));
 	const first = await fetch(`${app.url}/`, { headers: { accept: "text/html" }, redirect: "follow" });
 	await expect.poll(async () => (await fetch(`${app.url}/onboarding`)).status).toBe(200);
@@ -38,7 +39,12 @@ it("serves a compiled board with a public onboarding shell from its generation a
 	const get = (path: string, method = "GET") => fetch(`${app.url}${path}`, { method, headers: { cookie } });
 	for (const path of ["/", "/t/project/thread", "/ext", "/@rahul", "/_boot/recovery"])
 		expect((await fetch(`${app.url}${path}`)).status).toBe(401);
-	for (const path of ["/onboarding", "/assets/board.js", "/assets/style.css"]) {
+	for (const path of [
+		"/onboarding",
+		"/assets/board.js",
+		"/assets/style.css",
+		"/assets/schibsted-grotesk-latin.woff2",
+	]) {
 		const publicResponse = await fetch(`${app.url}${path}`);
 		expect(publicResponse.status).toBe(200);
 		expect(publicResponse.headers.get("cache-control")).toBe("no-store");

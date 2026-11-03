@@ -10,6 +10,17 @@ const boardHeaders = Object.freeze({
 	"content-security-policy": `${htmlHeaders["content-security-policy"]}; manifest-src 'self'`,
 });
 
+const publicPaths: readonly string[] = [
+	"/onboarding",
+	"/assets/board.js",
+	"/assets/style.css",
+	"/assets/schibsted-grotesk-latin.woff2",
+	"/assets/schibsted-grotesk-latin-ext.woff2",
+	"/assets/schibsted-grotesk-italic-latin.woff2",
+	"/assets/pixelify-sans-latin.woff2",
+	"/assets/jetbrains-mono-latin.woff2",
+];
+
 /** Only built board files adjacent to this generation are served; never the editable tree. */
 const board = (directory: string) =>
 	Effect.gen(function* () {
@@ -17,8 +28,9 @@ const board = (directory: string) =>
 		const fs = yield* FileSystem.FileSystem;
 		const path = yield* Path.Path;
 		const pathname = new URL(request.url, "http://localhost").pathname;
-		// Public shell and its two fixed build assets contain no board data. Every other path stays private.
-		if (!["/onboarding", "/assets/board.js", "/assets/style.css"].includes(pathname)) yield* identity("read");
+		// The public shell, its two fixed build assets and the brand's font files contain no board data. Every other
+		// path stays private.
+		if (!publicPaths.includes(pathname)) yield* identity("read");
 		const asset = pathname.startsWith("/assets/");
 		const name = asset
 			? yield* Effect.try(() => decodeURIComponent(pathname.slice(1))).pipe(Effect.orElseSucceed(() => ""))
