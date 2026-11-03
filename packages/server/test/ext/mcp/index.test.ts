@@ -143,10 +143,9 @@ it("serves MCP at a separate origin while consent stays on the board origin", as
 	});
 	const mismatched = await fetch(`${app.url}/mcp/oauth/authorize?${query}`, { headers: { cookie } });
 	expect(mismatched.status).toBe(400);
-	expect(await mismatched.json()).toMatchObject({
-		error: "invalid_request",
-		error_description: "resource must be https://mcp.test/mcp; connect the client to exactly that URL.",
-	});
+	expect(await mismatched.text()).toContain(
+		'<p class="detail">resource must be https://mcp.test/mcp; connect the client to exactly that URL.</p>',
+	);
 	query.set("resource", "https://mcp.test/mcp");
 	expect((await fetch(`${app.url}/mcp/oauth/authorize?${query}`, { headers: { cookie } })).status).toBe(200);
 	const approval = await fetch(`${app.url}/mcp/oauth/authorize`, {
@@ -241,11 +240,12 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 		expect(consent.status).toBe(200);
 		expect(consent.headers.get("content-security-policy")).toContain("form-action 'self' https://client.test;");
 		const page = await consent.text();
-		expect(page).toContain(`Authorize ${clientName}`);
+		expect(page).toContain(`<h1>Connect ${clientName} to chirp</h1>`);
 		// A client asking for read alone is still granted write, so consent always asks who it posts as.
-		expect(page).toContain("This client is requesting: read, write.");
+		expect(page).toContain(`${clientName} will be able to read this board and post to it.`);
 		// A first connection is offered its registered name; a reconnect keeps the name it already posts under.
 		const offered = marker === "writer" ? agent : clientName.toLowerCase().replaceAll(" ", "-");
+		expect(page).toContain(`Posts as <strong>${offered}</strong>`);
 		expect(page).toContain(`name="agent" value="${offered}"`);
 		const approvalBody = { ...Object.fromEntries(query), decision: "approve", agent };
 		if (marker === "writer")
@@ -477,7 +477,7 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 		{ headers: { cookie } },
 	);
 	const ownerNamedPage = await ownerNamedConsent.text();
-	expect(ownerNamedPage).toContain("requesting: read, write.");
+	expect(ownerNamedPage).toContain("Rahul will be able to read this board and post to it.");
 	expect(ownerNamedPage).toContain('name="agent" value="mcp"');
 	const otherWriter = await grant("read write", "other-writer", otherClientId, "Other client", "other-bot");
 	const separate = await (await call(otherWriter.access, 8, "tools/call", post)).json();

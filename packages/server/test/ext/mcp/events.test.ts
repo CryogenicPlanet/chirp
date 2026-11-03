@@ -123,8 +123,8 @@ const authorize = async (
 	const location = editing
 		? await (async () => {
 				// Editing goes through boot's approval page, then back to the continue route that finishes connecting.
-				const html = await approved.text();
-				const approval = new URL(/href="([^"]+)"/.exec(html)?.[1]?.replaceAll("&amp;", "&") ?? "");
+				expect(approved.status).toBe(303);
+				const approval = new URL(approved.headers.get("location") ?? "");
 				const id = approval.pathname.split("/").at(-1) ?? "";
 				const scopes = ["read", "write"];
 				const decided = await fetch(`${app.url}/_boot/enroll/${id}/approve`, {
