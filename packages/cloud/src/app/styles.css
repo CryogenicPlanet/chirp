@@ -1,77 +1,76 @@
 @import "tailwindcss";
 
-@font-face {
-	font-family: "ABC Diatype";
-	src: url("/fonts/ABCDiatype-Regular.woff2") format("woff2");
-	font-weight: 400;
-	font-style: normal;
-	font-display: swap;
-}
-
-@font-face {
-	font-family: "ABC Diatype";
-	src: url("/fonts/ABCDiatype-Medium.woff2") format("woff2");
-	font-weight: 500;
-	font-style: normal;
-	font-display: swap;
-}
-
-@font-face {
-	font-family: "JetBrains Mono";
-	src: url("/fonts/JetBrainsMono-Variable.woff2") format("woff2");
-	font-weight: 100 800;
-	font-style: normal;
-	font-display: swap;
-}
-
+/* The chirp brand, as on chirp.wiki (packages/landing/src/tailwind.css). Cloud is light only. */
 @theme {
-	--font-sans: "ABC Diatype", ui-sans-serif, system-ui, sans-serif;
-	--font-mono: "JetBrains Mono", ui-monospace, monospace;
-	--color-background: #161b1d;
-	--color-foreground: #ece9e1;
-	--color-card: #1c2224;
-	--color-muted: #252d30;
-	--color-muted-foreground: #a6b2b0;
-	--color-subtle: #95a3a0;
-	--color-primary: #b8d7c3;
-	--color-primary-hover: #d0e9da;
-	--color-primary-foreground: #172520;
-	--color-accent-surface: #302e3c;
-	--color-accent-foreground: #d1cbea;
-	--color-border: #343c3e;
-	--color-input: #53615e;
-	--color-ring: #b8d7c3;
-	--color-placeholder: #8e9b98;
-	--color-warning: #e6c082;
-	--color-warning-surface: #342e24;
-	--color-warning-border: #67583e;
-	--color-destructive: #f1a28f;
-	--color-destructive-surface: #382825;
-	--color-destructive-border: #6f443b;
-	--color-tag: #b8d7c3;
-	--color-tag-surface: #26352e;
-	--color-tag-border: #455e4e;
-	--shadow-card: 0 0 0 1px rgb(15 15 15 / 7%), 0 1px 2px rgb(15 15 15 / 4%);
-	--shadow-elevated: 0 24px 60px -22px rgb(0 0 0 / 12%), 0 6px 18px -10px rgb(0 0 0 / 6%);
+	--color-paper: #f7f5f0;
+	--color-card: #ffffff;
+	--color-sky: #c2dff9;
+	--color-ink: #202a3a;
+	--color-ink-soft: #3a4558;
+	--color-slate: #5c6577;
+	--color-rule: #e6e2da;
+	/* Input and checkbox borders: 3:1 against card and paper. */
+	--color-edge: #8f8a80;
+	--color-wash: #f1eee7;
+	--color-marker: #ffe37a;
+	--color-leaf: #237a4c;
+	--color-danger: #b4412f;
+
+	--shadow-raised: 0 0 0 1px rgb(32 42 58 / 0.07), 0 1px 3px rgb(32 42 58 / 0.06), 0 6px 16px -6px rgb(32 42 58 / 0.08);
+	--shadow-float:
+		0 0 0 1px rgb(32 42 58 / 0.08), 0 2px 4px rgb(32 42 58 / 0.05), 0 30px 70px -24px rgb(32 42 58 / 0.35);
+
+	--animate-hop: hop 620ms cubic-bezier(0.3, 0.7, 0.4, 1);
 }
 
-@theme {
-	--color-popover: #22292b;
-	--color-popover-foreground: #ece9e1;
-	--color-accent: #2c3638;
-	--color-accent-foreground: #ece9e1;
-	--color-secondary: #293335;
-	--color-secondary-foreground: #ece9e1;
+/* The faces come from next/font in layout.tsx; latin-ext is listed first because it covers only its own range. */
+@theme inline {
+	--font-sans: var(--font-schibsted-ext), var(--font-schibsted), ui-sans-serif, system-ui, sans-serif;
+	--font-pixel: var(--font-pixelify), ui-monospace, monospace;
+	--font-mono: var(--font-jetbrains), ui-monospace, monospace;
 }
 
 @layer base {
 	* {
-		border-color: var(--color-border);
+		border-color: var(--color-rule);
+	}
+	:focus-visible {
+		outline: 2px solid var(--color-ink);
+		outline-offset: 3px;
 	}
 	button,
 	a,
-	input {
+	input,
+	summary {
 		-webkit-tap-highlight-color: transparent;
+	}
+	h1,
+	h2,
+	h3 {
+		text-wrap: balance;
+	}
+	p,
+	li {
+		text-wrap: pretty;
+	}
+	::selection {
+		background: rgb(255 227 122 / 0.6);
+	}
+}
+
+@keyframes hop {
+	0%,
+	100% {
+		transform: translateY(0);
+	}
+	35% {
+		transform: translateY(-14px) rotate(-6deg);
+	}
+	60% {
+		transform: translateY(0) rotate(0);
+	}
+	75% {
+		transform: translateY(-4px);
 	}
 }
 

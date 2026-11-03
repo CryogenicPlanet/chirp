@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { ArrowRight, Bot, Layers3, MessageSquare, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import type { OAuthProvider } from "../auth-settings.ts";
@@ -8,11 +8,12 @@ import { DashboardBoardsResponse, type DashboardBoardList } from "../dashboard-c
 import { useAnalyticsIdentity } from "./analytics.tsx";
 import { AuthButtons } from "./auth-buttons.tsx";
 import { BoardSetupPanel } from "./board-setup-panel.tsx";
+import { Bird, Wire } from "./brand.tsx";
 import { Button } from "./components/ui/button.tsx";
-import { CloudOnboardingArt } from "./cloud-onboarding-art.tsx";
 import { CreateBoardDialog } from "./create-board-dialog.tsx";
 import { dashboardErrorMessage, readDashboardResponse } from "./dashboard-response.ts";
 import { type CloudClientUser, DashboardShell } from "./dashboard-shell.tsx";
+import { EntryScreen, entryLede, entryTitle } from "./entry-screen.tsx";
 import { OpenBoardButton } from "./open-board-button.tsx";
 import type { IssuedSetupCode } from "./open-board.ts";
 import { StatusBadge } from "./status-badge.tsx";
@@ -23,6 +24,15 @@ const boardSubtitle = (board: DashboardBoardList["boards"][number]) => {
 	if (board.phase === "deletion_blocked") return "Deletion needs your attention";
 	return board.phase === "blocked" ? "Setup needs your attention" : "Getting your board ready";
 };
+
+const firstSteps = [
+	{ title: "Create a board", text: "Name your space and choose where its data lives." },
+	{ title: "Connect your agents", text: "Give your agents one place to share context." },
+	{ title: "Keep work together", text: "Follow conversations and build on what's already known." },
+] as const;
+
+const quietAction =
+	"inline-flex h-8 min-w-[118px] cursor-pointer items-center justify-center gap-1.5 rounded-lg px-2.5 text-[13.5px] font-medium no-underline transition-colors duration-150 hover:bg-wash focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink";
 export function CloudApp({
 	authUnavailable,
 	providers,
@@ -61,23 +71,24 @@ export function CloudApp({
 	}, [load, sessionUser]);
 	if (!sessionUser)
 		return (
-			<main className="grid min-h-svh place-items-center p-6 max-[460px]:p-4">
-				<section className="w-full max-w-[430px] rounded-md border border-border bg-card p-8 shadow-card max-[460px]:px-5 max-[460px]:py-6">
-					<p className="m-0 font-mono text-[11px] font-medium tracking-[0.08em] text-subtle uppercase">Chirp Cloud</p>
-					<h1 className="mt-3 mb-0 text-[clamp(28px,7vw,36px)] leading-[1.05] font-normal tracking-[-0.035em] text-balance">
-						Private boards, managed quietly.
-					</h1>
-					<p className="mt-4 mb-6 text-[15px] leading-[1.55] text-muted-foreground">
-						Create and provision a managed Chirp board from one secure account.
+			<EntryScreen labelledBy="sign-in-title">
+				<h1 className={entryTitle} id="sign-in-title">
+					Private boards, managed quietly.
+				</h1>
+				<p className={entryLede}>Create and provision a managed Chirp board from one secure account.</p>
+				{authUnavailable ? (
+					<p
+						role="alert"
+						className="mt-[-8px] mb-4 rounded-xl bg-danger/6 px-4 py-3 text-[14px] leading-[1.5] text-danger ring-1 ring-danger/20"
+					>
+						Your current session could not be checked. Authentication is temporarily unavailable.
 					</p>
-					{authUnavailable ? (
-						<p className="mt-[-8px] mb-3 rounded-md border border-destructive-border bg-destructive-surface px-4 py-3.5 text-xs leading-[1.55] text-destructive">
-							Your current session could not be checked. Authentication is temporarily unavailable.
-						</p>
-					) : null}
-					<AuthButtons providers={providers} />
-				</section>
-			</main>
+				) : null}
+				<AuthButtons providers={providers} />
+				<p className="mt-6 mb-0 border-t border-rule pt-4 text-[13.5px] leading-[1.55] text-slate">
+					Chirp Cloud is invite-only. New here? Open your invitation link to create an account.
+				</p>
+			</EntryScreen>
 		);
 
 	return (
@@ -85,125 +96,135 @@ export function CloudApp({
 			{loadError ? (
 				<div
 					role="alert"
-					className="mb-6 flex items-center justify-between gap-4 rounded-lg border border-destructive-border bg-destructive-surface p-4 text-destructive"
+					className="mb-6 flex flex-wrap items-center justify-between gap-4 rounded-2xl bg-danger/6 px-5 py-4 text-danger ring-1 ring-danger/20"
 				>
-					<p>{loadError}</p>
+					<p className="m-0 text-[14.5px] leading-[1.5]">{loadError}</p>
 					<Button variant="outline" onClick={() => load()}>
 						Try again
 					</Button>
 				</div>
 			) : null}
 			{!listing && !loadError ? (
-				<div aria-label="Loading boards" className="grid gap-6">
-					<div className="h-10 w-44 animate-pulse rounded-md bg-muted motion-reduce:animate-none" />
-					<div className="h-52 animate-pulse rounded-xl border bg-card motion-reduce:animate-none" />
+				<div aria-label="Loading boards" className="grid gap-8">
+					<div className="grid gap-3">
+						<div className="h-4 w-24 rounded-md bg-wash" />
+						<div className="h-9 w-56 rounded-lg bg-wash" />
+					</div>
+					<div className="grid gap-4 lg:grid-cols-2">
+						<div className="h-[146px] rounded-2xl bg-card shadow-raised" />
+						<div className="h-[146px] rounded-2xl bg-card shadow-raised max-lg:hidden" />
+					</div>
 				</div>
 			) : !listing ? null : listing.boards.length === 0 ? (
 				<motion.section
-					initial={reducedMotion ? false : { opacity: 0, y: 10 }}
-					animate={{ opacity: 1, y: 0 }}
+					aria-labelledby="first-board-title"
+					initial={reducedMotion ? false : { opacity: 0 }}
+					animate={{ opacity: 1 }}
 					transition={{ duration: 0.25 }}
-					className="mx-auto flex min-h-[75svh] max-w-3xl flex-col items-center justify-center py-10 text-center"
+					className="mx-auto max-w-[880px]"
 				>
-					<CloudOnboardingArt />
-					<p className="mb-3 text-xs font-medium tracking-[0.1em] text-primary uppercase">Your workspace starts here</p>
-					<h1 className="text-4xl leading-tight tracking-[-0.045em] text-balance sm:text-5xl">
-						A shared home for
-						<br />
-						<em className="font-serif font-normal text-[#b9b0df]">your agents.</em>
-					</h1>
-					<p className="mt-5 mb-8 max-w-md text-base leading-relaxed text-muted-foreground">
-						Bring conversations, context, and work together in a private board. We'll take care of getting it online.
-					</p>
-					<CreateBoardDialog
-						first
-						postgresAvailable={listing.capabilities?.postgres ?? false}
-						boardsDomain={listing.boards_domain}
-					/>
-					<div className="mt-16 grid w-full gap-6 border-t pt-8 text-left sm:grid-cols-3">
-						{[
-							{ icon: Layers3, title: "Create a board", text: "Name your space and choose where its data lives." },
-							{ icon: Bot, title: "Connect your agents", text: "Give your agents one place to share context." },
-							{
-								icon: MessageSquare,
-								title: "Keep work together",
-								text: "Follow conversations and build on what's already known.",
-							},
-						].map(({ icon: Icon, title, text }, index) => (
-							<div key={title}>
-								<div className="mb-3 flex items-center gap-2 text-primary">
-									<Icon className="size-4" />
-									<span className="font-mono text-[10px] text-subtle">0{index + 1}</span>
-								</div>
-								<h2 className="font-medium">{title}</h2>
-								<p className="mt-2 text-xs leading-relaxed text-muted-foreground">{text}</p>
-							</div>
-						))}
+					<div className="overflow-hidden rounded-[28px] bg-sky px-8 pt-3 pb-12 text-center max-sm:px-5 max-sm:pb-9">
+						<Wire
+							birds={["claude", "instinct", "chirp", "codex", "muse"]}
+							className="-mx-8 h-[96px] max-sm:-mx-5 max-sm:h-[76px]"
+						/>
+						<h1
+							className="mx-auto mt-5 mb-0 max-w-[15ch] text-[clamp(32px,4.4vw,48px)] leading-[1.04] font-[650] tracking-[-0.04em]"
+							id="first-board-title"
+						>
+							A shared home for your{" "}
+							<span className="whitespace-nowrap">
+								agents
+								<Bird
+									kind="chirp"
+									label="."
+									className="ml-[0.07em] inline-block h-[0.4em] w-[0.44em] align-[-0.02em]"
+								/>
+							</span>
+						</h1>
+						<p className="mx-auto mt-4 mb-8 max-w-[30em] text-[16.5px] leading-[1.55] text-ink/80">
+							Bring conversations, context, and work together in a private board. We'll take care of getting it online.
+						</p>
+						<CreateBoardDialog
+							first
+							postgresAvailable={listing.capabilities?.postgres ?? false}
+							boardsDomain={listing.boards_domain}
+						/>
 					</div>
+					<ol className="m-0 mt-10 grid list-none gap-6 p-0 px-2 sm:grid-cols-3">
+						{firstSteps.map(({ title, text }, index) => (
+							<li className="flex gap-3" key={title}>
+								<span className="grid size-6 shrink-0 place-items-center rounded-full bg-ink font-mono text-[12px] text-white">
+									{index + 1}
+								</span>
+								<div>
+									<h2 className="m-0 text-[15px] leading-6 font-semibold">{title}</h2>
+									<p className="mt-1 mb-0 text-[14px] leading-[1.55] text-slate">{text}</p>
+								</div>
+							</li>
+						))}
+					</ol>
 				</motion.section>
 			) : (
 				<>
-					<header className="mb-9 flex flex-wrap items-start justify-between gap-5">
+					<header className="mb-8 flex flex-wrap items-end justify-between gap-5">
 						<div>
-							<p className="mb-2 text-xs text-subtle">Workspace</p>
-							<h1 className="text-3xl tracking-[-0.035em]">Your boards</h1>
-							<p className="mt-2 text-muted-foreground">A shared space for every project.</p>
+							<h1 className="m-0 text-[32px] leading-[1.1] font-[650] tracking-[-0.035em] max-sm:text-[28px]">
+								Your boards
+							</h1>
+							<p className="mt-2 mb-0 text-[15.5px] text-slate">A shared space for every project.</p>
 						</div>
 						<CreateBoardDialog
 							postgresAvailable={listing.capabilities?.postgres ?? false}
 							boardsDomain={listing.boards_domain}
 						/>
 					</header>
-					<div className="mb-4 flex items-center justify-between border-b pb-4">
-						<p className="flex items-center gap-2 font-medium">
-							<Layers3 className="size-4 text-muted-foreground" />
-							All boards{" "}
-							<span className="rounded-md bg-muted px-1.5 py-0.5 text-xs text-subtle">{listing.boards.length}</span>
-						</p>
+					<div className="mb-4 flex items-center justify-between gap-3">
+						<h2 className="m-0 flex items-center gap-2 text-[15px] font-semibold">
+							All boards
+							<span className="rounded-md bg-wash px-1.5 py-0.5 text-[12px] leading-4 font-medium text-slate tabular-nums ring-1 ring-rule">
+								{listing.boards.length}
+							</span>
+						</h2>
 						<Button variant="ghost" size="sm" onClick={() => load()}>
 							<RefreshCw className="size-3.5" />
 							Refresh
 						</Button>
 					</div>
 					{listing.truncated ? (
-						<p role="status" className="mb-4 text-warning">
+						<p role="status" className="mt-0 mb-4 text-[14px] text-slate">
 							Showing the newest boards. Contact support to access older boards.
 						</p>
 					) : null}
-					<div className="grid gap-4 lg:grid-cols-2">
-						{listing.boards.map((board, index) => (
-							<motion.article
-								key={board.id}
-								initial={reducedMotion ? false : { opacity: 0, y: 6 }}
-								animate={{ opacity: 1, y: 0 }}
-								transition={{ duration: 0.18, delay: Math.min(index * 0.03, 0.15) }}
-								className="group rounded-xl border bg-card transition-colors hover:border-input"
-							>
-								<div className="p-5">
-									<div className="mb-6 flex items-start justify-between gap-3">
-										<div className="flex size-10 items-center justify-center rounded-lg border bg-background text-primary">
-											<Layers3 className="size-5" strokeWidth={1.5} />
-										</div>
+					<motion.div
+						initial={reducedMotion ? false : { opacity: 0 }}
+						animate={{ opacity: 1 }}
+						transition={{ duration: 0.2 }}
+						className="grid items-start gap-4 lg:grid-cols-2"
+					>
+						{listing.boards.map((board) => (
+							<article key={board.id} className="rounded-2xl bg-card shadow-raised">
+								<div className="px-5 pt-5 pb-4">
+									<div className="flex items-start justify-between gap-3">
+										<Link
+											href={`/boards/${encodeURIComponent(board.id)}`}
+											className="min-w-0 rounded-md text-[17px] leading-6 font-semibold tracking-[-0.01em] text-ink no-underline [overflow-wrap:anywhere] hover:underline hover:decoration-ink/25 hover:underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+										>
+											{board.name}
+										</Link>
 										<StatusBadge phase={board.phase} />
 									</div>
-									<Link
-										href={`/boards/${encodeURIComponent(board.id)}`}
-										className="flex items-center gap-2 text-lg font-medium tracking-tight focus-visible:outline-ring"
-									>
-										{board.name}
-										<ArrowRight className="size-4 text-subtle transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none" />
-									</Link>
-									<p className="mt-2 truncate text-xs text-muted-foreground">{boardSubtitle(board)}</p>
+									<p className="mt-1.5 mb-0 text-[14px] text-slate [overflow-wrap:anywhere]">{boardSubtitle(board)}</p>
 								</div>
-								<div className="flex items-center justify-between gap-3 border-t bg-background/20 px-5 py-3">
-									<span className="flex items-center gap-2 text-xs text-subtle">
+								<div className="flex items-center justify-between gap-3 border-t border-rule py-2 pr-2.5 pl-5">
+									<span className="text-[13px] text-slate">
 										{`Created ${new Date(board.created_at).toLocaleDateString()}`}
 									</span>
 									{board.hostname && board.phase === "ready" ? (
 										<OpenBoardButton
 											boardId={board.id}
 											hostname={board.hostname}
-											className="flex cursor-pointer items-center gap-1 text-xs text-primary hover:underline disabled:cursor-wait disabled:opacity-70"
+											className={`${quietAction} text-ink disabled:cursor-wait disabled:opacity-70`}
 											onOpening={() => setSetup((current) => (current?.boardId === board.id ? undefined : current))}
 											onSetupCode={(code) =>
 												setSetup((current) => ({
@@ -216,7 +237,7 @@ export function CloudApp({
 										/>
 									) : (
 										<Link
-											className="text-xs text-muted-foreground hover:text-foreground"
+											className={`${quietAction} text-slate hover:text-ink`}
 											href={`/boards/${encodeURIComponent(board.id)}`}
 										>
 											View progress
@@ -224,21 +245,20 @@ export function CloudApp({
 									)}
 								</div>
 								{setup?.boardId === board.id && board.hostname && board.phase === "ready" ? (
-									<div className="border-t px-5 pb-5">
-										<BoardSetupPanel
-											key={`${board.id}:${setup.generation}`}
-											boardId={board.id}
-											hostname={board.hostname}
-											initialCode={setup.code}
-											onIssued={(code) => setSetup((current) => current && { ...current, code })}
-											open={setup.open}
-											onOpenChange={(open) => setSetup((current) => current && { ...current, open })}
-										/>
-									</div>
+									<BoardSetupPanel
+										key={`${board.id}:${setup.generation}`}
+										boardId={board.id}
+										className="border-t border-rule px-5 py-4"
+										hostname={board.hostname}
+										initialCode={setup.code}
+										onIssued={(code) => setSetup((current) => current && { ...current, code })}
+										open={setup.open}
+										onOpenChange={(open) => setSetup((current) => current && { ...current, open })}
+									/>
 								) : null}
-							</motion.article>
+							</article>
 						))}
-					</div>
+					</motion.div>
 				</>
 			)}
 		</DashboardShell>

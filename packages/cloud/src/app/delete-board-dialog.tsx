@@ -92,11 +92,7 @@ export function DeleteBoardDialog({
 			}}
 		>
 			<AlertDialogTrigger asChild>
-				<Button
-					variant="outline"
-					disabled={board.phase === "deleting"}
-					className="text-destructive hover:bg-destructive/10"
-				>
+				<Button variant="outline" disabled={board.phase === "deleting"} className="text-danger hover:bg-danger/6">
 					<Trash2 />
 					{board.phase === "deletion_blocked"
 						? "Retry deletion"
@@ -105,12 +101,9 @@ export function DeleteBoardDialog({
 							: "Delete board"}
 				</Button>
 			</AlertDialogTrigger>
-			<AlertDialogContent className="max-h-[90svh] overflow-y-auto bg-card">
+			<AlertDialogContent className="max-h-[90svh] overflow-y-auto">
 				<AlertDialogHeader>
-					<div className="mb-2 flex size-10 items-center justify-center rounded-xl bg-destructive/10 text-destructive">
-						<Trash2 className="size-5" />
-					</div>
-					<AlertDialogTitle>Delete {board.name}?</AlertDialogTitle>
+					<AlertDialogTitle className="[overflow-wrap:anywhere]">Delete {board.name}?</AlertDialogTitle>
 					<AlertDialogDescription>
 						This permanently removes the board and its managed storage.{" "}
 						{board.storage_engine === "sqlite"
@@ -120,8 +113,8 @@ export function DeleteBoardDialog({
 					</AlertDialogDescription>
 				</AlertDialogHeader>
 				<div className="grid gap-2">
-					<label htmlFor="delete-board-name" className="text-xs text-muted-foreground">
-						Type <strong className="font-medium text-foreground">{board.name}</strong> to confirm.
+					<label htmlFor="delete-board-name" className="text-[13.5px] text-slate [overflow-wrap:anywhere]">
+						Type <strong className="font-semibold text-ink">{board.name}</strong> to confirm.
 					</label>
 					<Input
 						id="delete-board-name"
@@ -132,7 +125,7 @@ export function DeleteBoardDialog({
 					/>
 				</div>
 				{error ? (
-					<p role="alert" className="text-xs leading-relaxed text-destructive">
+					<p role="alert" className="m-0 text-[13.5px] leading-[1.5] text-danger">
 						{error}
 					</p>
 				) : null}
