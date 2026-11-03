@@ -1,7 +1,7 @@
 "use client";
 
 import { Schema } from "effect";
-import { ArrowUpRight, Check, Copy, Loader2 } from "lucide-react";
+import { ArrowUpRight, Check, ChevronDown, Copy, Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "./components/ui/button.tsx";
 import { Input } from "./components/ui/input.tsx";
@@ -13,6 +13,7 @@ const setupError = Schema.Struct({ error: Schema.Struct({ code: Schema.String })
 
 export function BoardSetupPanel({
 	boardId,
+	className,
 	hostname,
 	initialCode,
 	onIssued,
@@ -20,6 +21,8 @@ export function BoardSetupPanel({
 	onOpenChange,
 }: {
 	readonly boardId: string;
+	/** The container comes from the parent: a card of its own, or a section of a board's card. */
+	readonly className: string;
 	readonly hostname: string;
 	/** A code Open board already issued; showing it avoids an exec that would replace it. */
 	readonly initialCode?: IssuedSetupCode | undefined;
@@ -141,24 +144,24 @@ export function BoardSetupPanel({
 	};
 
 	return (
-		<details
-			className="mt-4 rounded-md border border-border bg-card p-5"
-			open={open}
-			onToggle={(event) => onOpenChange(event.currentTarget.open)}
-		>
-			<summary className="cursor-pointer text-sm font-medium focus-visible:outline-ring">
+		<details className={`group ${className}`} open={open} onToggle={(event) => onOpenChange(event.currentTarget.open)}>
+			<summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-md text-[15px] font-semibold focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ink [&::-webkit-details-marker]:hidden">
 				{closed ? "Board passkey is set up" : "First-time board setup"}
+				<ChevronDown
+					aria-hidden="true"
+					className="size-4 shrink-0 text-slate transition-transform group-open:rotate-180 motion-reduce:transition-none"
+				/>
 			</summary>
-			<div className="pt-3">
+			<div className="pt-4">
 				<h2
 					id="board-setup"
 					ref={closedHeading}
 					tabIndex={-1}
-					className="mt-2 mb-0 text-xl font-normal tracking-tight focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+					className="m-0 text-[19px] leading-tight font-[650] tracking-[-0.02em] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
 				>
 					{closed ? "Your board is already set up" : "Add your first passkey"}
 				</h2>
-				<p className="mt-2 mb-4 max-w-xl text-sm leading-relaxed text-muted-foreground">
+				<p className="mt-2 mb-4 max-w-xl text-[14.5px] leading-[1.55] text-slate">
 					{closed
 						? "Sign in to your board with its passkey to continue."
 						: "Already have a board passkey? Use Open board to sign in. Otherwise, copy a private setup code to add your first passkey. The code is valid for 15 minutes."}
@@ -178,7 +181,7 @@ export function BoardSetupPanel({
 					<div className="grid gap-3">
 						{issued ? (
 							<div className="max-w-lg">
-								<label htmlFor="board-setup-code" className="mb-2 block text-xs font-medium">
+								<label htmlFor="board-setup-code" className="mb-2 block text-[13.5px] font-medium">
 									Your private setup code
 								</label>
 								<div className="flex gap-2">
@@ -203,7 +206,7 @@ export function BoardSetupPanel({
 										Copy
 									</Button>
 								</div>
-								<p className="mt-2 mb-0 text-xs text-muted-foreground">
+								<p className="mt-2 mb-0 text-[13.5px] text-slate">
 									Expires at{" "}
 									{new Date(issued.expires_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}. Keep it
 									private.
@@ -211,7 +214,7 @@ export function BoardSetupPanel({
 							</div>
 						) : null}
 						{expired && !issued ? (
-							<p role="status" className="m-0 text-sm text-muted-foreground">
+							<p role="status" className="m-0 text-[14px] text-slate">
 								Your setup code expired. Generate a new one to continue.
 							</p>
 						) : null}
@@ -240,13 +243,13 @@ export function BoardSetupPanel({
 							) : null}
 						</div>
 						{copied ? (
-							<p role="status" className="m-0 flex items-center gap-1.5 text-xs text-primary">
-								<Check className="size-3.5" />
+							<p role="status" className="m-0 flex items-center gap-1.5 text-[13.5px] text-leaf">
+								<Check aria-hidden="true" className="size-3.5" />
 								Code copied. Paste it on the onboarding page.
 							</p>
 						) : null}
 						{error ? (
-							<p role="alert" className="m-0 text-sm text-destructive">
+							<p role="alert" className="m-0 text-[14px] text-danger">
 								{error}
 							</p>
 						) : null}

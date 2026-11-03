@@ -10,22 +10,25 @@ const formatDate = (value: string) =>
 	new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 
 const issueMarks = {
-	progress: "border-[#554f70] bg-accent-surface text-accent-foreground",
-	warning: "border-warning-border bg-warning-surface text-warning",
-	error: "border-destructive-border bg-destructive-surface text-destructive",
+	progress: "bg-card text-ink ring-1 ring-ink",
+	warning: "bg-danger/6 text-danger ring-1 ring-danger/40",
+	error: "bg-danger text-white",
 } as const;
 
 const issueText = {
-	progress: "text-muted-foreground",
-	warning: "text-warning",
-	error: "text-destructive",
+	progress: "text-slate",
+	warning: "text-danger",
+	error: "text-danger",
 } as const;
 
 export function BoardProgressPanel({
 	board,
+	className,
 	onRefresh,
 }: {
 	readonly board: DashboardBoard;
+	/** The container comes from the parent: a card of its own, or a section inside the technical details. */
+	readonly className: string;
 	readonly onRefresh: () => void;
 }) {
 	const [copyStatus, setCopyStatus] = useState("");
@@ -67,13 +70,11 @@ export function BoardProgressPanel({
 		}
 	};
 	return (
-		<section aria-labelledby="provisioning" className="rounded-md border border-border bg-card p-5 shadow-card">
+		<section aria-labelledby="provisioning" className={className}>
 			<div className="flex items-start justify-between gap-3">
 				<div>
-					<p className="m-0 font-mono text-[11px] font-medium tracking-[0.08em] text-subtle uppercase">
-						{deleting ? "Deletion" : "Setup progress"}
-					</p>
-					<h2 className="mt-2 mb-0 text-lg leading-tight font-normal" id="provisioning">
+					<p className="m-0 text-[13.5px] font-medium text-slate">{deleting ? "Deletion" : "Setup progress"}</p>
+					<h2 className="mt-1 mb-0 text-[19px] leading-tight font-[650] tracking-[-0.02em]" id="provisioning">
 						{title}
 					</h2>
 				</div>
@@ -82,7 +83,7 @@ export function BoardProgressPanel({
 				</Button>
 			</div>
 			{deleting ? (
-				<p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+				<p className="mt-3 mb-0 text-[14.5px] leading-[1.55] text-slate">
 					{stopped
 						? "After your administrator resolves the issue, choose Retry deletion."
 						: "Cloud is checking and removing your board’s hosting resources. This page will close when deletion is confirmed."}{" "}
@@ -90,10 +91,10 @@ export function BoardProgressPanel({
 				</p>
 			) : (
 				<>
-					<p className="mt-3 mb-5 text-sm leading-relaxed text-muted-foreground">
+					<p className="mt-3 mb-5 text-[14.5px] leading-[1.55] text-slate">
 						{progress.lastConfirmed ? (
 							<>
-								Last confirmed: <span className="text-foreground">{progress.lastConfirmed}.</span>
+								Last confirmed: <span className="text-ink">{progress.lastConfirmed}.</span>
 							</>
 						) : (
 							"No setup checkpoint is available yet."
@@ -107,9 +108,9 @@ export function BoardProgressPanel({
 					<ol className="m-0 list-none p-0">
 						{progress.steps.map((step) => (
 							<li key={step.checkpoint} className="relative flex gap-3 pb-5 last:pb-0">
-								<div className="absolute top-6 bottom-0 left-[11px] w-px bg-border" />
+								<div className="absolute top-6 bottom-0 left-[11px] w-px bg-rule" />
 								<span
-									className={`relative grid size-6 shrink-0 place-items-center rounded-full border ${step.status === "confirmed" ? "border-primary/25 bg-primary/10 text-primary" : step.issue ? issueMarks[step.issue.severity] : step.status === "next" ? "border-[#554f70] bg-accent-surface text-accent-foreground" : "border-border text-subtle"}`}
+									className={`relative grid size-6 shrink-0 place-items-center rounded-full ${step.status === "confirmed" ? "bg-leaf text-white" : step.issue ? issueMarks[step.issue.severity] : step.status === "next" ? "bg-card text-ink ring-1 ring-ink" : "bg-card text-slate ring-1 ring-edge"}`}
 								>
 									{step.status === "confirmed" ? (
 										<Check className="size-3.5" aria-hidden="true" />
@@ -121,11 +122,11 @@ export function BoardProgressPanel({
 								</span>
 								<div className="min-w-0 pt-0.5">
 									<p
-										className={`m-0 text-sm ${step.status === "pending" || step.status === "unknown" ? "text-subtle" : "text-foreground"}`}
+										className={`m-0 text-[14.5px] ${step.status === "pending" || step.status === "unknown" ? "text-slate" : "font-medium text-ink"}`}
 									>
 										{step.title}
 									</p>
-									<p className="mt-0.5 mb-0 text-xs text-muted-foreground">
+									<p className="mt-0.5 mb-0 text-[13px] text-slate">
 										{step.status === "confirmed"
 											? "Confirmed"
 											: step.status === "next"
@@ -136,11 +137,11 @@ export function BoardProgressPanel({
 									</p>
 									{step.issue ? (
 										<>
-											<p className={`mt-1 mb-0 text-xs leading-relaxed ${issueText[step.issue.severity]}`}>
+											<p className={`mt-1 mb-0 text-[13.5px] leading-[1.5] ${issueText[step.issue.severity]}`}>
 												{step.issue.message}
 											</p>
 											{step.issue.anchored ? null : (
-												<p className="mt-1 mb-0 text-xs leading-relaxed text-subtle">
+												<p className="mt-1 mb-0 text-[13px] leading-[1.5] text-slate">
 													Latest reported failure. A retry can fail while rechecking an earlier step, so this is not
 													necessarily where it failed.
 												</p>
@@ -154,24 +155,26 @@ export function BoardProgressPanel({
 				</>
 			)}
 			{board.operation?.next_attempt_at && board.error?.retrying ? (
-				<p className="mt-4 text-xs text-muted-foreground">
+				<p className="mt-4 mb-0 text-[13.5px] text-slate">
 					Eligible to retry after {formatDate(board.operation.next_attempt_at)}.
 				</p>
 			) : null}
-			<details className="mt-5 border-t border-border pt-4">
-				<summary className="cursor-pointer text-xs text-muted-foreground">Diagnostic details</summary>
-				<p className="mt-3 text-xs text-subtle">
+			<details className="mt-5 border-t border-rule pt-4">
+				<summary className="w-fit cursor-pointer rounded-md text-[13.5px] font-medium text-slate hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink">
+					Diagnostic details
+				</summary>
+				<p className="mt-3 mb-3 text-[13px] text-slate">
 					{board.operation ? `Last operation update: ${formatDate(board.operation.updated_at)}. ` : ""}Individual step
 					times are not recorded.
 				</p>
-				<pre className="overflow-x-auto rounded-md bg-muted p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
+				<pre className="mt-0 mb-3 overflow-x-auto rounded-xl bg-wash p-3.5 font-mono text-[12px] leading-[1.6] whitespace-pre-wrap text-ink ring-1 ring-rule [overflow-wrap:anywhere]">
 					{diagnostics}
 				</pre>
 				<Button variant="outline" size="sm" onClick={() => void copy()}>
 					<Copy aria-hidden="true" />
 					Copy details
 				</Button>
-				<span role="status" className="ml-2 text-xs text-muted-foreground">
+				<span role="status" className="ml-2 text-[13px] text-slate">
 					{copyStatus}
 				</span>
 			</details>

@@ -9,20 +9,22 @@ const labels: Record<DashboardPhase, string> = {
 	deletion_blocked: "Deletion needs attention",
 };
 
-const colors: Record<DashboardPhase, string> = {
-	queued: "border-[#554f70] bg-accent-surface text-accent-foreground",
-	provisioning: "border-[#554f70] bg-accent-surface text-accent-foreground",
-	ready: "border-tag-border bg-tag-surface text-tag",
-	blocked: "border-destructive-border bg-destructive-surface text-destructive",
-	deleting: "border-[#554f70] bg-accent-surface text-accent-foreground",
-	deletion_blocked: "border-destructive-border bg-destructive-surface text-destructive",
+// Leaf for ready, danger for anything stopped, slate while work is still running.
+const tones: Record<DashboardPhase, string> = {
+	queued: "text-slate",
+	provisioning: "text-slate",
+	ready: "text-leaf",
+	blocked: "text-danger",
+	deleting: "text-slate",
+	deletion_blocked: "text-danger",
 };
 
 export function StatusBadge({ phase }: { readonly phase: DashboardPhase }) {
 	return (
 		<span
-			className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-xs border px-1.5 py-0.5 font-mono text-[10px] font-medium tracking-[0.02em] ${colors[phase]}`}
+			className={`inline-flex shrink-0 items-center gap-1.5 text-[13px] leading-6 font-medium whitespace-nowrap ${tones[phase]}`}
 		>
+			<span aria-hidden="true" className="size-1.5 rounded-full bg-current" />
 			{labels[phase]}
 		</span>
 	);

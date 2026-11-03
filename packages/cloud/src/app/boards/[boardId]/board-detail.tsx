@@ -1,5 +1,6 @@
 "use client";
 
+import { ChevronDown } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -16,6 +17,8 @@ import type { IssuedSetupCode } from "../../open-board.ts";
 import { BoardProgressPanel } from "../../board-progress-panel.tsx";
 import { boardStatusBanner } from "../../board-status-banner.ts";
 import { StatusBadge } from "../../status-badge.tsx";
+import { EntryScreen, entryLede, entryTitle } from "../../entry-screen.tsx";
+import { buttonVariants } from "../../components/ui/button.tsx";
 
 class BoardNotFound extends Error {}
 class SessionExpired extends Error {}
@@ -26,10 +29,12 @@ const formatDate = (value: string) =>
 	new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 
 const bannerTones = {
-	progress: "border-border bg-muted text-muted-foreground",
-	warning: "border-warning-border bg-warning-surface text-warning",
-	error: "border-destructive-border bg-destructive-surface text-destructive",
+	progress: "bg-card text-ink shadow-raised",
+	warning: "bg-danger/6 text-danger ring-1 ring-danger/20",
+	error: "bg-danger/6 text-danger ring-1 ring-danger/20",
 } as const;
+
+const card = "rounded-2xl bg-card p-5 shadow-raised";
 
 export function BoardDetail({
 	authUnavailable,
@@ -99,27 +104,22 @@ export function BoardDetail({
 
 	if (!sessionUser)
 		return (
-			<main className="grid min-h-svh place-items-center p-6 max-[460px]:p-4">
-				<section className="w-full max-w-[430px] rounded-md border border-border bg-card p-8 shadow-card max-[460px]:px-5 max-[460px]:py-6">
-					<p className="m-0 font-mono text-[11px] font-medium tracking-[0.08em] text-subtle uppercase">
-						{authUnavailable ? "Authentication unavailable" : "Session required"}
-					</p>
-					<h1 className="mt-3 mb-0 text-[clamp(28px,7vw,36px)] leading-[1.05] font-normal tracking-[-0.035em] text-balance">
-						{authUnavailable ? "Your session could not be checked." : "Sign in to view this board."}
-					</h1>
-					<p className="mt-4 mb-6 text-[15px] leading-[1.55] text-muted-foreground">
-						{authUnavailable
-							? "Authentication is temporarily unavailable. Try again shortly."
-							: "Cloud access and board access use separate credentials."}
-					</p>
-					<Link
-						className="inline-flex min-h-9 items-center justify-center whitespace-nowrap rounded-md border border-transparent bg-primary px-3.5 py-2 text-[13px] font-medium leading-none text-primary-foreground no-underline hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-						href="/"
-					>
-						{authUnavailable ? "Return to dashboard" : "Go to sign in"}
-					</Link>
-				</section>
-			</main>
+			<EntryScreen labelledBy="session-title">
+				<p className="mt-0 mb-2 text-[13.5px] font-medium text-slate">
+					{authUnavailable ? "Authentication unavailable" : "Session required"}
+				</p>
+				<h1 className={entryTitle} id="session-title">
+					{authUnavailable ? "Your session could not be checked." : "Sign in to view this board."}
+				</h1>
+				<p className={entryLede}>
+					{authUnavailable
+						? "Authentication is temporarily unavailable. Try again shortly."
+						: "Cloud access and board access use separate credentials."}
+				</p>
+				<Link className={`${buttonVariants()} w-full no-underline`} href="/">
+					{authUnavailable ? "Return to dashboard" : "Go to sign in"}
+				</Link>
+			</EntryScreen>
 		);
 
 	return (
@@ -127,30 +127,27 @@ export function BoardDetail({
 			{error ? (
 				<div
 					role="alert"
-					className="mb-3 rounded-md border border-destructive-border bg-destructive-surface px-4 py-3.5 text-xs leading-[1.55] text-destructive"
+					className="mb-4 flex flex-wrap items-center justify-between gap-4 rounded-2xl bg-danger/6 px-5 py-4 text-danger ring-1 ring-danger/20"
 				>
-					<p className="m-0">{error}</p>
-					<button
-						className="mt-2.5 inline-flex min-h-[30px] cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-input bg-card px-2.5 py-1.5 text-xs font-medium leading-none text-foreground hover:border-primary hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-						onClick={refresh}
-						type="button"
-					>
+					<p className="m-0 text-[14.5px] leading-[1.5]">{error}</p>
+					<button className={buttonVariants({ variant: "outline", size: "sm" })} onClick={refresh} type="button">
 						Try again
 					</button>
 				</div>
 			) : null}
 			{!board && error ? null : !board ? (
-				<div aria-label="Loading board" className="pt-[3px]">
-					<div className="h-[11px] w-[92px] animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
-					<div className="mt-3.5 h-[34px] w-full max-w-80 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
-					<div className="mt-8 min-h-[170px] animate-pulse rounded-md border border-border bg-card shadow-card motion-reduce:animate-none" />
+				<div aria-label="Loading board">
+					<div className="h-5 w-[120px] rounded-md bg-wash" />
+					<div className="mt-2.5 h-9 w-full max-w-80 rounded-lg bg-wash" />
+					<div className="mt-2.5 h-6 w-full max-w-64 rounded-md bg-wash" />
+					<div className="mt-7 min-h-[170px] rounded-2xl bg-card shadow-raised" />
 				</div>
 			) : (
 				<>
 					<header className="mb-7">
-						<p className="mt-0 mb-2 font-mono text-[11px] tracking-[0.03em] text-subtle">
+						<p className="mt-0 mb-2 text-[13.5px] leading-5 text-slate [overflow-wrap:anywhere]">
 							<Link
-								className="text-inherit underline decoration-input underline-offset-[3px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+								className="rounded-sm text-inherit underline decoration-slate/40 underline-offset-[3px] hover:text-ink hover:decoration-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
 								href="/"
 							>
 								Boards
@@ -158,11 +155,11 @@ export function BoardDetail({
 							/ {board.name}
 						</p>
 						<div className="grid items-start gap-4 min-[761px]:flex min-[761px]:justify-between min-[761px]:gap-6">
-							<div>
-								<h1 className="m-0 text-3xl font-normal tracking-[-0.035em] text-balance max-[760px]:text-2xl">
+							<div className="min-w-0">
+								<h1 className="m-0 text-[32px] leading-[1.1] font-[650] tracking-[-0.035em] [overflow-wrap:anywhere] max-[760px]:text-[28px]">
 									{board.name}
 								</h1>
-								<p className="mt-2 mb-0 leading-normal text-muted-foreground [overflow-wrap:anywhere]">
+								<p className="mt-2 mb-0 text-[15.5px] leading-normal text-slate [overflow-wrap:anywhere]">
 									{board.hostname ??
 										(board.phase === "deleting"
 											? "This board’s hosting resources are being removed."
@@ -171,8 +168,10 @@ export function BoardDetail({
 												: "Your board address will appear when setup is complete.")}
 								</p>
 							</div>
-							<div className="flex flex-wrap items-center justify-start gap-2 min-[761px]:justify-end">
-								<StatusBadge phase={board.phase} />
+							<div className="flex flex-wrap items-center justify-start gap-x-3 gap-y-2 min-[761px]:shrink-0 min-[761px]:justify-end">
+								<span className="max-[760px]:basis-full">
+									<StatusBadge phase={board.phase} />
+								</span>
 								<DeleteBoardDialog
 									board={board}
 									onDeleted={() => {
@@ -184,7 +183,7 @@ export function BoardDetail({
 									<OpenBoardButton
 										boardId={board.id}
 										hostname={board.hostname}
-										className="inline-flex min-h-9 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent bg-primary px-3.5 py-2 text-[13px] font-medium leading-none text-primary-foreground no-underline hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-wait disabled:opacity-70"
+										className={`${buttonVariants()} min-w-[136px] disabled:cursor-wait disabled:opacity-70`}
 										onOpening={() => {
 											setSetupCode(undefined);
 											setSetupGeneration((generation) => generation + 1);
@@ -205,22 +204,20 @@ export function BoardDetail({
 					{banner ? (
 						<div
 							role="alert"
-							className={`mb-3 rounded-md border px-4 py-3.5 text-xs leading-[1.55] ${bannerTones[banner.severity]}`}
+							className={`mb-4 rounded-2xl px-5 py-4 text-[14.5px] leading-[1.55] ${bannerTones[banner.severity]}`}
 						>
-							<p className="mt-0 mb-[5px] font-mono text-[11px] font-medium tracking-[0.08em] uppercase">
-								{banner.label}
-							</p>
+							<p className="mt-0 mb-1 font-semibold first-letter:uppercase">{banner.label}</p>
 							<p className="m-0">{banner.message}</p>
-							<p className="mt-1.5 mb-0 text-muted-foreground">{banner.note}</p>
+							<p className="mt-1.5 mb-0 text-slate">{banner.note}</p>
 						</div>
 					) : null}
 					<div className="grid gap-4">
-						{board.phase !== "ready" ? <BoardProgressPanel board={board} onRefresh={refresh} /> : null}
-						<section aria-labelledby="backup" className="rounded-md border border-border bg-card p-5">
-							<h2 id="backup" className="text-sm font-medium">
+						{board.phase !== "ready" ? <BoardProgressPanel board={board} className={card} onRefresh={refresh} /> : null}
+						<section aria-labelledby="backup" className={card}>
+							<h2 id="backup" className="m-0 text-[13.5px] font-medium text-slate">
 								Latest backup
 							</h2>
-							<p className="mt-3 text-xl tracking-tight">
+							<p className="mt-1 mb-0 text-[19px] font-[650] tracking-[-0.02em]">
 								{board.storage_engine !== "sqlite"
 									? "Manage backups with your database provider"
 									: board.last_backup
@@ -228,47 +225,49 @@ export function BoardDetail({
 										: "No completed backups yet"}
 							</p>
 							{board.last_backup ? (
-								<p className="mt-2 text-xs text-muted-foreground">
+								<p className="mt-1.5 mb-0 text-[13.5px] text-slate">
 									Retained for {board.last_backup.retention_days} days, as reported by your provider.
 								</p>
 							) : null}
 						</section>
-						<details className="rounded-md border border-border bg-card p-5">
-							<summary className="cursor-pointer text-sm font-medium focus-visible:outline-ring">
+						<details className={`group ${card}`}>
+							<summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-md text-[15px] font-semibold focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ink [&::-webkit-details-marker]:hidden">
 								Technical details
+								<ChevronDown
+									aria-hidden="true"
+									className="size-4 shrink-0 text-slate transition-transform group-open:rotate-180 motion-reduce:transition-none"
+								/>
 							</summary>
-							<dl className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
+							<dl className="mt-4 mb-0 grid gap-4 text-[14.5px] sm:grid-cols-2">
 								<div>
-									<dt className="text-subtle">Database</dt>
-									<dd className="mt-1">{storageLabels[board.storage_engine]}</dd>
+									<dt className="text-[13.5px] text-slate">Database</dt>
+									<dd className="mt-1 ml-0">{storageLabels[board.storage_engine]}</dd>
 								</div>
 								<div>
-									<dt className="text-subtle">Region</dt>
-									<dd className="mt-1">{board.region ?? "Pending"}</dd>
+									<dt className="text-[13.5px] text-slate">Region</dt>
+									<dd className="mt-1 ml-0">{board.region ?? "Pending"}</dd>
 								</div>
 								{board.storage_engine === "sqlite" ? (
 									<div>
-										<dt className="text-subtle">Storage capacity</dt>
-										<dd className="mt-1">
+										<dt className="text-[13.5px] text-slate">Storage capacity</dt>
+										<dd className="mt-1 ml-0">
 											{board.volume_size_gb ? `${board.volume_size_gb} GB allocated` : "Pending"}
 										</dd>
 									</div>
 								) : null}
 								<div>
-									<dt className="text-subtle">Created</dt>
-									<dd className="mt-1">{formatDate(board.created_at)}</dd>
+									<dt className="text-[13.5px] text-slate">Created</dt>
+									<dd className="mt-1 ml-0">{formatDate(board.created_at)}</dd>
 								</div>
 								{board.last_backup ? (
 									<div className="sm:col-span-2">
-										<dt className="text-subtle">Backup digest</dt>
-										<dd className="mt-1 break-all font-mono text-xs">{board.last_backup.digest}</dd>
+										<dt className="text-[13.5px] text-slate">Backup digest</dt>
+										<dd className="mt-1 ml-0 font-mono text-[12.5px] break-all">{board.last_backup.digest}</dd>
 									</div>
 								) : null}
 							</dl>
 							{board.phase === "ready" ? (
-								<div className="mt-5">
-									<BoardProgressPanel board={board} onRefresh={refresh} />
-								</div>
+								<BoardProgressPanel board={board} className="mt-5 border-t border-rule pt-5" onRefresh={refresh} />
 							) : null}
 						</details>
 					</div>
@@ -276,6 +275,7 @@ export function BoardDetail({
 						<BoardSetupPanel
 							key={`${board.id}:${setupGeneration}`}
 							boardId={board.id}
+							className={`mt-4 ${card}`}
 							hostname={board.hostname}
 							initialCode={setupCode}
 							onIssued={setSetupCode}

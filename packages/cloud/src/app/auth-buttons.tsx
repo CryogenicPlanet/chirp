@@ -104,19 +104,21 @@ export function AuthButtons({ invitation, user, providers = [] }: AuthButtonsPro
 			<>
 				<DropdownMenu>
 					<DropdownMenuTrigger asChild>
-						<Button variant="ghost" className="h-auto w-full justify-start px-2 py-2.5">
-							<span className="flex size-8 shrink-0 items-center justify-center rounded-full border bg-muted text-primary">
+						<Button variant="ghost" className="h-auto w-full justify-start px-2 py-2 text-ink hover:bg-card">
+							<span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-card text-slate ring-1 ring-rule">
 								<UserRound className="size-4" />
 							</span>
-							<span className="grid min-w-0 gap-0.5 text-left">
-								<span className="truncate text-xs font-medium">{user.name}</span>
-								<span className="truncate text-[11px] font-normal text-muted-foreground">{user.email}</span>
+							<span className="min-w-0 text-left text-[13.5px] leading-[1.3] font-medium whitespace-normal [overflow-wrap:anywhere]">
+								{user.name}
 							</span>
-							<ChevronsUpDown className="ml-auto size-3.5 text-subtle" />
+							<ChevronsUpDown className="ml-auto size-3.5 text-slate" />
 						</Button>
 					</DropdownMenuTrigger>
 					<DropdownMenuContent side="top" align="start" className="w-60">
-						<DropdownMenuLabel className="text-xs text-muted-foreground">Your account</DropdownMenuLabel>
+						<DropdownMenuLabel>
+							Signed in as
+							<span className="block font-normal text-ink [overflow-wrap:anywhere]">{user.email}</span>
+						</DropdownMenuLabel>
 						<DropdownMenuItem onSelect={() => setAccountOpen(true)}>
 							<KeyRound />
 							Security & passkeys
@@ -129,15 +131,15 @@ export function AuthButtons({ invitation, user, providers = [] }: AuthButtonsPro
 					</DropdownMenuContent>
 				</DropdownMenu>
 				<Dialog open={accountOpen} onOpenChange={setAccountOpen}>
-					<DialogContent className="bg-card">
+					<DialogContent>
 						<DialogHeader className="text-left">
 							<DialogTitle>Security & passkeys</DialogTitle>
 							<DialogDescription>Add a passkey for a quick, secure way to sign in to Chirp Cloud.</DialogDescription>
 						</DialogHeader>
-						<div className="flex items-center justify-between gap-4 rounded-lg border p-4">
+						<div className="flex flex-wrap items-center justify-between gap-4 rounded-xl bg-wash p-4 ring-1 ring-rule">
 							<div>
-								<p className="font-medium">Sign in with a passkey</p>
-								<p className="mt-1 text-xs text-muted-foreground">Use your fingerprint, face, or security key.</p>
+								<p className="m-0 font-medium">Sign in with a passkey</p>
+								<p className="mt-1 mb-0 text-[13.5px] text-slate">Use your fingerprint, face, or security key.</p>
 							</div>
 							<Button variant="outline" disabled={pending} onClick={enrollPasskey}>
 								<KeyRound />
@@ -145,19 +147,19 @@ export function AuthButtons({ invitation, user, providers = [] }: AuthButtonsPro
 							</Button>
 						</div>
 						{notice ? (
-							<p role="status" className="text-xs text-primary">
+							<p role="status" className="m-0 text-[13.5px] text-leaf">
 								{notice}
 							</p>
 						) : null}
 						{error ? (
-							<p role="alert" className="text-xs text-destructive">
+							<p role="alert" className="m-0 text-[13.5px] text-danger">
 								{error}
 							</p>
 						) : null}
 					</DialogContent>
 				</Dialog>
 				{!accountOpen && error ? (
-					<p role="alert" className="mt-2 text-xs text-destructive">
+					<p role="alert" className="mt-2 mb-0 text-[13px] text-danger">
 						{error}
 					</p>
 				) : null}
@@ -165,30 +167,25 @@ export function AuthButtons({ invitation, user, providers = [] }: AuthButtonsPro
 		);
 
 	return (
-		<div className="grid min-w-0 gap-2">
+		<div className="grid min-w-0 gap-2.5">
 			{providers.map((provider) => (
-				<button
-					className="inline-flex min-h-9 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-transparent bg-primary px-3.5 py-2 text-[13px] font-medium leading-none text-primary-foreground hover:not-disabled:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-wait disabled:opacity-55"
+				<Button
+					className="w-full disabled:cursor-wait"
 					disabled={pending}
 					key={provider}
 					onClick={() => social(provider)}
 					type="button"
 				>
 					Continue with {provider === "github" ? "GitHub" : "Google"}
-				</button>
+				</Button>
 			))}
 			{invitation ? null : (
-				<button
-					className="inline-flex min-h-9 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-input bg-card px-3.5 py-2 text-[13px] font-medium leading-none text-foreground hover:not-disabled:border-primary hover:not-disabled:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-wait disabled:opacity-55"
-					disabled={pending}
-					onClick={passkey}
-					type="button"
-				>
+				<Button className="w-full" disabled={pending} onClick={passkey} type="button" variant="outline">
 					Sign in with a passkey
-				</button>
+				</Button>
 			)}
 			{error ? (
-				<p aria-live="polite" className="mt-1 text-xs leading-[1.45] text-destructive">
+				<p aria-live="polite" className="mt-1 mb-0 text-[13.5px] leading-[1.45] text-danger">
 					{error}
 				</p>
 			) : null}

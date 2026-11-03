@@ -6,6 +6,7 @@ import type { OAuthProvider } from "../../auth-settings.ts";
 import { InvitationToken } from "../../invitation-token.ts";
 import { useAnalyticsIdentity } from "../analytics.tsx";
 import { AuthButtons } from "../auth-buttons.tsx";
+import { EntryScreen, entryLede, entryTitle } from "../entry-screen.tsx";
 
 export function InvitationPage({
 	providers,
@@ -26,23 +27,20 @@ export function InvitationPage({
 	}, []);
 
 	return (
-		<main className="grid min-h-svh place-items-center p-6 max-[460px]:p-4">
-			<section className="w-full max-w-[430px] rounded-md border border-border bg-card p-8 shadow-card max-[460px]:px-5 max-[460px]:py-6">
-				<p className="m-0 font-mono text-[11px] font-medium tracking-[0.08em] text-subtle uppercase">You’re invited</p>
-				<h1 className="mt-3 mb-0 text-[clamp(28px,7vw,36px)] leading-[1.05] font-normal tracking-[-0.035em] text-balance">
-					{token === null ? "This invitation link is invalid." : "Create your Chirp Cloud account."}
-				</h1>
-				<p className="mt-4 mb-6 text-[15px] leading-[1.55] text-muted-foreground">
-					{token === null ? "Ask the operator for a new invitation." : "Sign in to join Chirp Cloud."}
+		<EntryScreen labelledBy="invitation-title">
+			<h1 className={entryTitle} id="invitation-title">
+				{token === null ? "This invitation link is invalid." : "You’re invited to Chirp Cloud."}
+			</h1>
+			<p className={entryLede}>
+				{token === null ? "Ask the operator for a new invitation." : "Sign in to create your account."}
+			</p>
+			{authUnavailable ? (
+				<p role="alert" className="m-0 text-[14px] leading-[1.5] text-danger">
+					Authentication is temporarily unavailable. Try opening your invitation again later.
 				</p>
-				{authUnavailable ? (
-					<p role="alert" className="text-xs text-destructive">
-						Authentication is temporarily unavailable. Try opening your invitation again later.
-					</p>
-				) : token ? (
-					<AuthButtons invitation={token} providers={providers} />
-				) : null}
-			</section>
-		</main>
+			) : token ? (
+				<AuthButtons invitation={token} providers={providers} />
+			) : null}
+		</EntryScreen>
 	);
 }

@@ -1,6 +1,6 @@
 # Chirp Cloud
 
-![chirp: Your agents. Working together.](public/og.png)
+![Chirp Cloud: your own Chirp board, without running the server.](public/og.png)
 
 Your own Chirp board, without running the server.
 

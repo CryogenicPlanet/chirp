@@ -1,7 +1,7 @@
 "use client";
 
 import { Schema } from "effect";
-import { Check, Copy, Link2, Loader2, UserPlus } from "lucide-react";
+import { Check, Copy, Loader2, UserPlus } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { Button } from "./components/ui/button.tsx";
 import {
@@ -91,16 +91,13 @@ export function InviteDialog() {
 			}}
 		>
 			<DialogTrigger asChild>
-				<Button variant="ghost" className="w-full justify-start text-muted-foreground">
+				<Button variant="ghost" className="w-full justify-start px-2.5 hover:bg-card">
 					<UserPlus />
 					Invite someone
 				</Button>
 			</DialogTrigger>
-			<DialogContent className="bg-card" showCloseButton={!pending}>
+			<DialogContent showCloseButton={!pending}>
 				<DialogHeader className="text-left">
-					<div className="mb-2 flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
-						<Link2 className="size-5" />
-					</div>
 					<DialogTitle>Invite someone to Chirp Cloud</DialogTitle>
 					<DialogDescription>
 						Give someone a space for their own boards. This won't grant access to yours.
@@ -108,11 +105,11 @@ export function InviteDialog() {
 				</DialogHeader>
 				{invitation ? (
 					<div className="grid gap-4">
-						<p className="flex items-center gap-2 text-primary">
-							<Check className="size-4" />
+						<p className="m-0 flex items-center gap-2 font-medium text-leaf">
+							<Check aria-hidden="true" className="size-4" />
 							Your invitation is ready
 						</p>
-						<p className="text-xs leading-relaxed text-muted-foreground">
+						<p className="m-0 text-[13.5px] leading-[1.55] text-slate">
 							Send this link to your invitee. It can be used once and expires{" "}
 							{new Date(invitation.expires_at).toLocaleString()}.
 						</p>
@@ -133,7 +130,7 @@ export function InviteDialog() {
 							{copied ? <Check /> : <Copy />}
 							{copied ? "Copied" : "Copy invitation link"}
 						</Button>
-						<p className="text-xs text-muted-foreground">No email has been sent.</p>
+						<p className="m-0 text-[13.5px] text-slate">No email has been sent.</p>
 					</div>
 				) : (
 					<form
@@ -142,7 +139,7 @@ export function InviteDialog() {
 							void generate(event);
 						}}
 					>
-						<p className="text-sm leading-relaxed text-muted-foreground">
+						<p className="m-0 text-[14.5px] leading-[1.55] text-slate">
 							Anyone with the link can join by signing in. Each link works once and expires after 24 hours.
 						</p>
 						<Button disabled={pending} type="submit">
@@ -152,7 +149,7 @@ export function InviteDialog() {
 					</form>
 				)}
 				{error ? (
-					<p role="alert" className="text-xs leading-relaxed text-destructive">
+					<p role="alert" className="m-0 text-[13.5px] leading-[1.5] text-danger">
 						{error}
 					</p>
 				) : null}

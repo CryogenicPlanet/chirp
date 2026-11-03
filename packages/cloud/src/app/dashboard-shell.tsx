@@ -5,26 +5,12 @@ import { Layers3 } from "lucide-react";
 import { InviteDialog } from "./invite-dialog.tsx";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { AuthButtons } from "./auth-buttons.tsx";
+import { Wordmark } from "./brand.tsx";
 
 export interface CloudClientUser {
 	readonly id: string;
 	readonly name: string;
 	readonly email: string;
-}
-
-function Wordmark({ compact = false }: { readonly compact?: boolean }) {
-	return (
-		<span
-			className={`inline-flex items-center gap-2 font-medium tracking-[-0.035em] ${compact ? "text-[19px]" : "text-2xl"}`}
-		>
-			<svg aria-hidden="true" className={compact ? "size-6" : "size-8"} viewBox="0 0 48 48">
-				<image href="/favicon.svg" width="48" height="48" />
-			</svg>
-			<span>
-				chirp<span className="text-primary">.</span>
-			</span>
-		</span>
-	);
 }
 
 export function DashboardShell({ children, user }: { readonly children: ReactNode; readonly user?: CloudClientUser }) {
@@ -66,65 +52,59 @@ export function DashboardShell({ children, user }: { readonly children: ReactNod
 		<div className="min-h-svh">
 			<header
 				aria-hidden={mobileNavigation && navigationOpen}
-				className="sticky top-0 z-20 flex h-12 items-center gap-3 border-b border-border bg-background/88 px-4 backdrop-blur-sm min-[761px]:hidden"
+				className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-rule bg-paper/90 px-4 backdrop-blur-md min-[761px]:hidden"
 				inert={mobileNavigation && navigationOpen}
 			>
 				<button
 					aria-expanded={navigationOpen}
 					aria-label="Open navigation"
 					aria-controls="cloud-navigation"
-					className="grid h-[30px] w-7 cursor-pointer place-content-center gap-[5px] rounded-sm border-0 bg-transparent p-0 hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+					className="-ml-1.5 grid size-9 cursor-pointer place-content-center gap-[5px] rounded-lg border-0 bg-transparent p-0 hover:bg-wash focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-ink"
 					onClick={() => setNavigationOpen(true)}
 					ref={menu}
 					type="button"
 				>
-					<span className="block h-px w-[15px] bg-foreground" />
-					<span className="block h-px w-[15px] bg-foreground" />
+					<span className="block h-[1.5px] w-4 bg-ink" />
+					<span className="block h-[1.5px] w-4 bg-ink" />
 				</button>
-				<Wordmark compact />
+				<Wordmark />
 			</header>
 			<button
 				aria-label="Close navigation"
-				className={`fixed inset-0 z-[25] block h-auto min-h-0 w-auto border-0 bg-foreground/25 p-0 backdrop-blur-[2px] transition-[opacity,visibility] duration-[160ms] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring motion-reduce:transition-none min-[761px]:hidden ${navigationOpen ? "visible opacity-100" : "invisible opacity-0"}`}
+				className={`fixed inset-0 z-[25] block h-auto min-h-0 w-auto border-0 bg-ink/25 p-0 transition-[opacity,visibility] duration-[160ms] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ink motion-reduce:transition-none min-[761px]:hidden ${navigationOpen ? "visible opacity-100" : "invisible opacity-0"}`}
 				onClick={closeNavigation}
 				type="button"
 			/>
 			<aside
 				aria-hidden={mobileNavigation && !navigationOpen}
-				className={`fixed inset-y-0 left-0 z-30 flex w-[min(288px,85vw)] flex-col border-r border-border bg-card px-[18px] pt-[26px] pb-5 shadow-elevated transition-transform duration-[160ms] focus:outline-none motion-reduce:transition-none min-[761px]:w-56 min-[761px]:translate-x-0 min-[761px]:px-4 min-[761px]:pt-8 min-[761px]:shadow-none min-[1280px]:w-64 min-[1280px]:px-5 ${navigationOpen ? "translate-x-0" : "-translate-x-[101%]"}`}
+				className={`fixed inset-y-0 left-0 z-30 flex w-[min(288px,85vw)] flex-col border-r border-rule bg-wash px-[18px] pt-5 pb-5 transition-transform duration-[160ms] focus:outline-none motion-reduce:transition-none min-[761px]:w-56 min-[761px]:translate-x-0 min-[761px]:px-4 min-[761px]:shadow-none min-[1280px]:w-64 min-[1280px]:px-5 ${navigationOpen ? "translate-x-0 shadow-float" : "-translate-x-[101%]"}`}
 				id="cloud-navigation"
 				inert={mobileNavigation && !navigationOpen}
 				ref={sidebar}
 				tabIndex={-1}
 			>
-				<div>
+				<div className="mb-7 flex h-9 items-center px-1">
 					<Link
 						aria-label="Chirp Cloud home"
-						className="text-inherit no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+						className="rounded-md text-inherit no-underline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ink"
 						href="/"
 					>
 						<Wordmark />
 					</Link>
-					<p className="mt-[5px] mr-0 mb-[30px] ml-[31px] flex items-center gap-2 font-mono text-[10px] tracking-[0.03em] text-subtle">
-						Cloud
-						<span className="rounded border border-primary/20 bg-primary/5 px-1.5 py-0.5 text-[9px] text-primary">
-							Beta
-						</span>
-					</p>
 				</div>
 				<nav aria-label="Cloud navigation" className="grid gap-[3px]">
 					<Link
-						className="flex items-center gap-2 rounded-md bg-muted/70 px-2.5 py-[9px] text-[13px] text-foreground no-underline hover:bg-background hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+						className="flex items-center gap-2.5 rounded-lg bg-card px-2.5 py-2 text-[14.5px] font-medium text-ink no-underline shadow-raised focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
 						href="/"
 						onClick={closeNavigation}
 					>
-						<Layers3 className="size-4 text-primary" />
+						<Layers3 aria-hidden="true" className="size-4 text-slate" />
 						Boards
 					</Link>
 				</nav>
 				<div className="mt-auto grid gap-4 pt-6">
 					<InviteDialog />
-					<div className="border-t pt-3">{user ? <AuthButtons user={user} /> : null}</div>
+					<div className="border-t border-rule pt-3">{user ? <AuthButtons user={user} /> : null}</div>
 				</div>
 			</aside>
 			<main

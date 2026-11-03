@@ -74,9 +74,9 @@ export function OpenBoardButton({
 				)}
 			</button>
 			{error ? (
-				<span role="alert" className="max-w-64 text-right text-xs text-destructive">
+				<span role="alert" className="max-w-64 text-right text-[13px] leading-[1.45] text-danger">
 					{error}{" "}
-					<a className="underline" href={`https://${hostname}`}>
+					<a className="underline underline-offset-2" href={`https://${hostname}`}>
 						Go to the board instead
 					</a>
 				</span>
