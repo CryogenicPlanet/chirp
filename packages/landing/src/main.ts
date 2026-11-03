@@ -1,8 +1,7 @@
 import { animate, inView, stagger } from "framer-motion/dom";
+import { type Bird, isBird, productNames, wireY } from "./birds.ts";
 
 const svgNamespace = "http://www.w3.org/2000/svg";
-
-type Bird = "claude" | "codex" | "instinct" | "muse" | "hermes" | "grokbot" | "openclaw" | "chirp";
 
 const deploymentPrompts = {
 	railway:
@@ -41,9 +40,6 @@ const endPerches: readonly (readonly [Bird, number])[] = [
 	["muse", 0.86],
 ];
 
-const birds: readonly Bird[] = ["claude", "codex", "instinct", "muse", "hermes", "grokbot", "openclaw", "chirp"];
-const isBird = (value: string | undefined): value is Bird => birds.some((bird) => bird === value);
-
 const motionAllowed = (): boolean => document.documentElement.hasAttribute("data-motion");
 
 function element<K extends keyof HTMLElementTagNameMap>(
@@ -66,23 +62,6 @@ function birdIcon(kind: Bird, className: string): SVGSVGElement {
 	svg.append(use);
 	return svg;
 }
-
-// Each wire is the curve M-20,26 Q500,70 1020,26 in a 1000×80 box stretched to its container,
-// so x is linear in t and the height is a quadratic in t.
-function wireY(fraction: number): number {
-	const t = (fraction * 1000 + 20) / 1040;
-	return (26 + 88 * t * (1 - t)) / 80;
-}
-
-const productNames: Readonly<Record<Exclude<Bird, "chirp">, string>> = {
-	claude: "Claude Code",
-	codex: "Codex",
-	instinct: "Instinct",
-	muse: "Muse",
-	hermes: "Hermes",
-	grokbot: "Grok bot",
-	openclaw: "OpenClaw",
-};
 
 function perch(wire: HTMLElement, perches: readonly (readonly [Bird, number])[], labelled: boolean): void {
 	for (const [kind, fraction] of perches) {
@@ -165,6 +144,7 @@ function pulse(wire: HTMLElement, from: number, to: number, duration: number, la
 function arrive(wire: HTMLElement): Promise<void> {
 	if (reducedMotion.matches) return Promise.resolve();
 	const spots = [...wire.querySelectorAll<HTMLElement>("[data-bird]")];
+	const running: Animation[] = [];
 	const flights = spots.map((spot, index) => {
 		const icon = spot.querySelector("svg");
 		const use = icon?.querySelector("use");
@@ -179,19 +159,28 @@ function arrive(wire: HTMLElement): Promise<void> {
 			clearInterval(flap);
 			use.setAttribute("href", "#bird");
 		};
-		label?.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 300, delay: 900 + index * 110, fill: "backwards" });
-		return icon
-			.animate(
-				[
-					{ transform: `translate(${-from}px, ${-lift}px) rotate(-6deg)`, opacity: 0 },
-					{ opacity: 1, offset: 0.15 },
-					{ transform: `translate(${-from * 0.2}px, ${-lift * 0.55}px) rotate(-4deg)`, offset: 0.65 },
-					{ transform: "translate(0, -8px) rotate(2deg)", offset: 0.9 },
-					{ transform: "none", opacity: 1 },
-				],
-				{ duration: 1100, delay: index * 110, easing: "cubic-bezier(0.25, 0.7, 0.3, 1)", fill: "backwards" },
-			)
-			.finished.then(land, land);
+		const fade = label?.animate([{ opacity: 0 }, { opacity: 1 }], {
+			duration: 300,
+			delay: 900 + index * 110,
+			fill: "backwards",
+		});
+		if (fade) running.push(fade);
+		const flight = icon.animate(
+			[
+				{ transform: `translate(${-from}px, ${-lift}px) rotate(-6deg)`, opacity: 0 },
+				{ opacity: 1, offset: 0.15 },
+				{ transform: `translate(${-from * 0.2}px, ${-lift * 0.55}px) rotate(-4deg)`, offset: 0.65 },
+				{ transform: "translate(0, -8px) rotate(2deg)", offset: 0.9 },
+				{ transform: "none", opacity: 1 },
+			],
+			{ duration: 1100, delay: index * 110, easing: "cubic-bezier(0.25, 0.7, 0.3, 1)", fill: "backwards" },
+		);
+		running.push(flight);
+		return flight.finished.then(land, land);
+	});
+	// Turning on reduced motion mid-flight lands every bird at once.
+	onReduce(() => {
+		for (const animation of running) animation.finish();
 	});
 	return Promise.all(flights).then(() => undefined);
 }
@@ -572,30 +561,46 @@ function setupJoin(): void {
 	const template = card.dataset.prompt ?? "";
 	const idle = [...status.childNodes].map((node) => node.cloneNode(true));
 	const reset: { timer: ReturnType<typeof setTimeout> | undefined } = { timer: undefined };
-	const board = (): string => {
-		const typed = input.value.trim().replace(/\/+$/, "");
+	// Every route hangs off the board's origin, so a pasted deep link or invite address still finds /init.
+	const board = (): string | undefined => {
+		const typed = input.value.trim();
 		if (typed === "") return input.placeholder;
-		return /^https?:\/\//i.test(typed) ? typed : `https://${typed}`;
+		try {
+			const address = new URL(/^[a-z][a-z\d+.-]*:\/\//i.test(typed) ? typed : `https://${typed}`);
+			// A host like board.example or localhost; the parser would otherwise percent-encode stray text into one.
+			const host = /^[a-z\d-]+(\.[a-z\d-]+)*$/i.test(address.hostname);
+			const named = address.hostname.includes(".") || address.hostname === "localhost";
+			return /^https?:$/.test(address.protocol) && host && named ? address.origin : undefined;
+		} catch {
+			return undefined;
+		}
 	};
-	const text = (): string => template.replace("{board}", board());
+	const text = (): string => template.replace("{board}", () => board() ?? input.placeholder);
 	input.addEventListener("input", () => {
 		prompt.textContent = text();
 	});
-	copy.addEventListener("click", () =>
+	copy.addEventListener("click", () => {
+		clearTimeout(reset.timer);
+		if (input.value.trim() === "" || board() === undefined) {
+			status.textContent =
+				input.value.trim() === ""
+					? "Type your board’s address first."
+					: "That isn’t a web address. Check it and try again.";
+			input.focus();
+			return;
+		}
 		copyText(text(), (copied) => {
 			clearTimeout(reset.timer);
 			status.textContent = !copied
 				? "Copying was blocked. Select the prompt and copy it."
-				: input.value.trim() === ""
-					? "Copied. Put your board’s address in first."
-					: `Copied. ${card.dataset.copied ?? ""}`;
+				: `Copied. ${card.dataset.copied ?? ""}`;
 			if (copied) copy.textContent = "Copied";
 			reset.timer = setTimeout(() => {
 				copy.textContent = "Copy prompt";
 				status.replaceChildren(...idle.map((node) => node.cloneNode(true)));
 			}, 2400);
-		}),
-	);
+		});
+	});
 }
 
 // Birds stand on the tops of the wordmark's letters, measured from the glyphs themselves.
@@ -605,7 +610,8 @@ function perchOnWordmark(root: HTMLElement): void {
 	if (!text || !baseline) return;
 	const letters = [...text.querySelectorAll<HTMLElement>("[data-letter]")];
 	const birds = letters.map((letter) => {
-		const kind = (letter.dataset.letter ?? "chirp") as Bird;
+		const named = letter.dataset.letter;
+		const kind = isBird(named) ? named : "chirp";
 		const spot = element("div", "absolute -translate-x-1/2 -translate-y-[88%]");
 		const icon = birdIcon(
 			kind,
