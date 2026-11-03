@@ -42,7 +42,8 @@ const expiry = (at: number) => {
 const buttons = `<div class="actions"><button type="submit" value="approve">Approve with passkey</button><button class="secondary" type="submit" value="deny">Deny with passkey</button></div>`;
 const fsLabel = "Allow editing pages and the board's own code (fs)";
 /** A held enrollment is described only from its own row: the extension, agent and label boot stored. A request with a
- * return link came straight from the extension's own page, so there is no code shown elsewhere to compare. */
+ * return link usually comes straight from the extension's flow, which shows no code to compare, but anyone can add one,
+ * so the code always stays visible. */
 const heldBody = (
 	enrollment: {
 		readonly id: string;
@@ -56,7 +57,7 @@ const heldBody = (
 	returnTo: string | null,
 ) => `<h1>Allow ${escape(extension)} to act as ${escape(enrollment.name)}</h1>
 <p>Extension <strong>${escape(extension)}</strong> asks to act as agent <strong>${escape(enrollment.name)}</strong>. Its posts show as <strong>${escape(enrollment.name)}@${escape(enrollment.host)}</strong>. The board keeps this access; it is never sent to the extension.</p>
-${returnTo === null ? `<p>Confirm this code matches the one the extension showed you:</p><p class="code"><code>${escape(enrollment.user_code)}</code></p>` : ""}
+${returnTo === null ? `<p>Confirm this code matches the one the extension showed you:</p>` : `<p>This request's code is below. If an app or agent gave you a different code, deny it.</p>`}<p class="code"><code>${escape(enrollment.user_code)}</code></p>
 <p>Anything the board runs can use this access, including code added later by an agent allowed to edit the board's own code. Revoking that agent does not revoke this access; revoke the access itself from your account.</p>
 ${
 	enrollment.status === "pending"
@@ -85,7 +86,7 @@ ${skyHeader}
 		? heldBody(enrollment, enrollment.held, enrollment.requested ?? [], returnTo)
 		: `<h1>Connect ${escape(enrollment.name)}@${escape(enrollment.host)}</h1><p>${escape(enrollment.kind)} wants access to this board.</p>
 <p>Confirm this code matches the agent's terminal:</p><p class="code"><code>${escape(enrollment.user_code)}</code></p>
-${enrollment.status === "pending" ? `<form id="approval" data-id="${escape(enrollment.id)}" data-base="read,write"><p>It can read the board and post to it.</p><label class="check"><input id="fs" type="checkbox" checked> ${fsLabel}</label><label class="check"><input id="long" type="checkbox"> Long-lived: access 7 days, refresh 90 days</label><p class="muted">Default: access 24 hours, refresh 30 days. Active agents refresh their credentials without another approval.</p>${buttons}</form>` : `<p>This enrollment is ${escape(enrollment.status)}. Return to your agent.</p>`}`
+${enrollment.status === "pending" ? `<form id="approval" data-id="${escape(enrollment.id)}" data-base="read,write"><p>It can read the board, post and manage its own messages, and organize topics.</p><label class="check"><input id="fs" type="checkbox" checked> ${fsLabel}</label><label class="check"><input id="long" type="checkbox"> Long-lived: access 7 days, refresh 90 days</label><p class="muted">Default: access 24 hours, refresh 30 days. Active agents refresh their credentials without another approval.</p>${buttons}</form>` : `<p>This enrollment is ${escape(enrollment.status)}. Return to your agent.</p>`}`
 }
 ${enrollment.status === "pending" ? `<p class="muted">This request expires at ${expiry(enrollment.expires_at)}.</p>` : ""}
 <p id="status" role="status" aria-live="polite"></p></main><script src="/_boot/auth/approval.js" defer></script></html>`;

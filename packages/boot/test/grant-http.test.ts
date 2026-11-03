@@ -246,8 +246,11 @@ it("creates, approves and collects a held grant, then forwards it as the approve
 		await fetch(`${app.url}/approve/${created.id}?return=${encodeURIComponent("/mcp/oauth/authorize?state=a&b=<x>")}`)
 	).text();
 	expect(returned).toContain('data-return="/mcp/oauth/authorize?state=a&amp;b=%3Cx%3E"');
-	// A return link came from the extension's own page, so there is no code shown elsewhere to compare.
-	expect(returned).not.toContain("<code>");
+	// Anyone can add a return link, so the code stays visible; the page only stops asking for a comparison the flow
+	// never offered.
+	expect(returned).toContain(`<code>${created.user_code}</code>`);
+	expect(returned).toContain("If an app or agent gave you a different code, deny it.");
+	expect(returned).not.toContain("Confirm this code matches");
 	expect(returned).toContain('data-approved="Approved. Returning you to mcp…"');
 	for (const target of [
 		"https://evil.test/x",
