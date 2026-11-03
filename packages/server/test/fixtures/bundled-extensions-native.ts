@@ -12,6 +12,7 @@ import type { Api, BackgroundContext, RequestContext } from "../../src/kernel/ex
 import { work, type Work } from "../../src/kernel/extension-work.ts";
 import subscriptions from "../../src/ext/subscriptions/index.ts";
 import system from "../../src/ext/system.ts";
+import mcp from "../../src/ext/mcp/index.ts";
 import { makeStore } from "../../src/ext/subscriptions/store.ts";
 import { SubscriptionError, type Input } from "../../src/ext/subscriptions/contract.ts";
 
@@ -38,6 +39,9 @@ await Effect.runPromise(
 		// The fixture must receive an empty disposable database; it never drops existing data.
 		yield* sql`CREATE TABLE kernel_writer(singleton INTEGER PRIMARY KEY,epoch VARCHAR(64) NOT NULL)`;
 		yield* sql`INSERT INTO kernel_writer VALUES(1,'bundled-probe')`;
+		// Boot creates this guard on a real MySQL board; extension migrations refuse to run without it.
+		if (settings.engine === "mysql")
+			yield* sql`CREATE TABLE kernel_migration_intent(singleton INTEGER PRIMARY KEY CHECK(singleton=1),scope VARCHAR(255) NOT NULL,name VARCHAR(255) NOT NULL,epoch VARCHAR(128) NOT NULL) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin`;
 		yield* initializeRemoteKernelSchema(sql, "bundled-probe");
 		yield* protectionOwnershipOperation(sql).run;
 		const sequence = yield* Ref.make(3_000_000_000);
@@ -82,7 +86,8 @@ await Effect.runPromise(
 		};
 		type Start = (event: { readonly reason: "live" | "rehearsal" }, ctx: BackgroundContext) => Work<void> | void;
 		const starts: Start[] = [];
-		const apiFor = (migrate: Api["migrate"]): Api => ({
+		const apiFor = (migrate: Api["migrate"], origin?: string): Api => ({
+			origin,
 			migrate,
 			context: unavailable,
 			effects: {
@@ -110,6 +115,14 @@ await Effect.runPromise(
 		yield* system(systemApi);
 		yield* assertNoPendingMigration(sql);
 		assert.equal((yield* sql`SELECT name FROM extension_migrations`).length, 2);
+		// MCP ships in every seed, so its whole migration ladder runs on a fresh native board, and again as a no-op.
+		const mcpApi = apiFor(yield* makeExtensionMigrate(sql, "bundled-probe", "mcp"), "https://comms.test");
+		yield* mcp(mcpApi);
+		yield* mcp(mcpApi);
+		yield* assertNoPendingMigration(sql);
+		assert.ok((yield* sql`SELECT name FROM extension_migrations`).length > 2);
+		for (const table of ["example_mcp_oauth", "example_mcp_events", "example_mcp_grants"])
+			yield* sql`SELECT COUNT(*) AS count FROM ${sql(table)}`;
 		const who: RequestContext = {
 			...context,
 			agent: "probe",

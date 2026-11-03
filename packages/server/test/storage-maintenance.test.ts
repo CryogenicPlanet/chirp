@@ -129,6 +129,17 @@ it("drains an admitted body before capture while a concurrent source reload wait
 	await expect
 		.poll(async () => (await fixture.status(app.url, cookie)).traffic)
 		.toMatchObject({ frozen: true, admitted: 1 });
+	// Anonymous writes for the board's MCP extension never wait in the write gate, so a flood of them cannot fill the
+	// freeze queue signed-in writes wait in. They are told to retry; anonymous reads are admitted at once.
+	const flood = await Promise.all(
+		Array.from({ length: 40 }, () => fetch(`${app.url}/mcp`, { method: "POST", body: "{}" })),
+	);
+	for (const response of flood) {
+		expect(response.status).toBe(503);
+		expect(response.headers.get("retry-after")).toBe("2");
+	}
+	expect((await fetch(`${app.url}/.well-known/oauth-authorization-server`)).status).toBe(200);
+	expect((await fixture.status(app.url, cookie)).traffic).toMatchObject({ frozen: true, admitted: 1, queued: 0 });
 	// Observe rejection immediately, even if an upload assertion fails before reload is awaited.
 	const reload = app.post("/api/reload?release=1", {}, cookie).then(
 		(response) => ({ response, error: null }),

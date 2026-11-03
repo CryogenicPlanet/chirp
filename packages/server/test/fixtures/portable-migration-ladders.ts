@@ -70,6 +70,7 @@ const boot: BootChannel["Service"] = {
 	abort: unavailable,
 };
 const extensionApi = (migrate: Api["migrate"]): Api => ({
+	origin: undefined,
 	migrate,
 	context: unavailable,
 	effects: {

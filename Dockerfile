@@ -17,7 +17,6 @@ COPY packages/protocol packages/protocol
 COPY packages/storage packages/storage
 COPY packages/server packages/server
 COPY packages/ui packages/ui
-COPY examples/extensions/mcp examples/extensions/mcp
 RUN bun run build
 # The commit this image is built from, written beside boot's bundle rather than set as ENV, so no runtime variable can
 # change it. Boot reports it as revision in /health, /_boot/status and /.well-known/agent.json; an unset value reads as null.

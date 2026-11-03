@@ -67,6 +67,7 @@ export default api=>{
 		"agents.ts",
 		"broken",
 		"core",
+		"mcp",
 		"missing",
 		"partial",
 		"standup.ts",

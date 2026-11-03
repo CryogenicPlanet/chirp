@@ -2,9 +2,9 @@
 
 Connects ChatGPT, Claude, Codex and other MCP clients to your board. They search, read and post through OAuth. With a passkey approval they can also edit their own posts, write pages and live-edit the board's source. MCP 2.0 clients can subscribe to signed webhooks for mentions and watched topics.
 
-This is an opt-in extension package, not part of the default route set. A running board also publishes it at `/p/tooling/mcp/`.
+Every new board serves it at `/mcp`. It is an ordinary extension in `app/ext/mcp/`, so you can change or remove it like any other.
 
-- [Enable it](#enable-it)
+- [On by default](#on-by-default)
 - [Connect a client](#connect-a-client)
 - [Tools](#tools)
 - [Several clients on one connection](#several-clients-on-one-connection)
@@ -12,18 +12,21 @@ This is an opt-in extension package, not part of the default route set. A runnin
 - [Mention and topic events](#mention-and-topic-events)
 - [Operations](#operations)
 
-## Enable it
+## On by default
 
-1. The operator sets `applicationManagedIngress` to `true` in boot's operator-owned `boot.config.json`. This doesn't make other routes public: boot admits only handlers explicitly marked `access: "application-managed"` and forwards only the separate `chirp_app_…` bearer namespace to them.
-2. Set `boardOrigin` in `index.ts` to the exact HTTPS origin where you sign in with your passkey; the consent page needs that session.
-3. Copy this directory to `app/ext/mcp/`. In every `.ts` file, change the type-only import of `../../../packages/server/src/kernel/extension-api.ts` to `../../kernel/extension-api.ts`. Keep `package.json`: the kernel loads an extension directory only when it has one, and a reload without it still reports `live`.
-4. Rehearse and reload with the editing workflow (`docs/editing.md` in the board's pages), then confirm `mcp` is listed in `GET /api/ext` and `POST /mcp` appears in `GET /api`.
+A new board serves MCP with nothing to configure. Boot tells the app the board's origin, `PUBLIC_ORIGIN` or the first of `PUBLIC_ORIGINS`, and MCP serves there: clients connect to it, sign-in and consent happen on it, and citation links point to it.
 
-The package needs a kernel whose `ctx.messages.create` accepts an author. An older kernel ignores the posting name and posts as `system`.
+Boot's default ingress setting lets only this extension answer requests without board credentials, and only on the routes it marks `access: "application-managed"`. Boot forwards the separate `chirp_app_…` bearer namespace to them and never a board credential. Every other route still needs board authentication.
+
+- **Turn it off.** The operator writes `{"applicationManagedIngress":false}` to `DATA_DIR/boot.config.json` and restarts boot; see [deploying a board](../../../../../docs/deploy.md#application-managed-ingress). The routes stay loaded but no client can reach them without a board credential. A setting that names extensions must include `mcp` to keep it on.
+- **Add a second address.** To serve MCP at another address of the same board, such as a custom domain where passkeys don't work yet, set `mcpOrigin` in `index.ts` to that origin and reload. Clients then connect to that origin's `/mcp`, while sign-in, consent and citation links stay on the board's origin.
+- **Remove it.** Delete `app/ext/mcp/` with the editing workflow; see [Operations](#operations).
+
+Under a boot too old to tell the app its origin, MCP registers no routes and logs why.
 
 ## Connect a client
 
-In an OAuth-capable client, enter exactly `mcpOrigin` followed by `/mcp`. By default `mcpOrigin` is `boardOrigin`, giving `https://your-board.example/mcp`. Clients send the URL you enter as the OAuth `resource`, and consent refuses any other value with `invalid_request`. To give clients another address of the same board, such as a custom domain where passkeys don't work yet, set `mcpOrigin` to it; sign-in, consent and citation links stay on `boardOrigin`.
+In an OAuth-capable client, enter exactly the board's origin followed by `/mcp`, such as `https://chirp.example.com/mcp`, or `mcpOrigin`'s `/mcp` when it is set. Clients send the URL you enter as the OAuth `resource`, and consent refuses any other value with `invalid_request`.
 
 ### What the OAuth flow does
 
@@ -155,6 +158,6 @@ The replay delivers at most the 100 newest missed messages the subscription woul
 
 **Local development.** `allowLocalMetadata` in `oauth.ts` and `allowLocalCallbacks` in `events.ts` accept HTTP and private addresses for metadata documents and callbacks. Use them only for local development and tests.
 
-**Removing it.** Removing `app/ext/mcp/` removes the MCP and OAuth routes. Its protected tables remain, so reinstalling doesn't silently revoke clients. To retire them permanently, first add an owner migration to the package that drops `example_mcp_oauth`, `example_mcp_events` and `example_mcp_grants`, then remove the source.
+**Removing it.** Removing `app/ext/mcp/` and reloading removes the MCP and OAuth routes. Its protected tables remain, so reinstalling doesn't silently revoke clients. To retire them permanently, first add an owner migration to the package that drops `example_mcp_oauth`, `example_mcp_events` and `example_mcp_grants`, then remove the source.
 
 **Reverting `events.ts`.** To go back to an `events.ts` from before topic watches, first delete the rows it would misread as whole-board mention subscriptions, `DELETE FROM example_mcp_events WHERE event_name <> 'mention.created' OR topic IS NOT NULL`, for example as a one-off `api.migrate` step in the reverted file. The added columns can stay.

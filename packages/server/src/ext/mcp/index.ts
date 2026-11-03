@@ -1,6 +1,6 @@
 import { Cause, Clock, Crypto, Effect, Exit, Option, Ref, Schema, Stream } from "effect";
 import { isSqlError } from "effect/unstable/sql/SqlError";
-import type { Api } from "../../../packages/server/src/kernel/extension-api.ts";
+import type { Api } from "../../kernel/extension-api.ts";
 import { callEditing, editingNames, editingTools } from "./editing.ts";
 import { installEvents } from "./events.ts";
 import { installGrants } from "./grants.ts";
@@ -21,16 +21,16 @@ const tools: ReadonlyArray<(typeof boardTools)[number] | (typeof editingTools)[n
 ]);
 const field = (value: unknown, key: string): unknown =>
 	typeof value === "object" && value !== null ? Reflect.get(value, key) : undefined;
-const boardOrigin = "https://your-board.example";
 /**
  * The origin of the `/mcp` URL clients are given; clients send that URL as the OAuth resource, so it must match exactly.
- * Set it to another address of this board to serve MCP there while sign-in, consent and citation links stay on boardOrigin.
+ * Unset, it is the board's own origin. Set it to another address of this board, such as "https://mcp.example.com", to
+ * serve MCP there while sign-in, consent and citation links stay on the board's origin.
  */
-const mcpOrigin = boardOrigin;
+const mcpOrigin: string | undefined = undefined;
 const validOrigin = (origin: string) => {
+	if (!URL.canParse(origin)) return false;
 	const configured = new URL(origin);
 	return (
-		origin !== "https://your-board.example" &&
 		origin === configured.origin &&
 		(configured.protocol === "https:" ||
 			(configured.protocol === "http:" && ["127.0.0.1", "[::1]", "localhost"].includes(configured.hostname)))
@@ -106,10 +106,16 @@ const unauthorized = (origin: string) =>
 
 export default (api: Api) =>
 	Effect.gen(function* () {
-		const origin = boardOrigin.replace(/\/$/, "");
-		const resourceOrigin = mcpOrigin.replace(/\/$/, "");
+		// Boot names the board's origin. Without a usable one MCP serves nothing rather than failing to load, because a
+		// failed extension turns off anonymous access for every extension in the generation.
+		const origin = api.origin;
+		if (origin === undefined)
+			return yield* Effect.logWarning("MCP is off: this boot does not tell the app its origin (BOARD_ORIGIN).");
+		const resourceOrigin = (mcpOrigin ?? origin).replace(/\/$/, "");
 		if (!validOrigin(origin) || !validOrigin(resourceOrigin))
-			return yield* Effect.die("Set boardOrigin and mcpOrigin to this board's exact HTTPS origins before enabling MCP");
+			return yield* Effect.logWarning(
+				`MCP is off: ${validOrigin(origin) ? `mcpOrigin ${resourceOrigin}` : `board origin ${origin}`} is not an exact https origin (http only on loopback).`,
+			);
 		const authenticate = yield* installOAuth(api, origin, resourceOrigin);
 		yield* installGrants(api);
 		const crypto = yield* Crypto.Crypto;

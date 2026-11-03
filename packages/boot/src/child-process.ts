@@ -1,6 +1,8 @@
 import {
+	allExtensionsIngressProtocolVersion,
 	ingressProtocolHeader,
 	ingressProtocolVersion,
+	ingressSettingHeader,
 	healthReadyHeader,
 	kernelProtocolHeader,
 	writerEpochHeader,
@@ -199,7 +201,18 @@ export const launchChild = Effect.fn("launchChild")(function* (options: Launch, 
 								: Effect.fail(new ChildError({ code: "health_failed" })),
 						),
 					);
-					yield* Ref.set(applicationManagedIngress, response.headers[ingressProtocolHeader] === ingressProtocolVersion);
+					// Anonymous traffic goes only to a child whose dispatcher echoes exactly the setting it was given, so a tree
+					// mixing old and new kernel files is never trusted. One that cannot tell extensions apart is trusted
+					// only when the operator allows them all. Without a setting, nothing is allowed.
+					const sent = options.env.APPLICATION_MANAGED_INGRESS ?? "false";
+					const protocol = response.headers[ingressProtocolHeader];
+					yield* Ref.set(
+						applicationManagedIngress,
+						sent !== "false" &&
+							sent !== "[]" &&
+							((protocol === ingressProtocolVersion && response.headers[ingressSettingHeader] === sent) ||
+								(protocol === allExtensionsIngressProtocolVersion && sent === "true")),
+					);
 					return report;
 				}
 				if (response.headers[healthReadyHeader] === "1") return yield* new ChildError({ code: "health_failed" });

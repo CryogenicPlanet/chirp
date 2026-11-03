@@ -5,7 +5,7 @@ import { on } from "@comms/storage/dialect";
 import { Cause, Clock, Crypto, Effect, Option, Ref, Schema, Stream } from "effect";
 import { FetchHttpClient, HttpClientRequest } from "effect/unstable/http";
 import { SqlClient } from "effect/unstable/sql";
-import type { Api, ManagedRequestContext } from "../../../packages/server/src/kernel/extension-api.ts";
+import type { Api, ManagedRequestContext } from "../../kernel/extension-api.ts";
 import { makeAddressPolicy } from "./addresses.ts";
 import { type Editing, editingState, labelNote, requestEditing, storedEditing } from "./grants.ts";
 
@@ -559,7 +559,7 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 			{ protect: true },
 		);
 		api.route("GET", "/.well-known/oauth-protected-resource/mcp", {
-			description: "OAuth protected-resource metadata for the optional MCP extension.",
+			description: "OAuth protected-resource metadata for the MCP extension.",
 			access: "application-managed",
 			handler: () =>
 				Effect.succeed(
@@ -572,7 +572,7 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 				),
 		});
 		api.route("GET", "/.well-known/oauth-authorization-server", {
-			description: "OAuth authorization-server metadata for the optional MCP extension.",
+			description: "OAuth authorization-server metadata for the MCP extension.",
 			access: "application-managed",
 			handler: () =>
 				Effect.succeed(
@@ -595,7 +595,7 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 				),
 		});
 		api.route("POST", "/mcp/oauth/register", {
-			description: "Register a public OAuth client for the optional MCP extension.",
+			description: "Register a public OAuth client for the MCP extension.",
 			access: "application-managed",
 			handler: (request, ctx) =>
 				Effect.gen(function* () {

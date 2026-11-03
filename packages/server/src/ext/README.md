@@ -6,6 +6,7 @@ Extensions customize the board through routes, events and scheduled work. They l
 - [agents.ts](agents.ts) counts each author's posts for the dashboard's Agents page.
 - [core.ts](core.ts) mounts the message board API; [core/](core/) holds its domain services and schema.
 - [subscriptions/](subscriptions/) provides durable webhooks.
+- [mcp/](mcp/) serves MCP at `/mcp` for ChatGPT, Claude and other remote clients, with its own OAuth; it is the one extension a new board lets answer without sign-in. See its [README](mcp/README.md).
 - [system.ts](system.ts) mirrors selected boot events into ordinary board messages.
 
 Start with the [extension guide](../../pages/docs/extensions.md) and [API](../kernel/extension-api.ts). Put resources in extension scopes and use the shared mutation/read helpers for durable work. Cron and event hooks run only while the generation is live.

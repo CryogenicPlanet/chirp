@@ -22,7 +22,7 @@ it("runs kernel KV mutation/read and rolls back every probe row without publishi
 		.poll(() =>
 			fixture.sql("SELECT COUNT(*) count FROM events WHERE json_extract(event,'$.type')='ext.loaded'", "boot.db"),
 		)
-		.toEqual([{ count: 5 }]);
+		.toEqual([{ count: 6 }]);
 	expect(
 		await fixture.sql(
 			"SELECT COUNT(*) count FROM outbox WHERE json_extract(event,'$.instance') IS NOT 'extension:system.ts' AND json_extract(event,'$.type') NOT IN ('ext.loaded','pages.public')",
@@ -47,6 +47,12 @@ it("runs kernel KV mutation/read and rolls back every probe row without publishi
 			"boot.db",
 		),
 	).toEqual([{ type: "generation.starting" }, { type: "generation.live" }]);
+	// How much of the five-second health window startup used, as the remote board job reports it.
+	const live = await (
+		await fetch(`${app.url}/api/events?since=0&types=generation.live`, { headers: { cookie } })
+	).json();
+	expect(live.items[0].payload.health_ms).toBeGreaterThanOrEqual(0);
+	expect(live.items[0].payload.health_ms).toBeLessThanOrEqual(5000);
 	const posted = await app.post("/api/messages", { topic: "after-health", body: "ordinary writes publish" }, cookie);
 	expect(posted.status).toBe(200);
 	expect(await fixture.sql("SELECT COUNT(*) count FROM messages WHERE instance<>'extension:system.ts'")).toEqual([
@@ -129,7 +135,7 @@ it("rehearses a WAL-inclusive SQLite clone without changing live rows, epoch or 
 		.poll(() =>
 			fixture.sql("SELECT COUNT(*) count FROM events WHERE json_extract(event,'$.type')='ext.loaded'", "boot.db"),
 		)
-		.toEqual([{ count: 5 }]);
+		.toEqual([{ count: 6 }]);
 	expect((await app.post("/api/messages", { topic: "wal", body: "committed WAL data" }, cookie)).status).toBe(200);
 	expect((await stat(join(fixture.root, "comms.db-wal"))).size).toBeGreaterThan(32);
 	await cp(join(fixture.root, "comms.db"), join(fixture.root, "main-only.db"));

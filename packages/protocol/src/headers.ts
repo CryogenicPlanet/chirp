@@ -84,8 +84,15 @@ export const headerLabel = (name: string): string =>
 
 /** Generic boot-to-live ingress; callers cannot supply the target header. */
 export const ingressProtocolHeader = "x-chirp-ingress-protocol";
-/** Version 2 includes namespaced application bearer transport. */
-export const ingressProtocolVersion = "2";
+/**
+ * Version 2 includes namespaced application bearer transport. Version 3 also admits only the extensions named in the
+ * APPLICATION_MANAGED_INGRESS setting boot passes to the app, and echoes the setting it enforces in ingressSettingHeader.
+ */
+export const ingressProtocolVersion = "3";
+/** A kernel that admits every extension's managed routes. Boot forwards to one only when the operator allows all. */
+export const allExtensionsIngressProtocolVersion = "2";
+/** The ingress setting the extension dispatcher enforces, in the JSON encoding boot sent; boot requires an exact match. */
+export const ingressSettingHeader = "x-chirp-ingress-setting";
 export const ingressTargetHeader = "x-chirp-ingress-target";
 export const applicationIngressPath = "/_kernel/ingress";
 export const applicationCookiePrefix = "chirp_app_";

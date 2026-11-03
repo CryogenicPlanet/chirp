@@ -12,6 +12,7 @@ import { NetAddress } from "effect/unstable/net";
 import { FetchHttpClient, HttpServer } from "effect/unstable/http";
 import { Generations, type Generation } from "../../src/generations.ts";
 import { supervise } from "../../src/supervisor.ts";
+import type { IngressConfiguration } from "../../src/ingress-configuration.ts";
 
 const fixture = Effect.gen(function* () {
 	const fs = yield* FileSystem.FileSystem;
@@ -163,7 +164,14 @@ const case4 = Effect.scoped(
 			healthy: () => unused,
 			failed: () => unused,
 		});
-		const supervisor = yield* supervise({ dataDirectory: f.root, seedDirectory: f.source, entryFile: "server.ts" });
+		const supervisor = yield* supervise(
+			{ dataDirectory: f.root, seedDirectory: f.source, entryFile: "server.ts" },
+			{
+				origin: "https://comms.test",
+				ingress: yield* Ref.make<IngressConfiguration>({ applicationManagedIngress: false, error: null }),
+				firstSeed: Effect.void,
+			},
+		);
 		for (let attempt = 0; attempt < 2; attempt++) {
 			expect(
 				yield* supervisor

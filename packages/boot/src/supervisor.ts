@@ -6,6 +6,7 @@ import { render, type Store } from "@comms/storage/store";
 import { logRedactor } from "./log-redaction.ts";
 import {
 	Cause,
+	Clock,
 	Config,
 	Crypto,
 	Duration,
@@ -27,6 +28,7 @@ import type { Attempt } from "./event-http.ts";
 import { Generations, type Generation } from "./generations.ts";
 import { EventError, Events } from "./events.ts";
 import { traffic, type Traffic } from "./traffic.ts";
+import { encodeIngress, type IngressConfiguration } from "./ingress-configuration.ts";
 
 export interface ChildStatus {
 	readonly state: "starting" | "live" | "failed";
@@ -47,6 +49,15 @@ export interface ActiveChild {
 	readonly id: string;
 	readonly receipt: string;
 }
+/** What the app is told about the board it serves. Values come from boot's own configuration, never the app. */
+export interface BoardSettings {
+	/** The primary public origin, for links and metadata the app publishes about itself. */
+	readonly origin: string;
+	/** Which extensions' managed routes boot forwards anonymous traffic to, read at each launch. */
+	readonly ingress: Ref.Ref<IngressConfiguration>;
+	/** Runs once, just before the very first seed of the app, while nothing has been seeded yet. */
+	readonly firstSeed: Effect.Effect<void, never, FileSystem.FileSystem | Path.Path>;
+}
 export interface SupervisedChild {
 	readonly redact: (text: string) => string;
 	readonly status: Ref.Ref<ChildStatus>;
@@ -60,6 +71,7 @@ export interface SupervisedChild {
 /** Supervisor owns process recovery; the cutover coordinator shares its one operation gate. */
 export const supervise = Effect.fn("supervise")(function* (
 	options: ApplicationSource,
+	settings: BoardSettings,
 	remote?: RemoteRuntime,
 	redact = logRedactor([]),
 ) {
@@ -188,6 +200,8 @@ export const supervise = Effect.fn("supervise")(function* (
 						PAGES_DIRECTORY: path.resolve(options.dataDirectory, "pages"),
 						BOARD_DIRECTORY: board,
 						STATE: mode,
+						BOARD_ORIGIN: settings.origin,
+						APPLICATION_MANAGED_INGRESS: encodeIngress((yield* Ref.get(settings.ingress)).applicationManagedIngress),
 						...(mode === "rehearsal" ? { REHEARSAL_SEQUENCE: String(rehearsalSequence ?? 1) } : { BOOT_URL: callback }),
 					},
 				},
@@ -327,13 +341,16 @@ export const supervise = Effect.fn("supervise")(function* (
 				yield* recordAttempt(value, "starting");
 				yield* (yield* ChildAttempts).opened(value.id);
 				yield* value.process.control("go");
+				const probed = yield* Clock.currentTimeMillis;
 				yield* value.process.health.pipe(
 					Effect.timeoutOrElse({
 						duration: "5 seconds",
 						orElse: () => Effect.fail(new ChildError({ code: "health_failed" })),
 					}),
 				);
-				yield* (yield* Generations).healthy(generation.n);
+				// Recorded so operators can see how much of the five-second window startup used.
+				const health_ms = (yield* Clock.currentTimeMillis) - probed;
+				yield* (yield* Generations).healthy(generation.n, { health_ms });
 				yield* activate(value);
 			}).pipe(Effect.exit);
 			if (started._tag === "Failure") {
@@ -361,7 +378,7 @@ export const supervise = Effect.fn("supervise")(function* (
 		);
 	const recover = Effect.gen(function* () {
 		const generations = yield* Generations;
-		const choices = yield* prepareGeneration(options);
+		const choices = yield* prepareGeneration(options, settings.firstSeed);
 		for (const generation of choices) {
 			if (((yield* Ref.get(tried))[generation.n] ?? 0) >= 3) continue;
 			for (let attempt = ((yield* Ref.get(tried))[generation.n] ?? 0) + 1; attempt <= 3; attempt++) {

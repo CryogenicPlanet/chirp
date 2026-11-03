@@ -13,6 +13,7 @@ export const RehearsalReport = Schema.Struct({
 				method: bounded(16),
 				path: bounded(1024),
 				access: Schema.Literal("application-managed"),
+				inactive: Schema.optionalKey(Schema.Literal("ingress_not_allowed")),
 			}),
 		).pipe(Schema.check(Schema.isMaxLength(16))),
 	),

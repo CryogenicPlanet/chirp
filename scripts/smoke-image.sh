@@ -35,10 +35,12 @@ wait_for_app() {
 }
 wait_for_app
 curl --fail --silent --max-time 2 "http://127.0.0.1:$port/health" >/dev/null
+# A fresh board serves MCP's OAuth discovery anonymously, naming the origin boot runs at (http://localhost:8080 by default).
+docker exec "$container" bun -e 'const r=await fetch("http://127.0.0.1:8080/.well-known/oauth-authorization-server"); const v=r.status===200 ? await r.json() : {}; if(v.issuer!=="http://localhost:8080"){console.error(`MCP discovery: HTTP ${r.status}`); process.exit(1);}'
 test "$(docker exec --user 1000:1000 "$container" id -u)" = 1000
 docker exec --user 1000:1003 "$container" sh -ec '
 	test -f /data/boot.db && test -f /data/store/comms.db
-	test -f /data/app/server.ts && test -f /data/pages/init.md && test -f /data/pages/tooling/mcp/index.ts
+	test -f /data/app/server.ts && test -f /data/pages/init.md && test -f /data/app/ext/mcp/index.ts
 	test -f /opt/comms/packages/boot/dist/child-keeper.js
 	test -f /opt/comms/packages/boot/dist/sqlite-copy-worker.js
 	test -f /opt/comms/packages/boot/dist/sqlite-copy-keeper.js

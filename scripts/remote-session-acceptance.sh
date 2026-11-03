@@ -79,7 +79,7 @@ GRANT SELECT ON performance_schema.data_lock_waits TO 'comms_app'@'%';
 GRANT SELECT ON performance_schema.threads TO 'comms_app'@'%';
 """
 # Each parity case owns an initially empty app/boot pair; no shared test tables.
-parity_databases=['comms_mutation_app','comms_mutation_boot','comms_read_marks','comms_protection']
+parity_databases=['comms_mutation_app','comms_mutation_boot','comms_read_marks','comms_protection','comms_schema_bundled']
 parity_databases += [f'comms_outbox_{mode}_{side}' for mode in ['pending','incomplete','bounded'] for side in ['app','boot']]
 for database in parity_databases:
  if engine=='pg':
@@ -139,7 +139,7 @@ import json,pathlib,sys
 p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()); d['port']=int(sys.argv[2]); p.write_text(json.dumps(d))
 for database,name in [('comms_collation_boot','collation'),('comms_concurrency_app','concurrency-app'),('comms_concurrency_boot','concurrency-boot'),('comms_schema_guard','guard'),('comms_schema_core','core'),('comms_schema_json_crash','json-crash'),('comms_shared_store','dialect'),('comms_search_mysql','mysql-search'),('comms_failed_lease','failed-lease'),('comms_read_cleanup','read-cleanup'),('comms_snapshot_boot','snapshot-boot'),('comms_snapshot_app','snapshot-app')]:
  d['database']=database; (p.parent/(name+'.json')).write_text(json.dumps(d))
-for database,name in [('comms_mutation_app','mutation-app'),('comms_mutation_boot','mutation-boot'),('comms_read_marks','read-marks'),('comms_protection','protection')]:
+for database,name in [('comms_mutation_app','mutation-app'),('comms_mutation_boot','mutation-boot'),('comms_read_marks','read-marks'),('comms_protection','protection'),('comms_schema_bundled','bundled')]:
  d['database']=database; (p.parent/(name+'.json')).write_text(json.dumps(d))
 for mode in ['pending','incomplete','bounded']:
  for side in ['app','boot']:
@@ -172,6 +172,9 @@ COMMS_REMOTE_CORE_JSON_CRASH_CONFIG="$private/json-crash.json" \
   node node_modules/vitest/vitest.mjs run packages/server/test/remote-core-schema.test.ts packages/server/test/remote-core-json-crash.test.ts --maxWorkers=1 --reporter=verbose
 COMMS_MIGRATION_GUARD_CONFIG="$private/guard.json" \
   node node_modules/vitest/vitest.mjs run packages/server/test/kernel/migration-state-remote.test.ts --maxWorkers=1 --reporter=verbose
+# Every seed extension's migrations, MCP's included, on a fresh native database.
+COMMS_BUNDLED_EXTENSIONS_TEST_CONFIG="$private/bundled.json" \
+  node node_modules/vitest/vitest.mjs run packages/server/test/bundled-extensions-native.test.ts --maxWorkers=1 --reporter=verbose
 COMMS_TEST_ENGINE="$engine" COMMS_TEST_STORE_CONFIG="$private/dialect.json" \
   node node_modules/vitest/vitest.mjs run packages/server/test/kernel/remote-dialect-semantics.test.ts --maxWorkers=1 --reporter=verbose
 COMMS_FAILED_LEASE_CONFIG="$private/failed-lease.json" \

@@ -1,7 +1,7 @@
 import {
 	headerPrefix,
 	ingressProtocolHeader,
-	ingressProtocolVersion,
+	ingressSettingHeader,
 	healthReadyHeader,
 	kernelProtocolHeader,
 	readinessHeader,
@@ -61,6 +61,7 @@ import { routes as pageRoutes } from "./pages-http.ts";
 import type { HttpPlatform } from "effect/unstable/http/HttpPlatform";
 import { routes } from "./conversation.ts";
 import { Extensions, layer as extensionsLayer } from "./kernel/ext.ts";
+import { boardSettings } from "./kernel/board-settings.ts";
 import { failure } from "./conversation-request.ts";
 import { reconstructPublicPages } from "./ext/core/public-page-policy.ts";
 import { backupSchedule } from "./backup-schedule.ts";
@@ -83,6 +84,7 @@ const server = Effect.gen(function* () {
 		const boardDirectory = yield* Config.String("BOARD_DIRECTORY").pipe(
 			Config.withDefault(`${import.meta.dirname}/board`),
 		);
+		const settings = yield* boardSettings;
 		const lifecycle = yield* Lifecycle;
 		const migrationWarnings = yield* MigrationWarnings;
 		const http = yield* HttpServer.HttpServer;
@@ -125,7 +127,12 @@ const server = Effect.gen(function* () {
 					>();
 					yield* Ref.set(initializePublicPages, reconstructPublicPages.pipe(Effect.provideContext(publicPagesContext)));
 					const extensionContext = yield* Layer.build(
-						extensionsLayer(`${import.meta.dirname}/ext`, yield* extensionCapabilities, publication.wake),
+						extensionsLayer(
+							`${import.meta.dirname}/ext`,
+							yield* extensionCapabilities,
+							publication.wake,
+							settings.board,
+						),
 					);
 					const extensions = Context.get(extensionContext, Extensions);
 					yield* Ref.set(extensionState, extensions.changeState);
@@ -183,7 +190,12 @@ const server = Effect.gen(function* () {
 										headers: {
 											[writerEpochHeader]: boot.epoch,
 											[kernelProtocolHeader]: "2",
-											...(extensions.ingressReady ? { [ingressProtocolHeader]: ingressProtocolVersion } : {}),
+											...(extensions.ingressReady ? { [ingressProtocolHeader]: settings.ingressProtocol } : {}),
+											// Boot compares this with what it sent. A dispatcher from before the echo reports
+											// none, and boot then forwards it no anonymous traffic.
+											...(typeof extensions.ingressSetting === "string"
+												? { [ingressSettingHeader]: extensions.ingressSetting }
+												: {}),
 											[rehearsalReportHeader]: "1",
 										},
 									},

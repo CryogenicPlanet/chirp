@@ -3,7 +3,7 @@ import { expect, it } from "vitest";
 import { ingressCutover } from "./fixtures/application-ingress-cutover.ts";
 import { sourcePut } from "./fixtures/source-put.ts";
 
-it("rechecks a queued anonymous write against the new generation's private route", async (test) => {
+it("refuses an anonymous write during a cutover instead of queueing it for the new generation's private route", async (test) => {
 	const fixture = await ingressCutover(test);
 	const app = await fixture.launch();
 	await app.setup();
@@ -37,24 +37,22 @@ it("rechecks a queued anonymous write against the new generation's private route
 	).toBe(200);
 	const reload = app.post("/api/reload", {}, cookie);
 	void reload.catch(() => undefined);
-	let pending: Promise<Response> | undefined;
 	let candidate = 0;
 	try {
 		candidate = await fixture.wait();
 		expect(candidate).not.toBe(old.pid);
 		expect((await status()).traffic.frozen).toBe(true);
-		pending = write("queued-must-not-write");
-		void pending.catch(() => undefined);
-		// Positive queue evidence ensures the request was admitted before changing generations.
-		await expect.poll(async () => (await status()).traffic.queued).toBe(1);
+		// Anonymous traffic never waits behind the freeze, so nothing can carry it over to the new generation.
+		const refused = await write("frozen-must-not-write");
+		expect(refused.status).toBe(503);
+		expect(refused.headers.get("retry-after")).toBe("2");
+		expect((await status()).traffic.queued).toBe(0);
 	} finally {
 		await fixture.release();
 		await reload.catch(() => undefined);
 	}
 	expect(await (await reload).json()).toMatchObject({ status: "live" });
 	expect((await status()).child.pid).toBe(candidate);
-	if (!pending) throw Error("Missing queued request");
-	expect((await pending).status).toBe(401);
 	expect((await write("after-must-not-write")).status).toBe(401);
 	expect(await fixture.sql("SELECT body FROM messages WHERE topic='ingress-cutover' ORDER BY seq")).toEqual([
 		{ body: "before-cutover" },

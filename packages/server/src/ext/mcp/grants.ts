@@ -1,7 +1,7 @@
 import { on } from "@comms/storage/dialect";
 import { Clock, Effect, Option, Schema } from "effect";
 import { SqlClient } from "effect/unstable/sql";
-import type { Api, ManagedRequestContext } from "../../../packages/server/src/kernel/extension-api.ts";
+import type { Api, ManagedRequestContext } from "../../kernel/extension-api.ts";
 
 type Context = ManagedRequestContext;
 const GrantScope = Schema.Literals(["read", "write", "fs"]);

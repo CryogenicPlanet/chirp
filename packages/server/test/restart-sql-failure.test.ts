@@ -10,7 +10,7 @@ async function failingRestart(test: TestContext, boundary: "backup" | "accepted"
 	const fixture = await resetFixture(test);
 	const generations = join(fixture.boot, "src/generations.ts");
 	const source = await readFile(generations, "utf8");
-	const needle = "healthy: (n: number) =>\n\t\t\tEffect.gen(function* () {";
+	const needle = "healthy: (n: number, payload: Schema.Json = {}) =>\n\t\t\tEffect.gen(function* () {";
 	expect(source.split(needle)).toHaveLength(2);
 	await writeFile(
 		generations,

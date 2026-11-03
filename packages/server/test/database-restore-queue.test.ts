@@ -102,6 +102,19 @@ it("queues reads across real database restore and rechecks logged-out sessions w
 	const privatePage = fetch(`${app.url}/p/public-new/index.md`, { signal: controller.signal });
 	const pageRead = fetch(`${app.url}/p/public-kept/index.md?raw=1`, { signal: controller.signal, headers: { cookie } });
 	await expect.poll(state).toEqual({ frozen: true, admitted: 0, queued: 3 });
+	// Anonymous traffic for the board's MCP extension never queues, so a flood of it cannot fill the freeze queue
+	// that signed-in requests wait in. A restore withdraws the live app, so it gets the sign-in challenge at once.
+	const flood = await Promise.all(
+		Array.from({ length: 40 }, (_, index) =>
+			fetch(`${app.url}/mcp`, {
+				method: index % 2 ? "POST" : "GET",
+				...(index % 2 ? { body: "{}" } : {}),
+				signal: controller.signal,
+			}),
+		),
+	);
+	for (const response of flood) expect(response.status).toBe(401);
+	expect(await state()).toEqual({ frozen: true, admitted: 0, queued: 3 });
 	expect((await app.post("/_boot/auth/logout", {}, revoked)).status).toBe(204);
 	expect((await fetch(`${app.url}/auth/login`)).status).toBe(200);
 	await writeFile(release, "continue");

@@ -24,6 +24,7 @@ import { extensionData } from "./extension-data.ts";
 import { runEvents } from "./extension-events.ts";
 import { discoverExtensions } from "./extension-discovery.ts";
 import type { Api, CronContext, EventHandler, Hook, RouteOptions, ExtensionServices } from "./extension-api.ts";
+import { type BoardSettings, encodeIngressSetting } from "./board-settings.ts";
 
 interface CronJob {
 	readonly expression: string;
@@ -61,8 +62,11 @@ const factory = Schema.Struct({
 export class Extensions extends Context.Service<Extensions, Effect.Success<ReturnType<typeof make>>>()(
 	"comms/server/Extensions",
 ) {}
-const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect.Effect<void>) =>
+const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect.Effect<void>, board: BoardSettings) =>
 	Effect.gen(function* () {
+		// Read eagerly: a stale caller that passes no settings fails here rather than admitting every extension.
+		const ingress = board.ingress;
+		const admits = (extension: string) => (typeof ingress === "boolean" ? ingress : ingress.includes(extension));
 		const path = yield* Path.Path;
 		const sql = yield* SqlClient.SqlClient;
 		const crypto = yield* Crypto.Crypto;
@@ -139,6 +143,7 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 				{ name, status: "loaded", load_ms: 0, error: null } satisfies Status,
 			]);
 			const api: Api = {
+				origin: board.origin,
 				effects,
 				context: (scope) =>
 					Effect.gen(function* () {
@@ -437,7 +442,14 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 				ingress: selected
 					.filter((route) => route.access === "application-managed")
 					.slice(0, 16)
-					.map(({ extension, method, path }) => ({ extension, method, path, access: "application-managed" })),
+					.map(({ extension, method, path }) => ({
+						extension,
+						method,
+						path,
+						access: "application-managed",
+						// Listed so a rehearsal shows a route that boot's ingress setting keeps private.
+						...(admits(extension) ? {} : { inactive: "ingress_not_allowed" }),
+					})),
 				ingress_overflow: Math.max(0, selected.filter((route) => route.access === "application-managed").length - 16),
 				suppressed: records.slice(0, 64),
 				suppressed_overflow: reports.reduce(
@@ -460,6 +472,8 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 		for (const route of selected) matcher.on(route.method, route.path, route);
 		return {
 			ingressReady,
+			/** The setting dispatch enforces, echoed to boot, which forwards anonymous traffic only when it matches. */
+			ingressSetting: encodeIngressSetting(ingress),
 			registrations: selected,
 			openapi: document(selected, documents),
 			diagnostics: Ref.get(diagnostics),
@@ -489,8 +503,17 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 			dispatch: <A, E, R>(fallback: Effect.Effect<A, E, R>) =>
 				Effect.gen(function* () {
 					const incoming = yield* HttpServerRequest.HttpServerRequest;
-					const selection = yield* selectRequest(matcher, incoming).pipe(Effect.result);
-					if (selection._tag === "Failure")
+					const selection = yield* selectRequest(matcher, incoming, (route) => admits(route.extension)).pipe(
+						Effect.result,
+					);
+					// The allow list is checked again here, in the file that echoes it to boot, so a stale matcher that ignores
+					// the predicate still cannot hand anonymous traffic to an extension the setting leaves out.
+					const refused =
+						selection._tag === "Failure" ||
+						(selection.success?.envelope === true &&
+							(selection.success.matched.handler.access !== "application-managed" ||
+								!admits(selection.success.matched.handler.extension)));
+					if (refused)
 						return HttpServerResponse.jsonUnsafe(
 							{
 								error: {
@@ -627,5 +650,10 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 				}),
 		};
 	});
-export const layer = (directory: string, capabilities: CapabilityFactory, onWork: Effect.Effect<void> = Effect.void) =>
-	Layer.effect(Extensions, make(directory, capabilities, onWork)).pipe(Layer.provide(FetchHttpClient.layer));
+/** Every argument is required, so a caller from before ingress settings fails instead of admitting everything. */
+export const layer = (
+	directory: string,
+	capabilities: CapabilityFactory,
+	onWork: Effect.Effect<void>,
+	board: BoardSettings,
+) => Layer.effect(Extensions, make(directory, capabilities, onWork, board)).pipe(Layer.provide(FetchHttpClient.layer));
