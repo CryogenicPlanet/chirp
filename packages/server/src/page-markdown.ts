@@ -40,6 +40,8 @@ const pageStyle = [
 	".markdown-body hr{height:1px;background:#e6e2da}.markdown-body blockquote{color:#5c6577;border-left:3px solid #918c82}.markdown-body mark{background:#ffe37a;color:inherit;border-radius:3px;padding:0 2px}.markdown-body strong{font-weight:650}",
 	'.markdown-body code,.markdown-body kbd,.markdown-body pre,.markdown-body samp,.markdown-body tt{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace}.markdown-body code,.markdown-body tt{background:#f1eee7;box-shadow:0 0 0 1px #e6e2da;border-radius:4px}.markdown-body kbd{background:#f1eee7;color:#202a3a}',
 	".markdown-body pre{background:#f1eee7;color:#202a3a;border-radius:12px;box-shadow:inset 0 0 0 1px #e6e2da}.markdown-body pre>code,.markdown-body pre tt{box-shadow:none;padding:0}",
+	// highlight.js's GitHub theme is tuned for a near-white background; these four token colours fall under 4.5:1 on wash.
+	".hljs-doctag,.hljs-keyword,.hljs-meta .hljs-keyword,.hljs-template-tag,.hljs-template-variable,.hljs-type,.hljs-variable.language_{color:#b4412f}.hljs-built_in,.hljs-symbol{color:#a14a10}.hljs-name,.hljs-quote,.hljs-selector-pseudo,.hljs-selector-tag,.hljs-addition{color:#237a4c}.hljs-code,.hljs-comment,.hljs-formula{color:#5c6577}",
 	".markdown-body table th,.markdown-body table td{border-color:#e6e2da}.markdown-body table th:not([align]){text-align:left}.markdown-body table,.markdown-body li::marker{font-variant-numeric:normal}.markdown-body table tr{background:transparent;border-top-color:#e6e2da}.markdown-body table tr:nth-child(2n){background:#f1eee7}.markdown-body .footnotes{color:#5c6577;border-top-color:#e6e2da}",
 ].join("");
 // chirp.wiki's favicon (packages/landing/public/favicon.svg), inline so it needs no signed-in request.
