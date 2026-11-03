@@ -12,11 +12,29 @@ const safeHref = (href: string, base: string) => {
 		return undefined;
 	}
 };
-const linkClass = "text-primary underline underline-offset-[3px] hover:text-primary-hover";
+const linkClass =
+	"rounded-sm font-medium text-ink underline decoration-ink/30 underline-offset-[3px] transition-[text-decoration-color] hover:decoration-ink";
+// Message references (#12) and mentions, using the server's mention grammar (ext/core/message-mentions.ts):
+// the whole @path is consumed, then trailing punctuation is trimmed.
+const reference =
+	/((?<![\w/#])#[1-9][0-9]*(?!\w)|(?<![\p{L}\p{N}\p{M}@/:])@[a-z0-9][a-z0-9._/-]*(?![\p{L}\p{N}\p{M}@/._-]))/u;
+const mention = /^@[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)*$/;
 const referenceText = (text: string): ReactNode =>
-	text.split(/((?<![\w/#])#[1-9][0-9]*(?![\w]))/u).map((part, index) => {
-		const seq = /^#[1-9][0-9]*$/.test(part) ? Number(part.slice(1)) : 0;
-		return Number.isSafeInteger(seq) && seq > 0 ? (
+	text.split(reference).map((part, index) => {
+		// split puts each match at an odd index.
+		if (index % 2 === 0) return part;
+		if (part.startsWith("@")) {
+			const target = part.replace(/[._-]+$/u, "");
+			if (target.length > 200 || !mention.test(target)) return part;
+			return (
+				<span key={index}>
+					<mark className="rounded-[3px] bg-marker px-0.5 text-ink">{target}</mark>
+					{part.slice(target.length)}
+				</span>
+			);
+		}
+		const seq = Number(part.slice(1));
+		return Number.isSafeInteger(seq) ? (
 			<Link className={linkClass} key={index} href={messageHref(seq)}>
 				{part}
 			</Link>
@@ -28,21 +46,22 @@ const referenceText = (text: string): ReactNode =>
 // Static classes for the renderer's allowlisted elements; no typography plugin is needed.
 const markdownClasses: Readonly<Record<string, string>> = {
 	p: "my-2.5",
-	h1: "mt-4 mb-2 text-base leading-snug font-medium tracking-normal",
-	h2: "mt-4 mb-2 text-base font-medium tracking-normal",
-	h3: "mt-4 mb-2 text-base font-medium tracking-normal",
-	h4: "mt-4 mb-2 text-base font-medium tracking-normal",
-	h5: "mt-4 mb-2 text-base font-medium tracking-normal",
-	h6: "mt-4 mb-2 text-base font-medium tracking-normal",
-	ul: "my-2.5 list-disc pl-6",
-	ol: "my-2.5 list-decimal pl-6",
-	blockquote: "my-2.5 border-l-[3px] border-accent pl-3.5 text-muted-foreground",
-	code: "rounded-sm bg-tag-surface px-1 py-0.5 text-xs",
-	pre: "my-2.5 overflow-x-auto rounded-md bg-tag-surface p-3 whitespace-pre [&_code]:p-0",
-	table: "my-2.5 block border-collapse overflow-x-auto",
-	th: "border border-input px-2.5 py-1.5 text-left",
-	td: "border border-input px-2.5 py-1.5 text-left",
-	hr: "my-4 border-0 border-t border-input",
+	strong: "font-semibold",
+	h1: "mt-5 mb-2 text-[18px] leading-snug font-semibold tracking-[-0.015em]",
+	h2: "mt-5 mb-2 text-[16.5px] leading-snug font-semibold tracking-[-0.01em]",
+	h3: "mt-4 mb-2 text-[15px] font-semibold",
+	h4: "mt-4 mb-2 text-[15px] font-semibold",
+	h5: "mt-4 mb-2 text-[15px] font-semibold",
+	h6: "mt-4 mb-2 text-[15px] font-semibold",
+	ul: "my-2.5 list-disc pl-6 marker:text-slate [&>li:has(>input:first-child)]:-ml-5 [&>li:has(>input:first-child)]:list-none",
+	ol: "my-2.5 list-decimal pl-6 marker:text-slate",
+	blockquote: "my-2.5 border-l-[3px] border-edge pl-3.5 text-slate",
+	code: "rounded bg-wash px-1 py-px font-mono text-[0.86em] ring-1 ring-rule",
+	pre: "my-3 overflow-x-auto rounded-xl bg-wash px-4 py-3 font-mono text-[13px] leading-relaxed whitespace-pre ring-1 ring-rule [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-[1em] [&_code]:ring-0",
+	table: "my-3 block border-collapse overflow-x-auto text-[14px]",
+	th: "border border-rule bg-wash px-2.5 py-1.5 text-left font-semibold",
+	td: "border border-rule px-2.5 py-1.5 text-left",
+	hr: "my-5 border-0 border-t border-rule",
 };
 
 /** Untrusted Markdown becomes React nodes; raw HTML stays text and images require a click. */
@@ -89,7 +108,7 @@ export function Markdown({ body, base = "/" }: { readonly body: string; readonly
 			if (tag === "input")
 				return (
 					<input
-						className="mr-1.5 accent-primary"
+						className="mr-1.5 accent-ink"
 						key={key}
 						type="checkbox"
 						checked={node.hasAttribute("checked")}
@@ -139,6 +158,8 @@ export function Markdown({ body, base = "/" }: { readonly body: string; readonly
 		return Array.from(document.body.childNodes, (node, index) => render(node, index));
 	}, [body, base]);
 	return (
-		<div className="text-[13px] leading-[1.85] wrap-anywhere [&>:first-child]:mt-0 [&>:last-child]:mb-0">{content}</div>
+		<div className="text-[15px] leading-[1.6] wrap-anywhere text-ink [&>:first-child]:mt-0 [&>:last-child]:mb-0">
+			{content}
+		</div>
 	);
 }

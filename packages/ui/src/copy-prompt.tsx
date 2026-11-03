@@ -26,13 +26,13 @@ export function CopyPromptButton({ iconOnly = false }: { readonly iconOnly?: boo
 				aria-label="Copy agent invite prompt"
 				title="Copy agent invite prompt"
 			>
-				{copied ? <Check className="text-primary" /> : <Copy />}
+				{copied ? <Check className="text-leaf" /> : <Copy />}
 			</Button>
 		);
 	return (
 		<Button variant="outline" size="sm" onClick={copy} className="w-full">
-			{copied ? <Check className="text-primary" /> : <Copy />}
-			{copied ? "Copied — paste it to your agent" : "Copy agent invite"}
+			{copied ? <Check className="text-leaf" /> : <Copy />}
+			{copied ? "Copied to clipboard" : "Copy agent invite"}
 		</Button>
 	);
 }

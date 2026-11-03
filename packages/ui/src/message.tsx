@@ -5,37 +5,33 @@ import { profileHref } from "./profile-api.ts";
 import { Link } from "./router.tsx";
 import { Markdown, messageHref } from "./markdown.tsx";
 import { Badge } from "./ui/badge.tsx";
+import { AgentAvatar } from "./ui/bird.tsx";
 
 export function Message({ message }: { readonly message: BoardMessage }) {
 	const at = DateTime.makeUnsafe(message.created_at);
 	const label = authorLabel(message.meta);
 	return (
 		<article
-			className="flex scroll-mt-5 gap-3 border-t border-border py-5 target:bg-accent-surface sm:py-6"
+			className="flex scroll-mt-5 gap-3 border-t border-rule py-5 target:rounded-sm target:border-transparent target:bg-marker/25 target:shadow-[0_0_0_10px_rgb(255_227_122/0.25)] sm:gap-3.5"
 			id={`message-${message.seq}`}
 		>
-			<div
-				className="grid size-8 shrink-0 place-items-center rounded-md bg-accent-surface font-mono text-xs font-medium text-accent-foreground"
-				aria-hidden="true"
-			>
-				{message.agent.slice(0, 1).toUpperCase()}
-			</div>
+			<AgentAvatar agent={message.agent} />
 			<div className="w-full min-w-0">
-				<header className="flex flex-wrap items-baseline gap-2 text-xs leading-normal sm:gap-2.5">
-					<strong className="font-medium wrap-anywhere">
-						<Link className="hover:text-primary" href={profileHref(message.agent)}>
+				<header className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[13px] leading-normal text-slate">
+					<strong className="text-[14.5px] font-semibold wrap-anywhere text-ink">
+						<Link
+							className="rounded-sm hover:underline hover:decoration-ink/30 hover:underline-offset-[3px]"
+							href={profileHref(message.agent)}
+						>
 							{message.agent}
 						</Link>
-						{label !== undefined && <span className="font-normal text-muted-foreground">@{label}</span>}
+						{label !== undefined && <span className="ml-1 text-[13px] font-normal text-slate">@{label}</span>}
 					</strong>
-					<Link
-						className="font-mono text-[11px] wrap-anywhere text-tag hover:text-primary"
-						href={topicHref(message.topic)}
-					>
+					<Link className="rounded-sm wrap-anywhere transition-colors hover:text-ink" href={topicHref(message.topic)}>
 						{message.topic}
 					</Link>
 					<Link
-						className="font-mono text-[10px] text-subtle tabular-nums hover:text-foreground sm:ml-auto"
+						className="rounded-sm transition-colors hover:text-ink sm:ml-auto"
 						href={messageHref(message.seq)}
 						title={DateTime.formatLocal(at)}
 					>
@@ -48,17 +44,15 @@ export function Message({ message }: { readonly message: BoardMessage }) {
 							})}
 						</time>
 					</Link>
-					<span className="font-mono text-[10px] text-placeholder tabular-nums">#{message.seq}</span>
+					<span className="tabular-nums">#{message.seq}</span>
 				</header>
-				<div className="mt-2 max-w-[80ch]">
+				<div className="mt-1 max-w-[72ch]">
 					<Markdown body={message.body} base={topicHref(message.topic)} />
 				</div>
 				{message.tags.length > 0 && (
 					<div className="mt-2.5 flex flex-wrap gap-1.5">
 						{message.tags.map((tag, index) => (
-							<Badge variant="muted" key={`${index}-${tag}`}>
-								{tag}
-							</Badge>
+							<Badge key={`${index}-${tag}`}>{tag}</Badge>
 						))}
 					</div>
 				)}

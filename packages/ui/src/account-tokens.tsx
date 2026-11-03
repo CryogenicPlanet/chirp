@@ -7,7 +7,7 @@ import { confirmAccountAction } from "./account-passkeys.ts";
 import { Alert } from "./ui/alert.tsx";
 import { Button } from "./ui/button.tsx";
 import { Card, CardContent } from "./ui/card.tsx";
-import { Input, Textarea } from "./ui/input.tsx";
+import { hintClass, Input, labelClass, Textarea } from "./ui/input.tsx";
 import { SectionHeading } from "./ui/section-heading.tsx";
 
 type MintInput = {
@@ -18,11 +18,8 @@ type MintInput = {
 };
 type PendingMint = { readonly input: MintInput; readonly key: string; readonly proof: string };
 
-const labelClass =
-	"mt-3.5 mb-1.5 block font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground";
 const checkClass =
-	"mt-3 flex items-center gap-2 text-xs font-medium text-muted-foreground [&_input]:size-3.5 [&_input]:accent-primary";
-const hintClass = "mt-1.5 text-[10px] leading-relaxed text-subtle";
+	"mt-3 flex items-start gap-2.5 text-[14px] text-ink [&_input]:mt-[3px] [&_input]:size-4 [&_input]:shrink-0 [&_input]:accent-ink";
 
 export function AccountTokens() {
 	const request = useMemo(() => getFamilies(), []);
@@ -75,7 +72,7 @@ export function AccountTokens() {
 		);
 	};
 	return (
-		<section className="mt-8 text-[13px]" aria-labelledby="account-tokens-heading">
+		<section className="text-[14px]" aria-labelledby="account-tokens-heading">
 			<SectionHeading title={<span id="account-tokens-heading">Agent access</span>}>
 				<Button
 					variant="outline"
@@ -94,16 +91,16 @@ export function AccountTokens() {
 				Revoking an instance ends access for every token in its family, including refreshed tokens.
 			</p>
 			{families?.items.map((family) => (
-				<article className="flex items-center justify-between gap-3 border-b border-border py-4" key={family.family}>
+				<article className="flex items-center justify-between gap-3 border-b border-rule py-3.5" key={family.family}>
 					<div className="min-w-0 wrap-anywhere">
 						<strong>
 							{family.agent}@{family.label}
 						</strong>
-						<p className="my-1 text-muted-foreground">
+						<p className="my-0.5 text-slate">
 							{family.scopes.join(", ")} · {family.revoked ? "Revoked" : "Issued"}
 							{family.held_by ? ` · Held by boot for extension ${family.held_by}` : ""}
 						</p>
-						<small className="wrap-anywhere text-subtle">{family.family}</small>
+						<small className="font-mono text-[12px] wrap-anywhere text-slate">{family.family}</small>
 					</div>
 					<Button
 						variant="outline"
@@ -133,7 +130,7 @@ export function AccountTokens() {
 							mint();
 						}}
 					>
-						<h3 className="text-sm font-medium">Create agent tokens</h3>
+						<h3 className="text-[16px] font-semibold tracking-[-0.01em]">Create agent tokens</h3>
 						<p className={hintClass}>
 							Read access is included. Confirm the identity and permissions with your passkey.
 						</p>
@@ -177,20 +174,20 @@ export function AccountTokens() {
 							<p className={hintClass}>Default: access 24 hours, refresh 30 days.</p>
 						</fieldset>
 						{pending && (
-							<p className="mt-3 text-xs text-muted-foreground" role="status">
+							<p className="mt-3 text-[13px] text-slate" role="status">
 								A token request is pending. Retry unchanged to recover its result. If recovery fails, check the token
 								list and revoke the uncertain instance, then reload this page before creating another.
 							</p>
 						)}
 						{!pair && (
-							<Button className="mt-3.5" variant="outline" size="sm" type="submit" disabled={busy}>
+							<Button className="mt-4" size="sm" type="submit" disabled={busy}>
 								{busy ? "Waiting for confirmation…" : pending ? "Retry token request" : "Create with passkey"}
 							</Button>
 						)}
 						{pair && (
 							<div className="mt-5">
-								<h3 className="text-sm font-medium">Save this token pair</h3>
-								<p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+								<h3 className="text-[16px] font-semibold tracking-[-0.01em]">Save this token pair</h3>
+								<p className={hintClass}>
 									These secrets are shown only here. Closing this view removes them from the page; they cannot be
 									retrieved from the token list.
 								</p>
@@ -198,7 +195,7 @@ export function AccountTokens() {
 									Access token
 								</label>
 								<Textarea
-									className="min-h-20 font-mono wrap-anywhere"
+									className="min-h-20 font-mono text-[13px] wrap-anywhere"
 									id="token-access"
 									readOnly
 									value={pair.access}
@@ -209,7 +206,7 @@ export function AccountTokens() {
 									Refresh token
 								</label>
 								<Textarea
-									className="min-h-20 font-mono wrap-anywhere"
+									className="min-h-20 font-mono text-[13px] wrap-anywhere"
 									id="token-refresh"
 									readOnly
 									value={pair.refresh}

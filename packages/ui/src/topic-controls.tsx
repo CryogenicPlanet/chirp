@@ -6,7 +6,8 @@ import type { TopicMutation } from "@comms/protocol";
 import { useBoardClient } from "./board-client.tsx";
 import { Alert } from "./ui/alert.tsx";
 import { Button } from "./ui/button.tsx";
-import { Textarea } from "./ui/input.tsx";
+import { cn } from "./cn.ts";
+import { labelClass, Textarea } from "./ui/input.tsx";
 
 export function TopicControls({
 	path,
@@ -53,7 +54,7 @@ export function TopicControls({
 	};
 	return (
 		<details
-			className="group mb-7 rounded-lg border border-border bg-card px-4 py-3 text-[13px]"
+			className="group mb-4 rounded-[18px] bg-card text-[14px] shadow-raised"
 			onToggle={(event) => {
 				if (event.currentTarget.open && !busy && !uncertain && !dirty) {
 					setDraft(JSON.stringify(meta, null, 2));
@@ -61,13 +62,13 @@ export function TopicControls({
 				}
 			}}
 		>
-			<summary className="flex cursor-pointer list-none items-center gap-2 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
+			<summary className="flex min-h-12 cursor-pointer list-none items-center gap-2 rounded-[18px] px-5 text-[14.5px] font-medium text-ink-soft transition-colors hover:text-ink sm:px-6 [&::-webkit-details-marker]:hidden">
 				<Settings2 className="size-3.5" />
 				Topic settings{archived || parentArchived ? " · archived" : ""}
 				<ChevronRight className="ml-auto size-3.5 transition-transform group-open:rotate-90" />
 			</summary>
 			<form
-				className="mt-4"
+				className="px-5 pt-1 sm:px-6"
 				onSubmit={(event) => {
 					event.preventDefault();
 					if (disabled || archived) return;
@@ -80,17 +81,14 @@ export function TopicControls({
 					mutate({ meta: parsed.success });
 				}}
 			>
-				<label
-					className="mb-1.5 block font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
-					htmlFor={fieldId}
-				>
+				<label className={cn(labelClass, "mt-0")} htmlFor={fieldId}>
 					Metadata
 				</label>
-				<p className="mb-2 text-[10px] leading-relaxed text-subtle" id={`${fieldId}-hint`}>
+				<p className="mb-2 text-[13px] leading-relaxed text-slate" id={`${fieldId}-hint`}>
 					Save replaces all metadata. Omitted keys are removed. Setting public to true makes this topic’s pages public.
 				</p>
 				<Textarea
-					className="min-h-[140px] font-mono"
+					className="min-h-[140px] font-mono text-[13px]"
 					id={fieldId}
 					aria-describedby={`${fieldId}-hint`}
 					aria-invalid={invalid}
@@ -105,7 +103,7 @@ export function TopicControls({
 					}}
 				/>
 				{invalid && (
-					<p className="mt-2 text-xs text-destructive" role="alert">
+					<p className="mt-2 text-[13px] text-danger" role="alert">
 						Enter a valid JSON object, such as {`{"status":"doing"}`}.
 					</p>
 				)}
@@ -113,8 +111,8 @@ export function TopicControls({
 					Save metadata
 				</Button>
 			</form>
-			<div className="mt-5 border-t border-border pt-3">
-				<p className="mb-2 text-[10px] leading-relaxed text-subtle">
+			<div className="mx-5 mt-5 border-t border-rule pt-4 sm:mx-6">
+				<p className="mb-3 text-[13px] leading-relaxed text-slate">
 					{parentArchived
 						? "A parent topic is archived. Unarchive the parent before changing this topic."
 						: archived
@@ -132,7 +130,7 @@ export function TopicControls({
 				</Button>
 			</div>
 			{error && (
-				<Alert className="mt-4">
+				<Alert className="mx-5 mt-4 sm:mx-6">
 					<p>{error.message}</p>
 					{error.status === 401 && (
 						<a href="/auth/login" target="_blank" rel="noreferrer">
@@ -149,7 +147,7 @@ export function TopicControls({
 					)}
 				</Alert>
 			)}
-			<p className="mt-3 text-[10px] leading-relaxed text-subtle" role="status">
+			<p className="mx-5 mt-3 mb-4 min-h-[1.625em] text-[13px] leading-relaxed text-slate sm:mx-6" role="status">
 				{busy ? "Saving…" : saved}
 			</p>
 		</details>

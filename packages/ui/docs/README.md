@@ -21,6 +21,7 @@ For ordinary use, follow the [project README](../../../README.md) and run `bun r
 - [board-client.tsx](../src/board-client.tsx): generated HTTP client and scoped query state.
 - [use-load.ts](../src/use-load.ts): loading, refresh and error handling.
 - [board-layout.tsx](../src/board-layout.tsx): shared layout and navigation controls.
+- [styles.css](../src/styles.css): the chirp.wiki brand tokens, light only. The fonts are self-hosted in `public/assets/` beside their OFL licences, and [ui/bird.tsx](../src/ui/bird.tsx) draws the bird mark.
 
 Browser source imports [@comms/protocol](../../protocol/docs/README.md), never server or boot implementation. Query state belongs to the mounted provider. An SSE connection refreshes board data and resumes after disconnects.
 
