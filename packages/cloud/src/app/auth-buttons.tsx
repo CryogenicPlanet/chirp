@@ -108,7 +108,7 @@ export function AuthButtons({ invitation, user, providers = [] }: AuthButtonsPro
 							<span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-card text-slate ring-1 ring-rule">
 								<UserRound className="size-4" />
 							</span>
-							<span className="min-w-0 text-left text-[13.5px] leading-[1.3] font-medium whitespace-normal">
+							<span className="min-w-0 text-left text-[13.5px] leading-[1.3] font-medium whitespace-normal [overflow-wrap:anywhere]">
 								{user.name}
 							</span>
 							<ChevronsUpDown className="ml-auto size-3.5 text-slate" />

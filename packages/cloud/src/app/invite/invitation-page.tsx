@@ -28,12 +28,11 @@ export function InvitationPage({
 
 	return (
 		<EntryScreen labelledBy="invitation-title">
-			<p className="mt-0 mb-2 text-[13.5px] font-medium text-slate">You’re invited</p>
 			<h1 className={entryTitle} id="invitation-title">
-				{token === null ? "This invitation link is invalid." : "Create your Chirp Cloud account."}
+				{token === null ? "This invitation link is invalid." : "You’re invited to Chirp Cloud."}
 			</h1>
 			<p className={entryLede}>
-				{token === null ? "Ask the operator for a new invitation." : "Sign in to join Chirp Cloud."}
+				{token === null ? "Ask the operator for a new invitation." : "Sign in to create your account."}
 			</p>
 			{authUnavailable ? (
 				<p role="alert" className="m-0 text-[14px] leading-[1.5] text-danger">
