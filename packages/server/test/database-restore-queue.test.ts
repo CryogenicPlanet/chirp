@@ -101,7 +101,8 @@ it("queues reads across real database restore and rechecks logged-out sessions w
 	const loggedOut = read(revoked);
 	const privatePage = fetch(`${app.url}/p/public-new/index.md`, { signal: controller.signal });
 	const pageRead = fetch(`${app.url}/p/public-kept/index.md?raw=1`, { signal: controller.signal, headers: { cookie } });
-	await expect.poll(state).toEqual({ frozen: true, admitted: 0, queued: 3 });
+	// The anonymous page read queues too: boot delegates anonymous traffic to the app for its MCP extension.
+	await expect.poll(state).toEqual({ frozen: true, admitted: 0, queued: 4 });
 	expect((await app.post("/_boot/auth/logout", {}, revoked)).status).toBe(204);
 	expect((await fetch(`${app.url}/auth/login`)).status).toBe(200);
 	await writeFile(release, "continue");

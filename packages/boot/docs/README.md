@@ -25,7 +25,7 @@ Keep these boundaries intact when changing boot:
 - After an accepted generation, recovery preserves the current database. Unresolved journals block conflicting changes.
 - Forward verified identity to the child, never the caller's board credentials. Only `chirp_app_` cookies and exact application bearers (`Bearer chirp_app_` followed by 43 base64url characters) may cross for application authentication. Bearers require the managed dispatcher and cannot be combined with a board session. Mutations using a board session require the configured origin; managed handlers own their app-session CSRF protections.
 
-Application-managed ingress is off by default; see [deploying a board](../../../docs/deploy.md#application-managed-ingress) to enable it.
+Application-managed ingress reaches only the extensions the operator's setting allows, and with no setting only the seed's `mcp` extension; see [deploying a board](../../../docs/deploy.md#application-managed-ingress) to change it.
 
 ## Extension grants
 

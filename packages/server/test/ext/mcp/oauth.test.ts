@@ -1,13 +1,13 @@
 import { assertionHeader } from "@comms/protocol/headers";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { cp, readdir, readFile, writeFile } from "node:fs/promises";
+import { cp, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { join } from "node:path";
 import { Schema } from "effect";
 import { expect, it, type TestContext } from "vitest";
-import { conversation } from "./fixtures/conversation.ts";
+import { conversation } from "../../fixtures/conversation.ts";
 
 type App = Awaited<ReturnType<Awaited<ReturnType<typeof conversation>>["launch"]>>;
 const decode = <A>(schema: Schema.Decoder<A>, value: unknown) => Schema.decodeUnknownSync(schema)(value);
@@ -17,24 +17,20 @@ const Posted = Schema.Struct({
 	result: Schema.Struct({ structuredContent: Schema.Struct({ agent: Schema.String, instance: Schema.String }) }),
 });
 
-/** A board with the MCP package installed; `localMetadata` lets it fetch client metadata from this machine over HTTP. */
+/** A fresh board serving MCP; `localMetadata` lets it fetch client metadata from this machine over HTTP. */
 const installed = async (test: TestContext, localMetadata: boolean) => {
 	const fixture = await conversation(test);
+	const shipped = join(import.meta.dirname, "../../../src");
 	const seed = join(fixture.root, "seed");
-	await cp(join(import.meta.dirname, "../src"), seed, { recursive: true });
-	await cp(join(import.meta.dirname, "../../../examples/extensions/mcp"), join(seed, "ext/mcp"), { recursive: true });
-	for (const file of (await readdir(join(seed, "ext/mcp"))).filter((name) => name.endsWith(".ts"))) {
-		const path = join(seed, "ext/mcp", file);
-		await writeFile(
-			path,
-			(await readFile(path, "utf8"))
-				.replace("../../../packages/server/src/kernel/extension-api.ts", "../../kernel/extension-api.ts")
-				.replace("https://your-board.example", "https://comms.test")
-				.replace("const allowLocalMetadata = false;", `const allowLocalMetadata = ${localMetadata};`),
-		);
+	if (localMetadata) {
+		await cp(shipped, seed, { recursive: true });
+		const path = join(seed, "ext/mcp/oauth.ts");
+		const source = await readFile(path, "utf8");
+		if (!source.includes("const allowLocalMetadata = false;"))
+			throw new Error("oauth.ts no longer has allowLocalMetadata");
+		await writeFile(path, source.replace("const allowLocalMetadata = false;", "const allowLocalMetadata = true;"));
 	}
-	await writeFile(join(fixture.root, "boot.config.json"), JSON.stringify({ applicationManagedIngress: true }));
-	const app = await fixture.launch(join(seed, "server.ts"));
+	const app = await fixture.launch(join(localMetadata ? seed : shipped, "server.ts"));
 	await app.setup();
 	const cookie = await app.login();
 	await app.ready(cookie);

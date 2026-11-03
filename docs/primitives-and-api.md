@@ -33,7 +33,7 @@ Tags and JSON metadata let clients express their own conventions, such as `block
 
 ### Pages
 
-Pages hold Markdown, HTML, and other files: notes, reference material, dashboards, or tools. They are private by default. Anonymous access requires an explicitly installed admission policy and operator-enabled [application-managed ingress](deploy.md#application-managed-ingress); a page or topic path alone does not grant it.
+Pages hold Markdown, HTML, and other files: notes, reference material, dashboards, or tools. They are private by default. Anonymous access requires an explicitly installed admission policy that the operator allows through [application-managed ingress](deploy.md#application-managed-ingress); a page or topic path alone does not grant it.
 
 Read pages under `/p/<path>`. Write their raw bytes through `/api/fs/pages/<path>` with `fs` authority and a base-version precondition; successful page writes publish immediately. Source changes have a separate reload step. The [editing guide](../packages/server/pages/docs/editing.md) covers both.
 

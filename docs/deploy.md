@@ -123,33 +123,44 @@ table to recover from a lockout is a different thing and is covered below.
 
 ## Application-managed ingress
 
-By default, application routes require board authentication. To let editable extensions
-implement additional admission rules, create `DATA_DIR/boot.config.json` outside the app:
+Application routes require board authentication, with one exception on a new board: the MCP
+extension serves `/mcp`, its OAuth endpoints and their discovery documents without board
+credentials, so ChatGPT, Claude and other MCP clients can connect at your board's origin
+followed by `/mcp`. MCP runs its own OAuth and asks for your passkey before a client connects.
+
+`DATA_DIR/boot.config.json`, outside the app, decides which extensions may do this. Without
+the file, boot allows only `mcp`. To change that, write the setting and restart boot. This
+turns MCP off:
 
 ```json
-{"applicationManagedIngress":true}
+{"applicationManagedIngress":false}
 ```
+
+`true` allows every extension, and a list such as `["mcp","public-pages.ts"]` allows just
+those, named as `GET /api/ext` lists them.
 
 In the container, make this a regular boot-owned file (UID 1000) with mode `0600`, then
 restart boot. A root-owned file must also be readable by boot (`0644` is acceptable; the file
-contains no secrets). It must not be writable by group or others. The setting is read once at startup. Missing configuration disables ingress; invalid
-configuration also disables it and reports a diagnostic in `/_boot/status` without disabling recovery. Setting
-it to false and restarting closes anonymous application ingress.
+contains no secrets). It must not be writable by group or others. The setting is read once at
+startup. Invalid configuration allows no extension and reports a diagnostic in `/_boot/status`
+without disabling recovery.
 
-Enabling this grants trusted editable code the ability to admit anonymous requests on routes
-explicitly declared `access: "application-managed"`. It does not publish an existing folder.
-These handlers can intentionally write, so review their admission rules and method declarations.
+Allowing an extension grants that trusted editable code the ability to admit anonymous requests
+on the routes it explicitly declares `access: "application-managed"`. It does not publish an
+existing folder. These handlers can intentionally write, so review their admission rules and
+method declarations.
 Passkeys, board tokens, board sessions, editing and recovery keep boot's authentication.
 See the [extension guide](../packages/server/pages/docs/extensions.md#application-managed-routes)
 for app credentials, cookies and handler authority.
 
 On an existing board, upgrade both the immutable boot image and the installed editable runtime;
-a new image does not replace installed source. An old runtime without ingress support receives
-no delegated anonymous traffic. Prior `public_paths` settings and topic `meta.public` grants
-stop granting anonymous access on the new boot. Install the desired optional extension through
-the edit API, rehearse it, inspect its access declarations, and only enable the operator setting
-when that policy is ready. This release supplies the extension mechanism, not a sharing or
-approval policy.
+a new image does not replace installed source, so a board created before MCP shipped has no
+`app/ext/mcp/` until you install it through the edit API. An old runtime that cannot tell
+extensions apart receives delegated anonymous traffic only when the setting is `true`. Prior
+`public_paths` settings and topic `meta.public` grants stop granting anonymous access on the
+new boot. Install the desired optional extension through the edit API, rehearse it, inspect its
+access declarations, and only allow it in the operator setting when that policy is ready. This
+release supplies the extension mechanism, not a sharing or approval policy.
 
 ## When you cannot sign in
 

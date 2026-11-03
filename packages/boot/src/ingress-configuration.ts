@@ -1,12 +1,29 @@
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
 
+/** `true` admits every extension's managed routes, `false` none, and a list only those extensions'. */
+export type ApplicationManagedIngress = boolean | ReadonlyArray<string>;
 export interface IngressConfiguration {
-	readonly applicationManagedIngress: boolean;
+	readonly applicationManagedIngress: ApplicationManagedIngress;
 	readonly error: string | null;
 }
-const Configuration = Schema.Struct({ applicationManagedIngress: Schema.Boolean });
+/** Extension names as the kernel discovers them: a directory such as `mcp` or a file such as `public-pages.ts`. */
+const ExtensionName = Schema.String.pipe(Schema.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/)));
+const Setting = Schema.Union([Schema.Boolean, Schema.Array(ExtensionName)]);
+const Configuration = Schema.Struct({ applicationManagedIngress: Setting });
+/** Without a file, a board serves its MCP extension and nothing else anonymously. */
+const defaultIngress: ReadonlyArray<string> = Object.freeze(["mcp"]);
 
-/** Operator-owned startup policy. A broken opt-in never takes recovery or authentication down. */
+/** The setting as the app receives it in APPLICATION_MANAGED_INGRESS: the same JSON value the operator writes. */
+export const encodeIngress = Schema.encodeSync(Schema.fromJsonString(Setting));
+
+/** Whether boot forwards anonymous traffic to the live app at all. */
+export const ingressEnabled = (ingress: IngressConfiguration | undefined) =>
+	ingress !== undefined &&
+	(typeof ingress.applicationManagedIngress === "boolean"
+		? ingress.applicationManagedIngress
+		: ingress.applicationManagedIngress.length > 0);
+
+/** Operator-owned startup policy. A broken setting never takes recovery or authentication down. */
 export const ingressConfiguration = (directory: string, isolated = false) =>
 	Effect.gen(function* () {
 		const fs = yield* FileSystem.FileSystem;
@@ -16,7 +33,8 @@ export const ingressConfiguration = (directory: string, isolated = false) =>
 		if (link._tag === "Success") return { applicationManagedIngress: false, error: "boot_config_link" };
 		const resolved = yield* fs.realPath(filename).pipe(Effect.result);
 		if (resolved._tag === "Failure") {
-			if (resolved.failure.reason._tag === "NotFound") return { applicationManagedIngress: false, error: null };
+			if (resolved.failure.reason._tag === "NotFound")
+				return { applicationManagedIngress: defaultIngress, error: null };
 			return { applicationManagedIngress: false, error: "boot_config_unreadable" };
 		}
 		if (resolved.success !== filename) return { applicationManagedIngress: false, error: "boot_config_link" };

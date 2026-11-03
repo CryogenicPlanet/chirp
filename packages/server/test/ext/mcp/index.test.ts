@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
 import { once } from "node:events";
 import { cp, readdir, readFile, writeFile } from "node:fs/promises";
@@ -5,10 +6,11 @@ import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { promisify } from "node:util";
 import { Schema } from "effect";
 import { expect, it, type TestContext } from "vitest";
-import { conversation } from "./fixtures/conversation.ts";
-import { publicCallbackAddress } from "./fixtures/mcp-callback-addresses.ts";
+import { makeAddressPolicy } from "../../../src/ext/mcp/addresses.ts";
+import { conversation } from "../../fixtures/conversation.ts";
 
 const json = (text: string) => Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(text);
 const stringField = (value: unknown, name: string) => {
@@ -33,48 +35,76 @@ const rpc = async (response: Response) => {
 	}
 };
 
-it("keeps MCP absent until its extension package is installed", async (test) => {
-	const fixture = await conversation(test);
-	const app = await fixture.launch(join(import.meta.dirname, "../src/server.ts"));
-	await app.setup();
-	const cookie = await app.login();
-	await app.ready(cookie);
-	expect((await fetch(`${app.url}/mcp`, { headers: { cookie } })).status).toBeGreaterThanOrEqual(400);
-}, 20000);
+const publicCallbackAddress = makeAddressPolicy();
 
+/** Replaces one line of the shipped source, failing loudly when the line has moved. */
+const change = (source: string, from: string, to: string) => {
+	if (!source.includes(from)) throw new Error(`Shipped MCP source no longer contains ${from}`);
+	return source.replace(from, to);
+};
+
+/** A fresh board serving MCP as the seed ships it. A test that changes the source runs a copy of the seed. */
 const installed = async (
 	test: TestContext,
 	mcpOrigin?: string,
 	localCallbacks = false,
-	edit = (_file: string, source: string) => source,
+	edit?: (file: string, source: string) => string,
 ) => {
 	const fixture = await conversation(test);
+	const shipped = join(import.meta.dirname, "../../../src");
 	const seed = join(fixture.root, "seed");
-	await cp(join(import.meta.dirname, "../src"), seed, { recursive: true });
-	await cp(join(import.meta.dirname, "../../../examples/extensions/mcp"), join(seed, "ext/mcp"), { recursive: true });
-	for (const file of (await readdir(join(seed, "ext/mcp"))).filter((name) => name.endsWith(".ts"))) {
-		const path = join(seed, `ext/mcp/${file}`);
-		const source = (await readFile(path, "utf8"))
-			.replace("../../../packages/server/src/kernel/extension-api.ts", "../../kernel/extension-api.ts")
-			.replace("https://your-board.example", "https://comms.test")
-			.replace("const allowLocalCallbacks = false;", `const allowLocalCallbacks = ${localCallbacks};`);
-		await writeFile(
-			path,
-			edit(
-				file,
-				mcpOrigin === undefined
-					? source
-					: source.replace("const mcpOrigin = boardOrigin;", `const mcpOrigin = ${JSON.stringify(mcpOrigin)};`),
-			),
-		);
+	const customized = mcpOrigin !== undefined || localCallbacks || edit !== undefined;
+	if (customized) {
+		await cp(shipped, seed, { recursive: true });
+		for (const file of (await readdir(join(seed, "ext/mcp"))).filter((name) => name.endsWith(".ts"))) {
+			const path = join(seed, `ext/mcp/${file}`);
+			let source = await readFile(path, "utf8");
+			if (localCallbacks && file === "events.ts")
+				source = change(source, "const allowLocalCallbacks = false;", "const allowLocalCallbacks = true;");
+			if (mcpOrigin !== undefined && file === "index.ts")
+				source = change(
+					source,
+					"const mcpOrigin: string | undefined = undefined;",
+					`const mcpOrigin: string | undefined = ${JSON.stringify(mcpOrigin)};`,
+				);
+			await writeFile(path, edit ? edit(file, source) : source);
+		}
 	}
-	await writeFile(join(fixture.root, "boot.config.json"), JSON.stringify({ applicationManagedIngress: true }));
-	const app = await fixture.launch(join(seed, "server.ts"));
+	const app = await fixture.launch(join(customized ? seed : shipped, "server.ts"));
 	await app.setup();
 	const cookie = await app.login();
 	await app.ready(cookie);
 	return { fixture, app, cookie };
 };
+
+it("loads without serving anything under a boot that does not name the board's origin", async () => {
+	// A failed extension would close anonymous access for the whole generation, so MCP must load and stay quiet.
+	const { stdout, stderr } = await promisify(execFile)("bun", [
+		join(import.meta.dirname, "../../fixtures/mcp-without-origin.ts"),
+	]);
+	expect(stdout).toContain("MCP_WITHOUT_ORIGIN_REGISTERED=[]");
+	expect(stdout + stderr).toContain("MCP is off: this boot does not tell the app its origin");
+});
+
+it("serves MCP from the seed with no operator setup", async (test) => {
+	const { app } = await installed(test);
+	expect(await (await fetch(`${app.url}/.well-known/oauth-authorization-server`)).json()).toMatchObject({
+		issuer: "https://comms.test",
+		authorization_endpoint: "https://comms.test/mcp/oauth/authorize",
+	});
+	expect(await (await fetch(`${app.url}/.well-known/oauth-protected-resource/mcp`)).json()).toMatchObject({
+		resource: "https://comms.test/mcp",
+	});
+	const unauthenticated = await fetch(`${app.url}/mcp`, {
+		method: "POST",
+		headers: { accept: "application/json, text/event-stream", "content-type": "application/json" },
+		body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }),
+	});
+	expect(unauthenticated.status).toBe(401);
+	expect(unauthenticated.headers.get("www-authenticate")).toContain(
+		'resource_metadata="https://comms.test/.well-known/oauth-protected-resource/mcp"',
+	);
+}, 20000);
 
 it("serves MCP at a separate origin while consent stays on the board origin", async (test) => {
 	const { app, cookie } = await installed(test, "https://mcp.test");
@@ -1605,9 +1635,7 @@ it("upgrades a board whose events table predates secret rotation without a migra
 	expect((await app.post("/api/lock", {}, cookie)).status).toBe(200);
 	const current = await fetch(`${app.url}/api/fs/app/ext/mcp/events.ts`, { headers });
 	const base = current.headers.get("x-chirp-base-version");
-	const upgraded = (
-		await readFile(join(import.meta.dirname, "../../../examples/extensions/mcp/events.ts"), "utf8")
-	).replace("../../../packages/server/src/kernel/extension-api.ts", "../../kernel/extension-api.ts");
+	const upgraded = await readFile(join(import.meta.dirname, "../../../src/ext/mcp/events.ts"), "utf8");
 	const staged = await fetch(`${app.url}/api/fs/app/ext/mcp/events.ts?reload=0&baseVersion=${base}`, {
 		method: "PUT",
 		headers,
@@ -1656,9 +1684,7 @@ it("upgrades a board with the intermediate events table (rotation columns alread
 	expect((await app.post("/api/lock", {}, cookie)).status).toBe(200);
 	const current = await fetch(`${app.url}/api/fs/app/ext/mcp/events.ts`, { headers });
 	const base = current.headers.get("x-chirp-base-version");
-	const upgraded = (
-		await readFile(join(import.meta.dirname, "../../../examples/extensions/mcp/events.ts"), "utf8")
-	).replace("../../../packages/server/src/kernel/extension-api.ts", "../../kernel/extension-api.ts");
+	const upgraded = await readFile(join(import.meta.dirname, "../../../src/ext/mcp/events.ts"), "utf8");
 	const staged = await fetch(`${app.url}/api/fs/app/ext/mcp/events.ts?reload=0&baseVersion=${base}`, {
 		method: "PUT",
 		headers,

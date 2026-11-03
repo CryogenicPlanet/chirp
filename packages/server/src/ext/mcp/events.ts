@@ -6,11 +6,7 @@ import { on } from "@comms/storage/dialect";
 import { Cause, Clock, Crypto, Effect, Option, Ref, Schema, Stream } from "effect";
 import { FetchHttpClient, HttpClientRequest } from "effect/unstable/http";
 import { SqlClient } from "effect/unstable/sql";
-import type {
-	Api,
-	BackgroundContext,
-	ManagedRequestContext,
-} from "../../../packages/server/src/kernel/extension-api.ts";
+import type { Api, BackgroundContext, ManagedRequestContext } from "../../kernel/extension-api.ts";
 import { makeAddressPolicy } from "./addresses.ts";
 import { connectionFamilies, familyList, storedFamilies } from "./grants.ts";
 import type { OAuthIdentity } from "./oauth.ts";

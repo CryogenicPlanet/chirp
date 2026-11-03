@@ -189,3 +189,7 @@ _Superseded 2026-10-25._
 > what is this new secret you want? like just use the old github and google creds will just update the urls once you make the change on cloud login to work with this auth service
 
 > actually github also supports multiple redirect uri now so the cloud chirp should be fine too
+
+## 2026-11-03 — MCP by default
+
+> make the mcp extension enabled by default

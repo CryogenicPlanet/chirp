@@ -27,6 +27,7 @@ import type { Attempt } from "./event-http.ts";
 import { Generations, type Generation } from "./generations.ts";
 import { EventError, Events } from "./events.ts";
 import { traffic, type Traffic } from "./traffic.ts";
+import { encodeIngress, type ApplicationManagedIngress } from "./ingress-configuration.ts";
 
 export interface ChildStatus {
 	readonly state: "starting" | "live" | "failed";
@@ -47,6 +48,13 @@ export interface ActiveChild {
 	readonly id: string;
 	readonly receipt: string;
 }
+/** What the app is told about the board it serves. Values come from boot's own configuration, never the app. */
+export interface BoardSettings {
+	/** The primary public origin, for links and metadata the app publishes about itself. */
+	readonly origin: string;
+	/** Which extensions' managed routes boot forwards anonymous traffic to. */
+	readonly ingress: ApplicationManagedIngress;
+}
 export interface SupervisedChild {
 	readonly redact: (text: string) => string;
 	readonly status: Ref.Ref<ChildStatus>;
@@ -62,6 +70,7 @@ export const supervise = Effect.fn("supervise")(function* (
 	options: ApplicationSource,
 	remote?: RemoteRuntime,
 	redact = logRedactor([]),
+	settings?: BoardSettings,
 ) {
 	const isolated = yield* Config.Boolean("COMMS_ISOLATED").pipe(Config.withDefault(false));
 	const crypto = yield* Crypto.Crypto;
@@ -188,6 +197,9 @@ export const supervise = Effect.fn("supervise")(function* (
 						PAGES_DIRECTORY: path.resolve(options.dataDirectory, "pages"),
 						BOARD_DIRECTORY: board,
 						STATE: mode,
+						...(settings
+							? { BOARD_ORIGIN: settings.origin, APPLICATION_MANAGED_INGRESS: encodeIngress(settings.ingress) }
+							: {}),
 						...(mode === "rehearsal" ? { REHEARSAL_SEQUENCE: String(rehearsalSequence ?? 1) } : { BOOT_URL: callback }),
 					},
 				},

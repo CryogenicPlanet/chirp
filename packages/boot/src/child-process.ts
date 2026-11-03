@@ -1,4 +1,5 @@
 import {
+	allExtensionsIngressProtocolVersion,
 	ingressProtocolHeader,
 	ingressProtocolVersion,
 	healthReadyHeader,
@@ -199,7 +200,14 @@ export const launchChild = Effect.fn("launchChild")(function* (options: Launch, 
 								: Effect.fail(new ChildError({ code: "health_failed" })),
 						),
 					);
-					yield* Ref.set(applicationManagedIngress, response.headers[ingressProtocolHeader] === ingressProtocolVersion);
+					// A kernel that ignores the allowed extensions is safe only when the operator allows them all.
+					const ingress = response.headers[ingressProtocolHeader];
+					yield* Ref.set(
+						applicationManagedIngress,
+						ingress === ingressProtocolVersion ||
+							(ingress === allExtensionsIngressProtocolVersion &&
+								(options.env.APPLICATION_MANAGED_INGRESS ?? "true") === "true"),
+					);
 					return report;
 				}
 				if (response.headers[healthReadyHeader] === "1") return yield* new ChildError({ code: "health_failed" });

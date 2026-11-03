@@ -126,6 +126,11 @@ async function run() {
 		await ready(state.cookie);
 		assert.equal((await request("/api/messages")).status, 401, "Anonymous reads must be refused");
 		assert.equal((await request("/api/messages", { topic: state.message.topic, body: "anonymous" })).status, 401);
+		// The seed's MCP extension migrated on this engine and serves its discovery anonymously at the board's origin.
+		const discovery = Schema.decodeUnknownSync(Schema.Struct({ issuer: Schema.String }))(
+			await (await ok(await request("/.well-known/oauth-authorization-server"), "MCP discovery")).json(),
+		);
+		assert.equal(discovery.issuer, origin, "MCP must name the board's origin");
 		const read = await ok(
 			await request(
 				`/api/messages?since=0&wait=0&topic=${encodeURIComponent(state.message.topic)}`,

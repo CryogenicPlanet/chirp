@@ -36,7 +36,7 @@ const boardQueryValidation = async (url: string, cookie: string) => {
 	}
 };
 
-it("requires operator opt-in and persists explicitly managed writes with service authority", async (test) => {
+it("admits anonymous traffic only to extensions the operator allows and persists managed writes with service authority", async (test) => {
 	const fixture = await conversation(test);
 	const seed = join(fixture.root, "managed-seed");
 	await cp(join(import.meta.dirname, "../src"), seed, { recursive: true });
@@ -67,16 +67,26 @@ export default api => {
 	await boardChallenge(app.url);
 	await boardQueryValidation(app.url, cookie);
 	const authorization = `Bearer chirp_app_${"a".repeat(43)}`;
+	// Without boot.config.json only the seed's MCP extension serves anonymous traffic.
+	expect((await fetch(`${app.url}/.well-known/oauth-authorization-server`)).status).toBe(200);
 	expect((await fetch(`${app.url}/managed/hello`)).status).toBe(401);
 	expect((await fetch(`${app.url}/managed/hello`, { headers: { authorization } })).status).toBe(401);
+	expect((await fetch(`${app.url}/managed/write`, { method: "POST", body: "anonymous" })).status).toBe(401);
 	expect((await fetch(`${app.url}/onboarding`)).status).toBeGreaterThanOrEqual(400);
+	// An unlisted extension's managed routes still answer a signed-in request, as with ingress off.
+	expect((await fetch(`${app.url}/managed/hello`, { headers: { cookie } })).status).toBe(200);
 	await app.stop();
-	await writeFile(join(fixture.root, "boot.config.json"), JSON.stringify({ applicationManagedIngress: true }));
+	await writeFile(
+		join(fixture.root, "boot.config.json"),
+		JSON.stringify({ applicationManagedIngress: ["managed.ts"] }),
+	);
 	app = await fixture.launch(join(seed, "server.ts"));
 	cookie = await app.login();
 	await app.ready(cookie);
 	await boardChallenge(app.url);
 	await boardQueryValidation(app.url, cookie);
+	// Naming extensions replaces the default, so MCP is no longer public.
+	expect((await fetch(`${app.url}/.well-known/oauth-authorization-server`)).status).toBe(401);
 	const response = await fetch(`${app.url}/managed/hello?tag=a&tag=b`, {
 		headers: {
 			cookie: "chirp_app_gate=approved; unrelated=hidden",

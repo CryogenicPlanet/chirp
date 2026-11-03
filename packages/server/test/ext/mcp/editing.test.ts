@@ -1,11 +1,11 @@
 import { authorLabel } from "@comms/protocol";
 import { assertionHeader } from "@comms/protocol/headers";
 import { createHash } from "node:crypto";
-import { cp, readdir, readFile, writeFile } from "node:fs/promises";
+import { cp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Schema } from "effect";
 import { expect, it, type TestContext } from "vitest";
-import { conversation } from "./fixtures/conversation.ts";
+import { conversation } from "../../fixtures/conversation.ts";
 
 type App = Awaited<ReturnType<Awaited<ReturnType<typeof conversation>>["launch"]>>;
 const decode = <A>(schema: Schema.Decoder<A>, value: unknown) => Schema.decodeUnknownSync(schema)(value);
@@ -19,31 +19,22 @@ const ToolReply = Schema.Struct({
 });
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
-/** A board with the MCP package installed as an operator would, optionally with the reply-thread example. */
+/** A fresh board serving MCP as the seed ships it, optionally with the reply-thread example installed. */
 const installed = async (test: TestContext, thread: boolean) => {
 	const fixture = await conversation(test);
+	const shipped = join(import.meta.dirname, "../../../src");
 	const seed = join(fixture.root, "seed");
-	await cp(join(import.meta.dirname, "../src"), seed, { recursive: true });
-	await cp(join(import.meta.dirname, "../../../examples/extensions/mcp"), join(seed, "ext/mcp"), { recursive: true });
-	for (const file of (await readdir(join(seed, "ext/mcp"))).filter((name) => name.endsWith(".ts"))) {
-		const path = join(seed, "ext/mcp", file);
-		await writeFile(
-			path,
-			(await readFile(path, "utf8"))
-				.replace("../../../packages/server/src/kernel/extension-api.ts", "../../kernel/extension-api.ts")
-				.replace("https://your-board.example", "https://comms.test"),
-		);
-	}
-	if (thread)
+	if (thread) {
+		await cp(shipped, seed, { recursive: true });
 		await writeFile(
 			join(seed, "ext/thread.ts"),
-			(await readFile(join(import.meta.dirname, "../../../examples/extensions/thread.ts"), "utf8")).replace(
+			(await readFile(join(import.meta.dirname, "../../../../../examples/extensions/thread.ts"), "utf8")).replace(
 				"../../packages/server/src/kernel/extension-api.ts",
 				"../kernel/extension-api.ts",
 			),
 		);
-	await writeFile(join(fixture.root, "boot.config.json"), JSON.stringify({ applicationManagedIngress: true }));
-	const app = await fixture.launch(join(seed, "server.ts"));
+	}
+	const app = await fixture.launch(join(thread ? seed : shipped, "server.ts"));
 	await app.setup();
 	const cookie = await app.login();
 	await app.ready(cookie);

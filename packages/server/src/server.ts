@@ -1,4 +1,5 @@
 import {
+	allExtensionsIngressProtocolVersion,
 	headerPrefix,
 	ingressProtocolHeader,
 	ingressProtocolVersion,
@@ -30,6 +31,7 @@ import {
 	Effect,
 	Layer,
 	Logger,
+	Option,
 	Redacted,
 	Ref,
 	Schema,
@@ -83,6 +85,15 @@ const server = Effect.gen(function* () {
 		const boardDirectory = yield* Config.String("BOARD_DIRECTORY").pipe(
 			Config.withDefault(`${import.meta.dirname}/board`),
 		);
+		const origin = Option.getOrUndefined(yield* Config.option(Config.String("BOARD_ORIGIN")));
+		// Boot passes the operator's setting as JSON; an unreadable one admits nothing. A boot that passes none forwards
+		// anonymous traffic only when the operator allows every extension.
+		const ingressSetting = yield* Config.option(Config.String("APPLICATION_MANAGED_INGRESS"));
+		const ingress = Option.isNone(ingressSetting)
+			? undefined
+			: yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Union([Schema.Boolean, Schema.Array(Schema.String)])))(
+					ingressSetting.value,
+				).pipe(Effect.orElseSucceed(() => false));
 		const lifecycle = yield* Lifecycle;
 		const migrationWarnings = yield* MigrationWarnings;
 		const http = yield* HttpServer.HttpServer;
@@ -125,7 +136,10 @@ const server = Effect.gen(function* () {
 					>();
 					yield* Ref.set(initializePublicPages, reconstructPublicPages.pipe(Effect.provideContext(publicPagesContext)));
 					const extensionContext = yield* Layer.build(
-						extensionsLayer(`${import.meta.dirname}/ext`, yield* extensionCapabilities, publication.wake),
+						extensionsLayer(`${import.meta.dirname}/ext`, yield* extensionCapabilities, publication.wake, {
+							...(origin === undefined ? {} : { origin }),
+							...(ingress === undefined ? {} : { ingress }),
+						}),
 					);
 					const extensions = Context.get(extensionContext, Extensions);
 					yield* Ref.set(extensionState, extensions.changeState);
@@ -183,7 +197,12 @@ const server = Effect.gen(function* () {
 										headers: {
 											[writerEpochHeader]: boot.epoch,
 											[kernelProtocolHeader]: "2",
-											...(extensions.ingressReady ? { [ingressProtocolHeader]: ingressProtocolVersion } : {}),
+											...(extensions.ingressReady
+												? {
+														[ingressProtocolHeader]:
+															ingress === undefined ? allExtensionsIngressProtocolVersion : ingressProtocolVersion,
+													}
+												: {}),
 											[rehearsalReportHeader]: "1",
 										},
 									},

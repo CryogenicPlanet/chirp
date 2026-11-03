@@ -1,6 +1,6 @@
 import { baseVersionHeader } from "@comms/protocol/headers";
 import { type Crypto, Data, Effect, Option, Schema } from "effect";
-import type { ManagedRequestContext } from "../../../packages/server/src/kernel/extension-api.ts";
+import type { ManagedRequestContext } from "../../kernel/extension-api.ts";
 import { asAgent, type BoardReply, editingState, grantEnded, labelNote, requestEditing } from "./grants.ts";
 import {
 	boardError,

@@ -136,3 +136,23 @@ it("rejects empty named parameters without rejecting an empty terminal wildcard"
 	);
 	expect(wildcard?.matched.params).toEqual({ bucket: "docs", "*": "" });
 });
+
+it("refuses the anonymous envelope for a managed route whose extension ingress does not admit", async () => {
+	const matcher = FindMyWay.make<{ readonly access: "application-managed"; readonly extension: string }>();
+	matcher.on("GET", "/mcp", { access: "application-managed", extension: "mcp" });
+	matcher.on("GET", "/shared", { access: "application-managed", extension: "public-pages.ts" });
+	const select = (url: string, target?: string) =>
+		Effect.runPromise(
+			selectRequest(
+				matcher,
+				HttpServerRequest.fromWeb(
+					new Request(`http://child${url}`, target ? { headers: { [ingressTargetHeader]: target } } : {}),
+				),
+				(route) => route.extension === "mcp",
+			),
+		);
+	expect((await select(applicationIngressPath, "/mcp"))?.matched.handler.extension).toBe("mcp");
+	await expect(select(applicationIngressPath, "/shared")).rejects.toThrow();
+	// A request boot authenticated is not anonymous ingress, so the route still owns it.
+	expect((await select("/shared"))?.matched.handler.extension).toBe("public-pages.ts");
+});

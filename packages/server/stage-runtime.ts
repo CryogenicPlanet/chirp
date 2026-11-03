@@ -12,7 +12,6 @@ Effect.gen(function* () {
 	yield* fs.remove(pages, { recursive: true, force: true });
 	yield* fs.copy(path.join(server, "src"), target);
 	yield* fs.copy(path.join(server, "pages"), pages);
-	yield* fs.copy(path.resolve(server, "../../examples/extensions/mcp"), path.join(pages, "tooling", "mcp"));
 	for (const launcher of ["main.ts", "start.ts"]) yield* fs.remove(path.join(target, launcher));
 	// Bun applies the nearest tsconfig.json above a file. The app's own keeps a data directory
 	// inside this repository from resolving @comms/* through the root paths to a second effect.

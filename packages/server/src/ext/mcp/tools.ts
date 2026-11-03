@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Effect, Option, Schema } from "effect";
 import { HttpServerRequest } from "effect/unstable/http";
 import { policy } from "@comms/protocol/errors";
-import type { ManagedRequestContext } from "../../../packages/server/src/kernel/extension-api.ts";
+import type { ManagedRequestContext } from "../../kernel/extension-api.ts";
 import {
 	asAgent,
 	type BoardReply,

@@ -106,7 +106,10 @@ export const boot = Effect.fn("boot")(function* (options: ApplicationSource & { 
 		handle: publicRoute.pipe(Effect.map((response) => response ?? authErrorResponse("boot_unavailable"))),
 		shutdown: Effect.void,
 	});
-	const supervisor = yield* supervise(options, remote, redact);
+	const supervisor = yield* supervise(options, remote, redact, {
+		origin: options.auth.expectedOrigin,
+		ingress: ingress.applicationManagedIngress,
+	});
 	const { child, run, fail } = supervisor;
 	const initialized = Layer.effectDiscard(
 		initializeBootSchema.pipe(

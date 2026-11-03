@@ -27,12 +27,13 @@ it("keeps board credentials and reserved aliases outside application ingress", (
 });
 
 it.for([
-	undefined,
 	'{"applicationManagedIngress":false}',
+	'{"applicationManagedIngress":[]}',
 	'{"applicationManagedIngress":"true"}',
 	'{"applicationManagedIngress":true,"typo":true}',
+	'{"applicationManagedIngress":["*"]}',
 	"{broken",
-])("refuses anonymous ingress with absent, off, or invalid configuration %s", async (config, test) => {
+])("refuses anonymous ingress with off or invalid configuration %s", async (config, test) => {
 	const app = await launch(test, "ingress", false, {}, config);
 	await expect.poll(async () => (await app.state()).state).toBe("live");
 	expect((await fetch(`${app.url}/shared`)).status).toBe(401);
@@ -44,10 +45,66 @@ it.for([
 	).toBe(401);
 	expect((await fetch(`${app.url}/_boot/auth/state`)).status).toBe(200);
 	const status = await (await app.fetch(`${app.url}/_boot/status`)).json();
-	expect(status.ingress.applicationManagedIngress).toBe(false);
-	if (config && config !== '{"applicationManagedIngress":false}')
-		expect(status.ingress.error).toBe("boot_config_invalid");
+	const off = ['{"applicationManagedIngress":false}', '{"applicationManagedIngress":[]}'].includes(config);
+	expect(status.ingress).toEqual({
+		applicationManagedIngress: config === '{"applicationManagedIngress":[]}' ? [] : false,
+		error: off ? null : "boot_config_invalid",
+	});
+	expect(await (await app.fetch(`${app.url}/fixture-board`)).json()).toEqual({
+		origin: "https://comms.test",
+		ingress: config === '{"applicationManagedIngress":[]}' ? "[]" : "false",
+	});
+	// With nothing served anonymously, the app's own cookies are not narrowed to chirp_app_.
+	expect((await app.fetch(`${app.url}/cookies`)).headers.getSetCookie().join(";")).toContain("app-preference=dark");
 });
+
+it("answers anonymous ingress with the sign-in challenge while no app is live", async (test) => {
+	const app = await launch(test, "exit");
+	await expect.poll(async () => (await app.state()).state).toBe("failed");
+	const browser = await fetch(`${app.url}/shared`, { headers: { accept: "text/html" }, redirect: "manual" });
+	expect(browser.status).toBe(302);
+	expect(browser.headers.get("location")).toBe("/auth/login?next=%2Fshared");
+	expect((await fetch(`${app.url}/shared`)).status).toBe(401);
+	// An application bearer is the app's own client, so it learns the app is down rather than to sign in.
+	expect(
+		(await fetch(`${app.url}/shared`, { headers: { authorization: `Bearer chirp_app_${"a".repeat(43)}` } })).status,
+	).toBe(503);
+});
+
+it.for([undefined, '{"applicationManagedIngress":["mcp"]}', '{"applicationManagedIngress":true}'])(
+	"delegates anonymous traffic when the file is absent, lists extensions or allows all: %s",
+	async (config, test) => {
+		const app = await launch(test, "ingress", false, {}, config);
+		await expect.poll(async () => (await app.state()).state).toBe("live");
+		const shared = await fetch(`${app.url}/shared`);
+		expect(shared.status).toBe(200);
+		expect(await shared.json()).toMatchObject({ target: "/shared", agent: null });
+		const status = await (await app.fetch(`${app.url}/_boot/status`)).json();
+		expect(status.ingress).toEqual({
+			applicationManagedIngress: config === undefined ? ["mcp"] : JSON.parse(config).applicationManagedIngress,
+			error: null,
+		});
+		// The app learns the board's origin and which extensions' routes it may serve anonymously.
+		expect(await (await app.fetch(`${app.url}/fixture-board`)).json()).toEqual({
+			origin: "https://comms.test",
+			ingress: config === undefined ? '["mcp"]' : JSON.stringify(JSON.parse(config).applicationManagedIngress),
+		});
+	},
+);
+
+it.for([
+	['{"applicationManagedIngress":true}', 200],
+	['{"applicationManagedIngress":["mcp"]}', 401],
+	[undefined, 401],
+] as const)(
+	"forwards to a kernel that admits every extension only when all are allowed: %s",
+	async ([config, expected], test) => {
+		const app = await launch(test, "ingress-v2", false, {}, config);
+		await expect.poll(async () => (await app.state()).state).toBe("live");
+		expect((await fetch(`${app.url}/shared`)).status).toBe(expected);
+		expect((await app.fetch(`${app.url}/echo`)).status).toBe(200);
+	},
+);
 
 it.for(["normal", "ingress-v1"])("refuses incompatible managed ingress generation %s", async (mode, test) => {
 	const app = await launch(test, mode, false, {}, '{"applicationManagedIngress":true}');

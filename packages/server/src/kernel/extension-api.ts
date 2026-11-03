@@ -104,6 +104,8 @@ export type ExtensionServices =
 	| HttpPlatform
 	| Etag.Generator;
 export interface Api {
+	/** The board's primary public origin as boot reports it, such as `https://chirp.example`; undefined under an older boot. */
+	readonly origin: string | undefined;
 	readonly effects: ExtensionEffects;
 	readonly context: (scope: "read" | "write" | "fs") => Effect.Effect<RequestContext, KernelError, RequestServices>;
 	readonly mount: <Id extends string, Groups extends HttpApiGroup.Constraint, E>(

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Schema } from "effect";
 import { expect, it, type TestContext } from "vitest";
-import { conversation } from "./fixtures/conversation.ts";
+import { conversation } from "../../fixtures/conversation.ts";
 
 type App = Awaited<ReturnType<Awaited<ReturnType<typeof conversation>>["launch"]>>;
 const decode = <A>(schema: Schema.Decoder<A>, value: unknown) => Schema.decodeUnknownSync(schema)(value);
@@ -41,7 +41,7 @@ const Delivery = Schema.fromJsonString(
 	}),
 );
 
-/** A board with the MCP package installed and local callbacks and metadata documents allowed, with optional source edits. */
+/** A fresh board's MCP with local callbacks and metadata documents allowed, with optional source edits. */
 const installed = async (
 	test: TestContext,
 	edit: ((source: string) => string) | { events?: (source: string) => string; grants?: (source: string) => string } = (
@@ -53,13 +53,10 @@ const installed = async (
 		typeof edit === "function" ? (source: string) => source : (edit.grants ?? ((source: string) => source));
 	const fixture = await conversation(test);
 	const seed = join(fixture.root, "seed");
-	await cp(join(import.meta.dirname, "../src"), seed, { recursive: true });
-	await cp(join(import.meta.dirname, "../../../examples/extensions/mcp"), join(seed, "ext/mcp"), { recursive: true });
+	await cp(join(import.meta.dirname, "../../../src"), seed, { recursive: true });
 	for (const file of (await readdir(join(seed, "ext/mcp"))).filter((name) => name.endsWith(".ts"))) {
 		const path = join(seed, "ext/mcp", file);
 		const source = (await readFile(path, "utf8"))
-			.replace("../../../packages/server/src/kernel/extension-api.ts", "../../kernel/extension-api.ts")
-			.replace("https://your-board.example", "https://comms.test")
 			.replace("const allowLocalCallbacks = false;", "const allowLocalCallbacks = true;")
 			.replace("const allowLocalMetadata = false;", "const allowLocalMetadata = true;");
 		await writeFile(
@@ -67,7 +64,6 @@ const installed = async (
 			file === "events.ts" ? eventsEdit(source) : file === "grants.ts" ? grantsEdit(source) : source,
 		);
 	}
-	await writeFile(join(fixture.root, "boot.config.json"), JSON.stringify({ applicationManagedIngress: true }));
 	const app = await fixture.launch(join(seed, "server.ts"));
 	await app.setup();
 	const cookie = await app.login();
@@ -1150,9 +1146,7 @@ it("keeps delivering mention subscriptions created before events took arguments"
 	const headers = { cookie, origin: "https://comms.test" };
 	expect((await app.post("/api/lock", {}, cookie)).status).toBe(200);
 	const current = await fetch(`${app.url}/api/fs/app/ext/mcp/events.ts`, { headers });
-	const upgraded = (
-		await readFile(join(import.meta.dirname, "../../../examples/extensions/mcp/events.ts"), "utf8")
-	).replace("../../../packages/server/src/kernel/extension-api.ts", "../../kernel/extension-api.ts");
+	const upgraded = await readFile(join(import.meta.dirname, "../../../src/ext/mcp/events.ts"), "utf8");
 	const staged = await fetch(
 		`${app.url}/api/fs/app/ext/mcp/events.ts?reload=0&baseVersion=${current.headers.get("x-chirp-base-version")}`,
 		{

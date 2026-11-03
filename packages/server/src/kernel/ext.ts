@@ -57,12 +57,21 @@ const factory = Schema.Struct({
 	),
 });
 
+/** What boot tells the app about its board. An older boot names neither. */
+export interface BoardSettings {
+	readonly origin?: string;
+	/** Whose managed routes anonymous traffic reaches: every extension's, none, or the named ones'. Absent means every. */
+	readonly ingress?: boolean | ReadonlyArray<string>;
+}
+
 /** Owns one generation's optional extensions; resources exist only in a live scope. */
 export class Extensions extends Context.Service<Extensions, Effect.Success<ReturnType<typeof make>>>()(
 	"comms/server/Extensions",
 ) {}
-const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect.Effect<void>) =>
+const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect.Effect<void>, board: BoardSettings) =>
 	Effect.gen(function* () {
+		const ingress = board.ingress ?? true;
+		const admits = (extension: string) => (typeof ingress === "boolean" ? ingress : ingress.includes(extension));
 		const path = yield* Path.Path;
 		const sql = yield* SqlClient.SqlClient;
 		const crypto = yield* Crypto.Crypto;
@@ -139,6 +148,7 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 				{ name, status: "loaded", load_ms: 0, error: null } satisfies Status,
 			]);
 			const api: Api = {
+				origin: board.origin,
 				effects,
 				context: (scope) =>
 					Effect.gen(function* () {
@@ -437,7 +447,14 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 				ingress: selected
 					.filter((route) => route.access === "application-managed")
 					.slice(0, 16)
-					.map(({ extension, method, path }) => ({ extension, method, path, access: "application-managed" })),
+					.map(({ extension, method, path }) => ({
+						extension,
+						method,
+						path,
+						access: "application-managed",
+						// Listed so a rehearsal shows a route that boot's ingress setting keeps private.
+						...(admits(extension) ? {} : { inactive: "ingress_not_allowed" }),
+					})),
 				ingress_overflow: Math.max(0, selected.filter((route) => route.access === "application-managed").length - 16),
 				suppressed: records.slice(0, 64),
 				suppressed_overflow: reports.reduce(
@@ -489,7 +506,9 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 			dispatch: <A, E, R>(fallback: Effect.Effect<A, E, R>) =>
 				Effect.gen(function* () {
 					const incoming = yield* HttpServerRequest.HttpServerRequest;
-					const selection = yield* selectRequest(matcher, incoming).pipe(Effect.result);
+					const selection = yield* selectRequest(matcher, incoming, (route) => admits(route.extension)).pipe(
+						Effect.result,
+					);
 					if (selection._tag === "Failure")
 						return HttpServerResponse.jsonUnsafe(
 							{
@@ -627,5 +646,9 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 				}),
 		};
 	});
-export const layer = (directory: string, capabilities: CapabilityFactory, onWork: Effect.Effect<void> = Effect.void) =>
-	Layer.effect(Extensions, make(directory, capabilities, onWork)).pipe(Layer.provide(FetchHttpClient.layer));
+export const layer = (
+	directory: string,
+	capabilities: CapabilityFactory,
+	onWork: Effect.Effect<void> = Effect.void,
+	board: BoardSettings = {},
+) => Layer.effect(Extensions, make(directory, capabilities, onWork, board)).pipe(Layer.provide(FetchHttpClient.layer));

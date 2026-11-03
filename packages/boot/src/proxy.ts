@@ -20,6 +20,7 @@ import {
 	traceparentHeader,
 } from "@comms/protocol/headers";
 import { applicationCookies, isReservedIngressPath } from "./application-ingress.ts";
+import { ingressEnabled } from "./ingress-configuration.ts";
 import { recoveryRoute } from "./recovery-http.ts";
 import { settingsRoute } from "./settings-http.ts";
 import { recoveryManifest } from "./route-discovery.ts";
@@ -320,7 +321,12 @@ export const proxy = Effect.gen(function* () {
 						if (admitted.waited && identity) identity = yield* authenticate(auth, request);
 					}
 				}
-				if (!destination) return expires(unavailable());
+				// With no live app to delegate to, anonymous ingress gets the challenge it would get with ingress off, so a
+				// browser is still sent to sign in while the app starts or is broken. An application bearer learns it is down.
+				if (!destination)
+					return managedIngress && !applicationBearer
+						? yield* new AuthError({ code: "session_invalid" })
+						: expires(unavailable());
 				if (managedIngress && !destination.applicationManagedIngress)
 					return applicationBearer
 						? authErrorResponse("credential_required", 401)
@@ -364,7 +370,7 @@ export const proxy = Effect.gen(function* () {
 							...(managedIngress && applicationBearer && !connectionHeaders.has("authorization")
 								? { authorization: request.headers.authorization }
 								: {}),
-							...(ingress?.applicationManagedIngress &&
+							...(ingressEnabled(ingress) &&
 							!connectionHeaders.has("cookie") &&
 							applicationCookies(request.headers.cookie)
 								? { cookie: applicationCookies(request.headers.cookie) }
@@ -462,8 +468,7 @@ export const proxy = Effect.gen(function* () {
 												(cookie) =>
 													cookie.name !== sessionCookie &&
 													cookie.name !== oidcCookie &&
-													(ingress?.applicationManagedIngress !== true ||
-														cookie.name.startsWith(applicationCookiePrefix)),
+													(!ingressEnabled(ingress) || cookie.name.startsWith(applicationCookiePrefix)),
 											),
 										),
 							}).pipe(
@@ -493,10 +498,7 @@ export const proxy = Effect.gen(function* () {
 			return yield* forward(false, false, channel.epoch);
 		}
 		// App bearer credentials cannot invoke boot surfaces or silently replace a supplied board session.
-		if (
-			applicationBearer &&
-			(ingress?.applicationManagedIngress !== true || boardSession || isReservedIngressPath(path))
-		)
+		if (applicationBearer && (!ingressEnabled(ingress) || boardSession || isReservedIngressPath(path)))
 			return authErrorResponse("token_invalid");
 		// Recovery help carries a public yes/no on whether stored passkeys match an allowed origin; detail needs auth.
 		if (path === "/_boot" && request.method === "GET") {
@@ -582,7 +584,7 @@ export const proxy = Effect.gen(function* () {
 		const managedIngress =
 			!explicitCredential &&
 			(!isPublic || applicationBearer) &&
-			ingress?.applicationManagedIngress === true &&
+			ingressEnabled(ingress) &&
 			!isReservedIngressPath(path);
 		return yield* forward((!isPublic && !managedIngress) || explicitCredential, managedIngress);
 	}).pipe(Effect.tap((response) => (observed ? observed.respond(response) : Effect.void)));

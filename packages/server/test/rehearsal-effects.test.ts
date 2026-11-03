@@ -70,9 +70,30 @@ export default Effect.gen(function* () {
 		await fetch(`${app.url}/api/events?since=0&types=generation.rehearsed`, { headers: { cookie } })
 	).json();
 	expect(events.items).toHaveLength(1);
-	expect(events.items[0].payload).toEqual({
+	const { ingress, ...payload } = events.items[0].payload;
+	// Without boot.config.json only MCP serves anonymously, so the report marks this extension's route inactive.
+	expect(ingress[0]).toEqual({
+		extension: "effects.ts",
+		method: "GET",
+		path: "/example-rehearsal",
+		access: "application-managed",
+		inactive: "ingress_not_allowed",
+	});
+	expect(ingress.slice(1)).toContainEqual({
+		extension: "mcp",
+		method: "POST",
+		path: "/mcp",
+		access: "application-managed",
+	});
+	expect(
+		ingress
+			.slice(1)
+			.every(
+				(route: { extension: string; inactive?: string }) => route.extension === "mcp" && route.inactive === undefined,
+			),
+	).toBe(true);
+	expect(payload).toEqual({
 		ingress_ready: true,
-		ingress: [{ extension: "effects.ts", method: "GET", path: "/example-rehearsal", access: "application-managed" }],
 		ingress_overflow: 0,
 		suppressed: [
 			{ extension: "effects.ts", kind: "cron", reason: "rehearsal", expression: "0 0 * * *" },

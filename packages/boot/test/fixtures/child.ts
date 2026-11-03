@@ -1,5 +1,6 @@
 import {
 	agentHeader,
+	allExtensionsIngressProtocolVersion,
 	ingressProtocolHeader,
 	ingressProtocolVersion,
 	ingressTargetHeader,
@@ -44,6 +45,8 @@ export function serve(mode: string) {
 						[kernelProtocolHeader]: "2",
 						...(mode === "ingress" ? { [ingressProtocolHeader]: ingressProtocolVersion } : {}),
 						...(mode === "ingress-v1" ? { [ingressProtocolHeader]: "1" } : {}),
+						// A kernel from before per-extension ingress: it would admit every extension's managed routes.
+						...(mode === "ingress-v2" ? { [ingressProtocolHeader]: allExtensionsIngressProtocolVersion } : {}),
 					},
 				});
 			if (url.pathname === applicationIngressPath)
@@ -57,6 +60,12 @@ export function serve(mode: string) {
 				});
 			if (url.pathname === "/cancelled") return new Response(String(cancelled));
 			// Lets a test act as this live attempt on boot's private channel, as the real app does for grants.
+			// What boot told this app about its board.
+			if (url.pathname === "/fixture-board")
+				return Response.json({
+					origin: process.env.BOARD_ORIGIN ?? null,
+					ingress: process.env.APPLICATION_MANAGED_INGRESS ?? null,
+				});
 			if (url.pathname === "/fixture-channel")
 				return Response.json({ secret: process.env.BOOT_SECRET ?? null, url: process.env.BOOT_URL ?? null });
 			if (url.pathname === "/hold-stream")

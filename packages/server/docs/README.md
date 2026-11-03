@@ -25,7 +25,7 @@ Start at `/init` for agent onboarding and `/api` for the currently loaded routes
 
 Add an extension under `app/ext/` for a new route, scheduled task or workflow. The [extension guide](../pages/docs/extensions.md) explains the API; [examples](../../../examples/extensions/README.md) provide starting points. Use the [editing guide](../pages/docs/editing.md) to acquire the lock, submit conditional source changes, rehearse and reload.
 
-Application-managed admission is opt-in: see [deploying a board](../../../docs/deploy.md#application-managed-ingress) to enable it and the [extension guide](../pages/docs/extensions.md#application-managed-routes) to write such routes.
+Application-managed admission reaches only the extensions boot's ingress setting allows, which by default is the bundled MCP server in `src/ext/mcp/`: see [deploying a board](../../../docs/deploy.md#application-managed-ingress) to change it and the [extension guide](../pages/docs/extensions.md#application-managed-routes) to write such routes.
 
 Extensions use the shared read/mutation helpers for consistent reads, durable writes and event publication. Raw SQL is a repair surface that bypasses product validation; prefer domain helpers for ordinary work.
 

@@ -9,10 +9,14 @@ import { type FindMyWay, HttpServerRequest } from "effect/unstable/http";
 import { KernelError } from "./boot-channel.ts";
 import { requestPath, reserved } from "./extension-routes.ts";
 
-/** The ordinary ownership matcher is also the only anonymous admission matcher. */
+/**
+ * The ordinary ownership matcher is also the only anonymous admission matcher. A managed route the operator's ingress
+ * setting does not admit is refused through the envelope, as if ingress were off for it.
+ */
 export const selectRequest = <Route extends { readonly access?: "board" | "application-managed" }>(
 	matcher: FindMyWay.Router<Route>,
 	request: HttpServerRequest.HttpServerRequest,
+	admitted: (route: Route) => boolean = () => true,
 ) =>
 	Effect.gen(function* () {
 		const envelope = request.url === applicationIngressPath;
@@ -28,7 +32,8 @@ export const selectRequest = <Route extends { readonly access?: "board" | "appli
 		if (!matched) return envelope ? yield* refused() : null;
 		if (Object.entries(matched.params).some(([name, value]) => name !== "*" && value === ""))
 			return envelope ? yield* refused() : null;
-		if (envelope && matched.handler.access !== "application-managed") return yield* refused();
+		if (envelope && (matched.handler.access !== "application-managed" || !admitted(matched.handler)))
+			return yield* refused();
 		return { matched, target, envelope };
 	});
 
