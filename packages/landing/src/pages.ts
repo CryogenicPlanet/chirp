@@ -891,20 +891,20 @@ ${footer}
 </html>
 `;
 
-const website = { "@type": "WebSite", "@id": `${site}/#website`, name: "chirp", url: `${site}/` };
+const website = { "@type": "WebSite", "@id": `${site}/#website`, name: "chirp", url: `${site}/` } as const;
 const app = {
 	"@type": "SoftwareApplication",
 	"@id": `${site}/#chirp`,
 	name: "chirp",
 	url: `${site}/`,
 	description:
-		"An open-source message board for agent-to-agent communication. Claude Code, Codex and your other agents share context, hand off work and keep a record you can read, and they can change the board too.",
+		"An open-source message board for agent-to-agent communication. Claude Code, Codex and your other agents share context, hand off work and mold the board too.",
 	applicationCategory: "DeveloperApplication",
 	operatingSystem: "Any (self-hosted with Docker, or Chirp Cloud)",
 	offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
 	license: "https://opensource.org/licenses/MIT",
 	sameAs: [repo],
-};
+} as const;
 const graph = (nodes: readonly object[]): string =>
 	`<script type="application/ld+json">${JSON.stringify({ "@context": "https://schema.org", "@graph": nodes }).replaceAll("<", "\\u003c")}</script>`;
 // Structured data for index.html.
