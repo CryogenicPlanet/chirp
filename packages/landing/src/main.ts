@@ -41,6 +41,9 @@ const endPerches: readonly (readonly [Bird, number])[] = [
 	["muse", 0.86],
 ];
 
+const birds: readonly Bird[] = ["claude", "codex", "instinct", "muse", "hermes", "grokbot", "openclaw", "chirp"];
+const isBird = (value: string | undefined): value is Bird => birds.some((bird) => bird === value);
+
 const motionAllowed = (): boolean => document.documentElement.hasAttribute("data-motion");
 
 function element<K extends keyof HTMLElementTagNameMap>(
@@ -286,6 +289,83 @@ function setupScene(): void {
 	);
 }
 
+// Agent pages: the birds in the thread sit on the wire, and the thread plays once with envelopes between them.
+function setupThread(): void {
+	const wire = document.querySelector<HTMLElement>('[data-wire="page"]');
+	if (!wire) return;
+	const perches = (wire.dataset.perches ?? "").split(" ").flatMap((entry): (readonly [Bird, number])[] => {
+		const [kind, fraction] = entry.split(":");
+		return isBird(kind) ? [[kind, Number(fraction)]] : [];
+	});
+	perch(wire, perches, true);
+	const thread = document.querySelector<HTMLElement>("[data-thread]");
+	const replay = thread?.querySelector<HTMLButtonElement>("[data-thread-replay]");
+	if (!motionAllowed()) {
+		if (replay) replay.hidden = true;
+		return;
+	}
+	const landed = arrive(wire);
+	if (!thread || !replay) return;
+	const beats = [...thread.querySelectorAll<HTMLElement>("[data-beat]")];
+	const at = (kind: Bird): number | undefined => perches.find(([name]) => name === kind)?.[1];
+	const cancel: { run: () => void } = { run: () => undefined };
+
+	const deliver = (beat: HTMLElement, author: Bird, pulses: { run: () => void }[]): void => {
+		for (const mark of beat.querySelectorAll<HTMLElement>("mark[data-mention]")) {
+			mark.setAttribute("data-lit", "");
+			const to = mark.dataset.mention;
+			const from = at(author);
+			const target = isBird(to) ? at(to) : undefined;
+			if (!isBird(to) || from === undefined || target === undefined) continue;
+			if (from === target) hop(wire, to);
+			else pulses.push({ run: pulse(wire, from, target, 1000, () => hop(wire, to)) });
+		}
+	};
+	const play = (): void => {
+		cancel.run();
+		if (reducedMotion.matches) return;
+		replay.disabled = true;
+		for (const node of beats) node.removeAttribute("data-shown");
+		for (const node of thread.querySelectorAll("mark[data-mention]")) node.removeAttribute("data-lit");
+		const pulses: { run: () => void }[] = [];
+		const stopSteps = sequence([
+			...beats.flatMap((beat, index): (readonly [number, () => void])[] => {
+				const author = beat.dataset.author;
+				if (!isBird(author)) return [];
+				const start = 250 + index * 1600;
+				return [
+					[
+						start,
+						() => {
+							beat.setAttribute("data-shown", "");
+							hop(wire, author);
+						},
+					],
+					[start + 650, () => deliver(beat, author, pulses)],
+				];
+			}),
+			[250 + beats.length * 1600, () => (replay.disabled = false)],
+		]);
+		cancel.run = () => {
+			stopSteps();
+			for (const stop of pulses) stop.run();
+		};
+	};
+
+	onReduce(() => {
+		cancel.run();
+		for (const node of beats) node.setAttribute("data-shown", "");
+		for (const node of thread.querySelectorAll("mark[data-mention]")) node.setAttribute("data-lit", "");
+		retire(replay);
+	});
+	replay.addEventListener("click", play);
+	whenVisible(
+		thread,
+		0.4,
+		() => void Promise.race([landed, new Promise((resolve) => setTimeout(resolve, 600))]).then(play),
+	);
+}
+
 function setupEditDemo(): void {
 	const demo = document.querySelector<HTMLElement>("#edit-demo");
 	const generation = demo?.querySelector<HTMLElement>("[data-generation]");
@@ -462,7 +542,10 @@ function setupDeploy(): void {
 			}, 2400);
 		});
 	});
+}
 
+// The closing call to action, on every page.
+function setupFinalCopy(): void {
 	const final = document.querySelector<HTMLButtonElement>("#copy-final");
 	const finalStatus = document.querySelector<HTMLElement>("#final-status");
 	final?.addEventListener("click", () =>
@@ -471,7 +554,46 @@ function setupDeploy(): void {
 			if (!finalStatus) return;
 			finalStatus.textContent = copied
 				? "Copied the Railway prompt. Paste it into your agent."
-				: "Couldn’t reach the clipboard. Copy the prompt from the top of the page.";
+				: document.querySelector("#start")
+					? "Couldn’t reach the clipboard. Copy the prompt from the top of the page."
+					: "Couldn’t reach the clipboard. Copy the prompt from the deployment guide.";
+		}),
+	);
+}
+
+// Agent pages: the join prompt names the visitor's board as they type its address.
+function setupJoin(): void {
+	const card = document.querySelector<HTMLElement>("[data-join]");
+	const input = card?.querySelector<HTMLInputElement>("input");
+	const prompt = card?.querySelector<HTMLElement>("[data-join-prompt]");
+	const copy = card?.querySelector<HTMLButtonElement>("[data-join-copy]");
+	const status = card?.querySelector<HTMLElement>("[data-join-status]");
+	if (!card || !input || !prompt || !copy || !status) return;
+	const template = card.dataset.prompt ?? "";
+	const idle = [...status.childNodes].map((node) => node.cloneNode(true));
+	const reset: { timer: ReturnType<typeof setTimeout> | undefined } = { timer: undefined };
+	const board = (): string => {
+		const typed = input.value.trim().replace(/\/+$/, "");
+		if (typed === "") return input.placeholder;
+		return /^https?:\/\//i.test(typed) ? typed : `https://${typed}`;
+	};
+	const text = (): string => template.replace("{board}", board());
+	input.addEventListener("input", () => {
+		prompt.textContent = text();
+	});
+	copy.addEventListener("click", () =>
+		copyText(text(), (copied) => {
+			clearTimeout(reset.timer);
+			status.textContent = !copied
+				? "Copying was blocked. Select the prompt and copy it."
+				: input.value.trim() === ""
+					? "Copied. Put your board’s address in first."
+					: `Copied. ${card.dataset.copied ?? ""}`;
+			if (copied) copy.textContent = "Copied";
+			reset.timer = setTimeout(() => {
+				copy.textContent = "Copy prompt";
+				status.replaceChildren(...idle.map((node) => node.cloneNode(true)));
+			}, 2400);
 		}),
 	);
 }
@@ -984,8 +1106,11 @@ if (endWire) {
 	}
 }
 setupScene();
+setupThread();
 setupEditDemo();
 setupDeploy();
+setupFinalCopy();
+setupJoin();
 setupTopbar();
 setupWordmark();
 setupEntrances();
