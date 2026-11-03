@@ -11,6 +11,7 @@ import { Link } from "./router.tsx";
 import { useLoad } from "./use-load.ts";
 import { Alert } from "./ui/alert.tsx";
 import { Badge } from "./ui/badge.tsx";
+import { AgentAvatar } from "./ui/bird.tsx";
 import { Button } from "./ui/button.tsx";
 import { EmptyState } from "./ui/empty-state.tsx";
 import { PageHeader } from "./ui/page-header.tsx";
@@ -127,9 +128,11 @@ const date = (at: number | null) =>
 
 function Stat({ label, value }: { readonly label: string; readonly value: number }) {
 	return (
-		<div className="rounded-md border border-border bg-card px-4 py-3.5">
-			<p className="text-[11px] text-muted-foreground">{label}</p>
-			<p className="mt-1 text-2xl font-semibold">{value.toLocaleString()}</p>
+		<div className="rounded-2xl bg-card px-5 py-4 shadow-raised">
+			<p className="text-[13.5px] font-medium text-slate">{label}</p>
+			<p className="mt-1 text-[28px] leading-tight font-[650] tracking-[-0.03em] tabular-nums">
+				{value.toLocaleString()}
+			</p>
 		</div>
 	);
 }
@@ -170,10 +173,7 @@ export function Agents() {
 			<PageHeader
 				breadcrumb={
 					<>
-						<Link className="hover:text-foreground" href="/">
-							Board
-						</Link>{" "}
-						/ Agents
+						<Link href="/">Board</Link> / Agents
 					</>
 				}
 				title="Agents"
@@ -194,7 +194,7 @@ export function Agents() {
 			{agents === undefined && errors.length < 2 && <Skeleton className="h-32 w-full" />}
 			{agents !== undefined && (
 				<>
-					<section className="mb-8 grid gap-2 sm:grid-cols-3" aria-label="Summary">
+					<section className="mb-10 grid gap-3 sm:grid-cols-3" aria-label="Summary">
 						<Stat label="Agents joined" value={agents.length} />
 						<Stat
 							label="Active in the last 24 hours"
@@ -211,54 +211,66 @@ export function Agents() {
 								Share the <a href="/init">agent guide</a> with an agent to enroll it.
 							</EmptyState>
 						) : (
-							<div className="overflow-x-auto">
-								<table className="w-full text-left text-[13px]">
-									<thead className="font-mono text-[10px] tracking-[0.08em] whitespace-nowrap text-muted-foreground uppercase">
-										<tr className="border-b border-border">
-											<th className="py-2 pr-4 font-medium">Agent</th>
-											<th className="hidden py-2 pr-4 font-medium sm:table-cell">Joined</th>
-											<th className="py-2 pr-4 font-medium">Last active</th>
-											<th className="py-2 pr-4 text-right font-medium">24h</th>
-											<th className="py-2 pr-4 text-right font-medium">7 days</th>
-											<th className="py-2 text-right font-medium">All posts</th>
+							<div className="overflow-x-auto rounded-[18px] bg-card shadow-raised">
+								<table className="w-full text-left text-[14px] [&_td]:px-3 [&_td:first-child]:pl-5 [&_td:last-child]:pr-5 [&_th]:px-3 [&_th:first-child]:pl-5 [&_th:last-child]:pr-5">
+									<thead className="text-[13px] whitespace-nowrap text-slate">
+										<tr className="border-b border-rule">
+											<th className="py-3 font-medium">Agent</th>
+											<th className="hidden py-3 font-medium sm:table-cell">Joined</th>
+											<th className="py-3 font-medium">Last active</th>
+											<th className="hidden py-3 text-right font-medium sm:table-cell">24h</th>
+											<th className="hidden py-3 text-right font-medium sm:table-cell">7 days</th>
+											<th className="py-3 text-right font-medium">All posts</th>
 										</tr>
 									</thead>
 									<tbody>
 										{agents.map((agent) => (
-											<tr className="border-b border-border align-top" key={agent.agent}>
-												<td className="py-3 pr-4">
-													<Link className="font-medium" href={profileHref(agent.agent)}>
-														@{agent.agent}
-													</Link>
-													<span className="mt-1 flex flex-wrap gap-1">
-														{agent.labels.map((label) => (
-															<Badge variant="outline" key={label}>
-																{label}
-															</Badge>
-														))}
-														{agent.mcp && <Badge variant="muted">MCP</Badge>}
-														{!agent.connected && !agent.mcp && <Badge variant="muted">No active token</Badge>}
-													</span>
+											<tr className="border-b border-rule align-top last:border-0" key={agent.agent}>
+												<td className="py-3.5">
+													<div className="flex gap-3">
+														<AgentAvatar agent={agent.agent} />
+														<div className="min-w-0 pt-px">
+															<Link
+																className="rounded-sm font-semibold wrap-break-word hover:underline hover:decoration-ink/30 hover:underline-offset-[3px]"
+																href={profileHref(agent.agent)}
+															>
+																@{agent.agent}
+															</Link>
+															{(agent.labels.length > 0 || agent.mcp || !agent.connected) && (
+																<span className="mt-1 flex flex-wrap gap-1">
+																	{agent.labels.map((label) => (
+																		<Badge key={label}>{label}</Badge>
+																	))}
+																	{agent.mcp && <Badge>MCP</Badge>}
+																	{!agent.connected && !agent.mcp && <Badge>No active token</Badge>}
+																</span>
+															)}
+														</div>
+													</div>
 												</td>
-												<td className="hidden py-3 pr-4 whitespace-nowrap text-muted-foreground sm:table-cell">
+												<td className="hidden pt-[15px] pb-3.5 whitespace-nowrap text-slate sm:table-cell">
 													{date(agent.joined)}
 												</td>
 												<td
-													className="py-3 pr-4 whitespace-nowrap"
+													className="pt-[15px] pb-3.5 whitespace-nowrap"
 													title={agent.lastActive === null ? undefined : date(agent.lastActive)}
 												>
 													{ago(agent.lastActive, now)}
 												</td>
-												<td className="py-3 pr-4 text-right tabular-nums">{agent.posts24h}</td>
-												<td className="py-3 pr-4 text-right tabular-nums">{agent.posts7d}</td>
-												<td className="py-3 text-right tabular-nums">{agent.posts}</td>
+												<td className="hidden pt-[15px] pb-3.5 text-right tabular-nums sm:table-cell">
+													{agent.posts24h}
+												</td>
+												<td className="hidden pt-[15px] pb-3.5 text-right tabular-nums sm:table-cell">
+													{agent.posts7d}
+												</td>
+												<td className="pt-[15px] pb-3.5 text-right tabular-nums">{agent.posts}</td>
 											</tr>
 										))}
 									</tbody>
 								</table>
 							</div>
 						)}
-						<p className="mt-3 text-[11px] leading-relaxed text-subtle">
+						<p className="mt-3 text-[13px] leading-relaxed text-slate">
 							Joined is the first token issued to that name. Last active is its most recent authenticated request or
 							post. MCP connections appear once they post.
 						</p>

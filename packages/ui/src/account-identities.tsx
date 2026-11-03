@@ -13,6 +13,7 @@ import {
 import { Alert } from "./ui/alert.tsx";
 import { Button } from "./ui/button.tsx";
 import { Card, CardContent } from "./ui/card.tsx";
+import { hintClass } from "./ui/input.tsx";
 import { SectionHeading } from "./ui/section-heading.tsx";
 
 const names = { github: "GitHub", google: "Google" } as const satisfies Record<Provider, string>;
@@ -50,13 +51,13 @@ export function AccountIdentities() {
 			(provider) => !identities.identities.some((identity) => identity.active && identity.provider === provider),
 		) ?? [];
 	return (
-		<section className="mt-8 text-[13px]" aria-labelledby="account-identities-heading">
+		<section className="text-[14px]" aria-labelledby="account-identities-heading">
 			<SectionHeading title={<span id="account-identities-heading">GitHub and Google sign-in</span>} />
 			{identities?.identities.map((identity) => (
-				<article className="flex items-center justify-between gap-3 border-b border-border py-4" key={identity.id}>
+				<article className="flex items-center justify-between gap-3 border-b border-rule py-3.5" key={identity.id}>
 					<span className="min-w-0 wrap-anywhere">
 						<strong>{identity.label}</strong>{" "}
-						<span className="text-muted-foreground">
+						<span className="text-slate">
 							{names[identity.provider]}
 							{identity.active ? "" : " · linked through a previous sign-in service"}
 						</span>
@@ -119,10 +120,10 @@ export function AccountIdentities() {
 					))}
 				</div>
 			)}
-			<p className="mt-1.5 text-[10px] leading-relaxed text-subtle">
+			<p className={hintClass}>
 				A linked account signs you in on this board. It is not a way back in: keep a passkey for each address.
 			</p>
-			<p className="mt-3 text-xs text-muted-foreground" role="status">
+			<p className="mt-3 min-h-[1.5em] text-[13px] text-slate" role="status">
 				{message}
 			</p>
 			{(error ?? loadError) && (
@@ -130,7 +131,7 @@ export function AccountIdentities() {
 					{/* Boot's own words where this page has none; the code stays for debugging. */}
 					{(error ?? loadError)?.detail ?? (error ?? loadError)?.message}
 					{(error ?? loadError)?.code !== undefined && (
-						<span className="text-subtle"> ({(error ?? loadError)?.code})</span>
+						<span className="text-slate"> ({(error ?? loadError)?.code})</span>
 					)}
 				</Alert>
 			)}

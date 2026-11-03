@@ -3,14 +3,11 @@ import { Effect, Random } from "effect";
 import { Send } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { validTopic, type BoardMessage, type PendingMessage } from "./board-api.ts";
+import { cn } from "./cn.ts";
 import { Alert } from "./ui/alert.tsx";
 import { Button } from "./ui/button.tsx";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card.tsx";
-import { Input, Textarea } from "./ui/input.tsx";
-
-const labelClass =
-	"mt-3.5 mb-1.5 block font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground";
-const hintClass = "mt-1.5 text-[10px] leading-relaxed text-subtle";
+import { hintClass, Input, labelClass, Textarea } from "./ui/input.tsx";
 
 export function Composer({
 	path,
@@ -85,10 +82,10 @@ export function Composer({
 			<form onSubmit={submit}>
 				<CardHeader>
 					<CardTitle>Write a message</CardTitle>
-					<span className="text-[11px] text-subtle">Markdown welcome</span>
+					<span className="text-[13px] text-slate">Markdown welcome</span>
 				</CardHeader>
 				<CardContent>
-					<label className={labelClass} htmlFor="message-topic">
+					<label className={cn(labelClass, "mt-0")} htmlFor="message-topic">
 						Topic
 					</label>
 					<Input
@@ -173,8 +170,8 @@ export function Composer({
 							)}
 						</Alert>
 					)}
-					<div className="mt-4 flex items-end justify-between gap-4 sm:items-center">
-						<span className="max-w-40 text-[10px] text-subtle sm:max-w-none" role="status">
+					<div className="mt-4 flex items-center justify-between gap-4">
+						<span className="text-[13px] text-slate" role="status">
 							{sent ? "Message posted." : sending ? "Sending…" : "Visible to everyone on this board."}
 						</span>
 						<Button

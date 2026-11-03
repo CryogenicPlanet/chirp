@@ -36,10 +36,7 @@ export function Extensions() {
 			<PageHeader
 				breadcrumb={
 					<>
-						<Link className="hover:text-foreground" href="/">
-							Board
-						</Link>{" "}
-						/ Extensions
+						<Link href="/">Board</Link> / Extensions
 					</>
 				}
 				title="Extensions"
@@ -66,14 +63,18 @@ export function Extensions() {
 						</EmptyState>
 					)}
 					{items.map((item) => (
-						<article className="border-t border-border py-6 text-[13px] wrap-anywhere" key={item.name}>
+						<article className="border-t border-rule py-6 text-[14px] wrap-anywhere" key={item.name}>
 							<header className="flex flex-wrap items-center gap-3">
-								<h2 className="text-[15px] font-medium">{item.name}</h2>
-								{item.status === "loaded" ? <Badge>Loaded</Badge> : <Badge variant="destructive">Disabled</Badge>}
-								<span className="text-[11px] text-muted-foreground tabular-nums">{item.load_ms} ms to load</span>
+								<h2 className="text-[16px] font-semibold tracking-[-0.01em]">{item.name}</h2>
+								{item.status === "loaded" ? (
+									<Badge variant="success">Loaded</Badge>
+								) : (
+									<Badge variant="destructive">Disabled</Badge>
+								)}
+								<span className="text-[13px] text-slate tabular-nums">{item.load_ms} ms to load</span>
 							</header>
 							{item.error !== null && (
-								<div className="my-4 text-destructive [&_pre]:text-[11px] [&_pre]:leading-relaxed [&_pre]:wrap-anywhere [&_pre]:whitespace-pre-wrap [&_summary]:cursor-pointer">
+								<div className="my-4 text-danger [&_pre]:mt-2 [&_pre]:rounded-xl [&_pre]:bg-wash [&_pre]:p-3.5 [&_pre]:font-mono [&_pre]:text-[12.5px] [&_pre]:leading-relaxed [&_pre]:wrap-anywhere [&_pre]:whitespace-pre-wrap [&_pre]:text-ink [&_pre]:ring-1 [&_pre]:ring-rule [&_summary]:mt-1 [&_summary]:w-fit [&_summary]:cursor-pointer [&_summary]:rounded-sm [&_summary]:font-medium">
 									<p>{item.error.split("\n", 1)[0]}</p>
 									<details>
 										<summary>Full error</summary>
@@ -85,10 +86,10 @@ export function Extensions() {
 								<ul className="my-4 list-none space-y-3 p-0">
 									{item.registrations.map((route, index) => (
 										<li key={`${route.method}-${route.path}-${index}`}>
-											<code className="rounded-sm bg-tag-surface px-1 py-0.5 text-xs">
+											<code className="rounded bg-wash px-1.5 py-0.5 font-mono text-[12.5px] ring-1 ring-rule">
 												{route.method} {route.path}
 											</code>
-											<span className="mt-1 block leading-relaxed text-muted-foreground">
+											<span className="mt-1 block leading-relaxed text-slate">
 												{route.description} ·{" "}
 												{route.access === "application-managed"
 													? "Application-managed access (app controls authentication when enabled)"
@@ -99,7 +100,7 @@ export function Extensions() {
 								</ul>
 							)}
 							<a
-								className="text-xs text-primary underline underline-offset-[3px] hover:text-primary-hover"
+								className="text-[13.5px] rounded-sm font-medium text-ink underline decoration-ink/30 underline-offset-[3px] transition-[text-decoration-color] hover:decoration-ink"
 								href={`/_boot/fs/app/ext/${encodeURIComponent(item.name)}`}
 							>
 								Read source ↗
@@ -109,22 +110,22 @@ export function Extensions() {
 				</section>
 			)}
 			<section
-				className="mt-8 border-t border-border pt-6 text-[13px] leading-relaxed wrap-anywhere"
+				className="mt-8 border-t border-rule pt-6 text-[14px] leading-relaxed wrap-anywhere [&_p]:my-2"
 				aria-labelledby="edit-lock-heading"
 			>
-				<h2 className="text-[15px] font-medium" id="edit-lock-heading">
+				<h2 className="text-[17px] font-semibold tracking-[-0.015em]" id="edit-lock-heading">
 					Edit lock
 				</h2>
 				{lockError ? (
 					<p>{lockError.message}</p>
 				) : lock === undefined ? (
-					<p className="text-muted-foreground">Loading lock status…</p>
+					<p className="text-slate">Loading lock status…</p>
 				) : lock ? (
 					<>
 						<p>
 							<strong>{lock.agent}</strong> is editing.
 							<br />
-							<span className="text-[11px] text-muted-foreground">Instance: {lock.holder_family}</span>
+							<span className="text-[13px] text-slate">Instance: {lock.holder_family}</span>
 						</p>
 						{lock.note && <p>{lock.note}</p>}
 						<p>
@@ -135,14 +136,14 @@ export function Extensions() {
 						</p>
 					</>
 				) : (
-					<p className="text-muted-foreground">No one holds the edit lock.</p>
+					<p className="text-slate">No one holds the edit lock.</p>
 				)}
 				<RecoveryControls lock={lockError ? undefined : lock} refresh={reload} />
-				<p className="text-muted-foreground">
+				<p className="text-slate">
 					Source edits and recovery use the bootloader. Source and diagnostic views require source access.
 				</p>
 				<nav
-					className="mt-5 flex flex-wrap gap-x-6 gap-y-3 [&>a]:text-xs [&>a]:text-primary [&>a]:underline [&>a]:underline-offset-[3px] [&>a]:hover:text-primary-hover"
+					className="mt-5 flex flex-wrap gap-x-6 gap-y-3 [&>a]:rounded-sm [&>a]:text-[13.5px] [&>a]:font-medium [&>a]:underline [&>a]:decoration-ink/30 [&>a]:underline-offset-[3px] [&>a]:transition-[text-decoration-color] [&>a]:hover:decoration-ink"
 					aria-label="Extension tools"
 				>
 					<a href="/_boot/recovery">Immutable recovery ↗</a>

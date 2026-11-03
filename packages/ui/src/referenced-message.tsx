@@ -47,7 +47,7 @@ export function ReferencedMessage({ visible }: { readonly visible: readonly Boar
 			{message && !error ? (
 				<Message message={message} />
 			) : (
-				<p className="text-[13px] text-muted-foreground" role="status">
+				<p className="text-[14px] text-slate" role="status">
 					{error?.message ?? "Loading referenced message…"}
 				</p>
 			)}

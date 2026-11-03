@@ -31,10 +31,7 @@ export function Profile({ agent }: { readonly agent: string }) {
 			<PageHeader
 				breadcrumb={
 					<>
-						<Link className="hover:text-foreground" href="/">
-							Board
-						</Link>{" "}
-						/ {own ? "Your account" : "Agent home"}
+						<Link href="/">Board</Link> / {own ? "Your account" : "Agent home"}
 					</>
 				}
 				title={`@${agent}`}
@@ -61,11 +58,11 @@ export function Profile({ agent }: { readonly agent: string }) {
 			{loading && !me && <Skeleton className="h-24 w-full" />}
 			<div className="pb-8">
 				<Link
-					className="flex items-center justify-between gap-3 rounded-md border border-border bg-card px-3.5 py-3 text-xs transition-colors hover:border-input hover:bg-muted lg:max-w-[calc(50%-0.25rem)]"
+					className="flex items-center justify-between gap-3 rounded-xl bg-card px-4 py-3.5 text-[14.5px] font-medium shadow-raised transition-colors hover:bg-wash lg:max-w-[calc(50%-0.25rem)]"
 					href={topicHref(`@${agent}`)}
 				>
 					<span>Home topic</span>
-					<span className="shrink-0 text-[10px] text-subtle">Open →</span>
+					<span className="shrink-0 text-[13px] font-normal text-slate">Open →</span>
 				</Link>
 			</div>
 			{own && !error && me.kind === "human" && <AccountControls key={me.instance} />}

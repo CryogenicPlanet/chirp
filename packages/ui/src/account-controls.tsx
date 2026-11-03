@@ -8,10 +8,11 @@ import { AccountSettings } from "./account-settings.tsx";
 import { AccountIdentities } from "./account-identities.tsx";
 import { AccountOrigins } from "./account-origins.tsx";
 import { AccountTokens } from "./account-tokens.tsx";
+import { cn } from "./cn.ts";
 import { Alert } from "./ui/alert.tsx";
 import { Button } from "./ui/button.tsx";
 import { Card, CardContent } from "./ui/card.tsx";
-import { Input } from "./ui/input.tsx";
+import { hintClass, Input, labelClass } from "./ui/input.tsx";
 import { SectionHeading } from "./ui/section-heading.tsx";
 
 export function AccountControls() {
@@ -38,8 +39,8 @@ export function AccountControls() {
 		});
 	};
 	return (
-		<div className="mt-9">
-			<section className="mt-8 text-[13px]" aria-labelledby="account-passkeys-heading">
+		<div className="mt-2 space-y-12">
+			<section className="text-[14px]" aria-labelledby="account-passkeys-heading">
 				<SectionHeading title={<span id="account-passkeys-heading">Your passkeys</span>}>
 					<Button
 						variant="outline"
@@ -55,10 +56,10 @@ export function AccountControls() {
 					</Button>
 				</SectionHeading>
 				{passkeys?.items.map((passkey) => (
-					<article className="flex items-center justify-between gap-3 border-b border-border py-4" key={passkey.id}>
+					<article className="flex items-center justify-between gap-3 border-b border-rule py-3.5" key={passkey.id}>
 						<span className="min-w-0 wrap-anywhere">
 							<strong>{passkey.label}</strong>
-							{passkey.rp_id && <span className="text-muted-foreground"> · {passkey.rp_id}</span>}
+							{passkey.rp_id && <span className="text-slate"> · {passkey.rp_id}</span>}
 						</span>
 						<Button
 							variant="outline"
@@ -72,9 +73,7 @@ export function AccountControls() {
 					</article>
 				))}
 				{passkeys?.items.some((passkey) => !passkey.can_delete) && (
-					<p className="mt-1.5 text-[10px] leading-relaxed text-subtle">
-						Keep at least one passkey for each configured address so you can sign in.
-					</p>
+					<p className={hintClass}>Keep at least one passkey for each configured address so you can sign in.</p>
 				)}
 				<Card className="mt-4">
 					<CardContent>
@@ -84,10 +83,7 @@ export function AccountControls() {
 								run(addPasskey(label.trim()), "Passkey added.");
 							}}
 						>
-							<label
-								className="mb-1.5 block font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
-								htmlFor="passkey-label"
-							>
+							<label className={cn(labelClass, "mt-0")} htmlFor="passkey-label">
 								New passkey label
 							</label>
 							<Input
@@ -99,16 +95,16 @@ export function AccountControls() {
 								onChange={(event) => setLabel(event.target.value)}
 								placeholder="Backup security key"
 							/>
-							<p className="mt-1.5 text-[10px] leading-relaxed text-subtle">
+							<p className={hintClass}>
 								First create the new passkey, then confirm using one already registered for this address.
 							</p>
-							<Button className="mt-3.5" variant="outline" size="sm" type="submit" disabled={busy || !label.trim()}>
+							<Button className="mt-4" size="sm" type="submit" disabled={busy || !label.trim()}>
 								Add passkey
 							</Button>
 						</form>
 					</CardContent>
 				</Card>
-				<p className="mt-3 text-xs text-muted-foreground" role="status">
+				<p className="mt-3 min-h-[1.5em] text-[13px] text-slate" role="status">
 					{message}
 				</p>
 				{(error ?? loadError) && (

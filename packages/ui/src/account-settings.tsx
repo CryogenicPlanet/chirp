@@ -7,19 +7,15 @@ import { type BoardError } from "./board-api.ts";
 import { Alert } from "./ui/alert.tsx";
 import { Button } from "./ui/button.tsx";
 import { Card, CardContent } from "./ui/card.tsx";
-import { Input } from "./ui/input.tsx";
+import { hintClass, Input, labelClass } from "./ui/input.tsx";
 import { SectionHeading } from "./ui/section-heading.tsx";
 
 type Pending = { readonly body: SettingsChange; readonly proof: string; readonly observed: Settings };
 
-const labelClass =
-	"mt-3.5 mb-1.5 block font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground";
-const hintClass = "mt-1.5 text-[10px] leading-relaxed text-subtle";
-
 export function AccountSettings() {
 	const { value, error, loading, reload, update } = useLoad(getSettings);
 	return (
-		<section className="mt-8 text-[13px]" aria-labelledby="account-settings-heading">
+		<section className="text-[14px]" aria-labelledby="account-settings-heading">
 			<SectionHeading title={<span id="account-settings-heading">Board settings</span>}>
 				<Button variant="outline" size="sm" type="button" disabled={loading} onClick={reload}>
 					Refresh settings
@@ -37,7 +33,7 @@ export function AccountSettings() {
 				</Alert>
 			)}
 			{!value && loading && (
-				<p className="mt-3 text-xs text-muted-foreground" role="status">
+				<p className="mt-3 text-[13px] text-slate" role="status">
 					Loading settings…
 				</p>
 			)}
@@ -128,11 +124,11 @@ function SettingsForm({
 						save();
 					}}
 				>
-					<p className="text-xs text-muted-foreground">
+					<p className="text-[13px] text-slate">
 						Draft revision {revision} · current revision {current.revision}
 					</p>
 					<fieldset className="min-w-0" disabled={busy || pending !== null}>
-						<legend className="pt-2 text-sm font-medium">Storage limits (% of volume)</legend>
+						<legend className="pt-3 text-[15px] font-semibold">Storage limits (% of volume)</legend>
 						<label className={labelClass} htmlFor="settings-backup">
 							Backups
 						</label>
@@ -208,7 +204,6 @@ function SettingsForm({
 					)}
 					<Button
 						className="mt-4"
-						variant="outline"
 						size="sm"
 						type="submit"
 						disabled={busy || readBlocked || (!pending && (!valid || changed))}
@@ -216,7 +211,7 @@ function SettingsForm({
 						{busy ? "Waiting…" : pending ? "Retry exact signed attempt" : "Save with passkey"}
 					</Button>
 					{message && (
-						<p className="mt-3 text-xs text-muted-foreground" role="status">
+						<p className="mt-3 text-[13px] text-slate" role="status">
 							{message}
 						</p>
 					)}

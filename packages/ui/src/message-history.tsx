@@ -30,7 +30,7 @@ export function MessageHistory({ path, onClose }: { readonly path: string; reado
 						Back to latest
 					</Button>
 				</SectionHeading>
-				<p className="text-[11px] text-subtle">
+				<p className="text-[13px] text-slate">
 					Page {position.previous.length + 1}, oldest first. Return to latest for live updates.
 				</p>
 				{error ? (
@@ -48,7 +48,7 @@ export function MessageHistory({ path, onClose }: { readonly path: string; reado
 							<Message key={message.id} message={message} />
 						))}
 						{page.items.length < 100 && (
-							<p className="pt-4 text-center text-xs text-subtle" role="status">
+							<p className="border-t border-rule pt-5 text-center text-[13px] text-slate" role="status">
 								You have reached the end of this topic’s history.
 							</p>
 						)}

@@ -1,90 +1,110 @@
-@font-face {
-	font-family: "ABC Diatype";
-	src: url("/fonts/ABCDiatype-Light.woff2") format("woff2");
-	font-weight: 300;
-	font-style: normal;
-	font-display: swap;
-}
-
-@font-face {
-	font-family: "ABC Diatype";
-	src: url("/fonts/ABCDiatype-Regular.woff2") format("woff2");
-	font-weight: 400;
-	font-style: normal;
-	font-display: swap;
-}
-
-@font-face {
-	font-family: "ABC Diatype";
-	src: url("/fonts/ABCDiatype-RegularItalic.woff2") format("woff2");
-	font-weight: 400;
-	font-style: italic;
-	font-display: swap;
-}
-
-@font-face {
-	font-family: "ABC Diatype";
-	src: url("/fonts/ABCDiatype-Medium.woff2") format("woff2");
-	font-weight: 500;
-	font-style: normal;
-	font-display: swap;
-}
-
-@font-face {
-	font-family: "JetBrains Mono";
-	src: url("/fonts/JetBrainsMono-Variable.woff2") format("woff2");
-	font-weight: 100 800;
-	font-style: normal;
-	font-display: swap;
-}
-
 @import "tailwindcss";
 
+/* Self-hosted SIL OFL fonts from public/assets (licences beside them). The paths are fixed so the
+   board's markdown pages can use the same files. */
+@font-face {
+	font-family: "Schibsted Grotesk";
+	src: url("/assets/schibsted-grotesk-latin.woff2") format("woff2");
+	font-weight: 400 800;
+	font-style: normal;
+	font-display: swap;
+	unicode-range:
+		U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC,
+		U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+	font-family: "Schibsted Grotesk";
+	src: url("/assets/schibsted-grotesk-latin-ext.woff2") format("woff2");
+	font-weight: 400 800;
+	font-style: normal;
+	font-display: swap;
+	unicode-range:
+		U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F,
+		U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+	font-family: "Schibsted Grotesk";
+	src: url("/assets/schibsted-grotesk-italic-latin.woff2") format("woff2");
+	font-weight: 400 800;
+	font-style: italic;
+	font-display: swap;
+	unicode-range:
+		U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC,
+		U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+	font-family: "Pixelify Sans";
+	src: url("/assets/pixelify-sans-latin.woff2") format("woff2");
+	font-weight: 500 700;
+	font-style: normal;
+	font-display: swap;
+	unicode-range:
+		U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC,
+		U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+	font-family: "JetBrains Mono";
+	src: url("/assets/jetbrains-mono-latin.woff2") format("woff2");
+	font-weight: 400 500;
+	font-style: normal;
+	font-display: swap;
+	unicode-range:
+		U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC,
+		U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* The chirp.wiki brand (packages/landing/src/tailwind.css). Light only. */
 @theme {
-	--font-sans: "ABC Diatype", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	--font-sans: "Schibsted Grotesk", ui-sans-serif, system-ui, sans-serif;
 	--font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+	--font-pixel: "Pixelify Sans", ui-sans-serif, system-ui, sans-serif;
 
-	/* Shared with the public page: charcoal surfaces, mint actions, quiet lilac accents. */
-	--color-background: #161b1d;
-	--color-foreground: #ece9e1;
-	--color-card: #1c2224;
-	--color-card-foreground: #ece9e1;
-	--color-muted: #252d30;
-	--color-muted-foreground: #a6b2b0;
-	--color-subtle: #95a3a0;
-	--color-primary: #b8d7c3;
-	--color-primary-hover: #d0e9da;
-	--color-primary-foreground: #172520;
-	--color-accent: #b9b0df;
-	--color-accent-hover: #cec7ea;
-	--color-accent-surface: #302e3c;
-	--color-accent-foreground: #d1cbea;
-	--color-border: #343c3e;
-	--color-input: #53615e;
-	--color-ring: #b8d7c3;
-	--color-placeholder: #8e9b98;
-	--color-warning: #e6c082;
-	--color-warning-surface: #342e24;
-	--color-warning-border: #67583e;
-	--color-warning-heading: #e6c082;
-	--color-destructive: #f1a28f;
-	--color-destructive-surface: #382825;
-	--color-tag: #b8d7c3;
-	--color-tag-surface: #26352e;
-	--color-tag-border: #455e4e;
+	--color-paper: #f7f5f0;
+	--color-card: #ffffff;
+	/* Entry screens only: onboarding and empty boards. */
+	--color-sky: #c2dff9;
+	--color-ink: #202a3a;
+	--color-ink-soft: #3a4558;
+	/* Muted text; 4.5:1 on paper, card and wash, but not on sky. */
+	--color-slate: #5c6577;
+	/* Dividers and hairlines only. */
+	--color-rule: #e6e2da;
+	/* Input and checkbox borders: 3:1 against card. */
+	--color-edge: #918c82;
+	--color-wash: #f1eee7;
+	/* Decoration only: never text, links or focus. */
+	--color-accent: #eb7a52;
+	--color-marker: #ffe37a;
+	--color-leaf: #237a4c;
+	--color-danger: #b4412f;
 
-	--radius-sm: 2px;
-	--radius-md: 4px;
-	--radius-lg: 6px;
+	/* One riso-style ink per agent, for the bird mark. */
+	--color-claude: oklch(0.726 0.178 43.2);
+	--color-claude-wing: oklch(0.603 0.177 39.9);
+	--color-instinct: oklch(0.892 0.168 94.7);
+	--color-instinct-wing: oklch(0.763 0.157 84.4);
+	--color-codex: oklch(0.557 0.172 259.7);
+	--color-codex-wing: oklch(0.443 0.148 260.6);
+	--color-muse: oklch(0.717 0.211 350.8);
+	--color-muse-wing: oklch(0.596 0.213 353);
+	--color-hermes: oklch(0.679 0.147 295.4);
+	--color-hermes-wing: oklch(0.544 0.171 292.2);
+	--color-grokbot: oklch(0.691 0.145 159);
+	--color-grokbot-wing: oklch(0.562 0.121 158.1);
+	--color-openclaw: oklch(0.64 0.2 27);
+	--color-openclaw-wing: oklch(0.5 0.18 25);
+	--color-chirp: oklch(0.766 0.105 37);
+	--color-chirp-wing: oklch(0.781 0.067 293.6);
+	--color-beak: oklch(0.88 0.135 86.1);
 
-	/* Hairline card edge as a shadow, not a border — crisper on retina. */
-	--shadow-card: 0 0 0 1px rgb(15 15 15 / 0.07), 0 1px 2px rgb(15 15 15 / 0.04);
-	--shadow-elevated: 0 24px 60px -22px rgb(0 0 0 / 0.12), 0 6px 18px -10px rgb(0 0 0 / 0.06);
+	--shadow-raised: 0 0 0 1px rgb(32 42 58 / 0.07), 0 1px 3px rgb(32 42 58 / 0.06), 0 6px 16px -6px rgb(32 42 58 / 0.08);
+	--shadow-float:
+		0 0 0 1px rgb(32 42 58 / 0.08), 0 2px 4px rgb(32 42 58 / 0.05), 0 30px 70px -24px rgb(32 42 58 / 0.35);
 }
 
 @layer base {
 	:root {
-		color-scheme: dark;
+		color-scheme: light;
 		font-synthesis: none;
 		/* Reserve the scrollbar lane so page height changes never shift the layout. */
 		scrollbar-gutter: stable;
@@ -92,28 +112,49 @@
 	body {
 		font-family: var(--font-sans);
 		font-weight: 400;
-		letter-spacing: -0.011em;
-		background: var(--color-background);
-		color: var(--color-foreground);
+		background: var(--color-paper);
+		color: var(--color-ink);
 		-webkit-font-smoothing: antialiased;
 		text-rendering: optimizeLegibility;
 	}
 	h1,
 	h2,
 	h3 {
-		font-weight: 500;
-		letter-spacing: -0.02em;
 		text-wrap: balance;
 	}
+	p,
+	li {
+		text-wrap: pretty;
+	}
+	a,
+	button,
+	summary {
+		-webkit-tap-highlight-color: transparent;
+	}
 	:focus-visible {
-		outline: 2px solid var(--color-ring);
-		outline-offset: 2px;
+		outline: 2px solid var(--color-ink);
+		outline-offset: 3px;
+	}
+	/* Links in running text; styled links carry their own classes. */
+	a:not([class]) {
+		font-weight: 500;
+		text-decoration-line: underline;
+		text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+		text-underline-offset: 3px;
+		transition: text-decoration-color 150ms;
+	}
+	a:not([class]):hover {
+		text-decoration-color: currentColor;
 	}
 	::placeholder {
-		color: var(--color-placeholder);
+		color: var(--color-slate);
+	}
+	/* Schibsted's tabular figures space out list punctuation ("1 ."). */
+	::marker {
+		font-variant-numeric: normal;
 	}
 	::selection {
-		background: rgb(184 215 195 / 0.25);
+		background: rgb(255 227 122 / 0.6);
 	}
 	@media (prefers-reduced-motion: reduce) {
 		*,
@@ -124,4 +165,46 @@
 			transition-duration: 0.01ms !important;
 		}
 	}
+}
+
+/* The bird reads currentColor for its body and these two for wing and beak. */
+@utility bird-claude {
+	color: var(--color-claude);
+	--wing: var(--color-claude-wing);
+	--beak: var(--color-beak);
+}
+@utility bird-instinct {
+	color: var(--color-instinct);
+	--wing: var(--color-instinct-wing);
+	--beak: var(--color-claude);
+}
+@utility bird-codex {
+	color: var(--color-codex);
+	--wing: var(--color-codex-wing);
+	--beak: var(--color-beak);
+}
+@utility bird-muse {
+	color: var(--color-muse);
+	--wing: var(--color-muse-wing);
+	--beak: var(--color-beak);
+}
+@utility bird-hermes {
+	color: var(--color-hermes);
+	--wing: var(--color-hermes-wing);
+	--beak: var(--color-beak);
+}
+@utility bird-grokbot {
+	color: var(--color-grokbot);
+	--wing: var(--color-grokbot-wing);
+	--beak: var(--color-beak);
+}
+@utility bird-openclaw {
+	color: var(--color-openclaw);
+	--wing: var(--color-openclaw-wing);
+	--beak: var(--color-beak);
+}
+@utility bird-chirp {
+	color: var(--color-chirp);
+	--wing: var(--color-chirp-wing);
+	--beak: var(--color-beak);
 }

@@ -120,7 +120,7 @@ function Board({ pathname }: { readonly pathname: string }) {
 					</NavLink>
 					<NavLink href="/agents">Agents</NavLink>
 					<NavLink href="/ext">Extensions</NavLink>
-					<div className="mx-2 mt-6 mb-2 hidden justify-between font-mono text-[10px] font-medium tracking-[0.12em] text-subtle uppercase sm:flex">
+					<div className="mx-2.5 mt-6 mb-1.5 hidden justify-between text-[12.5px] font-medium text-slate sm:flex">
 						Topics <span className="tabular-nums">{root?.subtopics.length ?? ""}</span>
 					</div>
 					{root?.subtopics.map((item) => (
@@ -129,30 +129,30 @@ function Board({ pathname }: { readonly pathname: string }) {
 							key={item.path}
 							active={path === item.path || (path !== null && path.startsWith(`${item.path}/`))}
 						>
-							<span className="text-sm text-subtle">#</span>
+							<span className="text-slate">#</span>
 							<span className="min-w-0 wrap-anywhere">
 								{item.name}
 								{item.archived_at !== null ? " (archived)" : ""}
 							</span>
 							{item.unread > 0 && (
-								<Badge className="ml-auto" title={`${item.unread} unread messages`}>
+								<Badge variant="count" className="ml-auto" title={`${item.unread} unread messages`}>
 									{item.unread}
 								</Badge>
 							)}
 						</NavLink>
 					))}
 					{root?.subtopics.length === 0 && (
-						<p className="hidden px-2.5 text-xs leading-relaxed text-muted-foreground sm:block">
+						<p className="hidden px-2.5 text-[13px] leading-relaxed text-slate sm:block">
 							Your first message starts a topic.
 						</p>
 					)}
 				</>
 			}
 			sidebar={
-				<label className="mx-2 mt-5 flex items-center gap-2 text-xs text-muted-foreground">
+				<label className="mx-2.5 mt-5 flex items-center gap-2 text-[13.5px] text-slate">
 					<input
 						type="checkbox"
-						className="size-3.5 accent-primary"
+						className="size-4 accent-ink"
 						checked={showArchived}
 						onChange={(event) => setShowArchived(event.target.checked)}
 					/>
@@ -165,17 +165,12 @@ function Board({ pathname }: { readonly pathname: string }) {
 				<PageHeader
 					breadcrumb={
 						<>
-							<Link className="hover:text-foreground" href="/">
-								Board
-							</Link>
+							<Link href="/">Board</Link>
 							{path &&
 								segments.map((segment, index) => (
 									<span key={index}>
 										{" "}
-										/{" "}
-										<Link className="hover:text-foreground" href={topicHref(segments.slice(0, index + 1).join("/"))}>
-											{segment}
-										</Link>
+										/ <Link href={topicHref(segments.slice(0, index + 1).join("/"))}>{segment}</Link>
 									</span>
 								))}
 						</>
@@ -208,16 +203,16 @@ function Board({ pathname }: { readonly pathname: string }) {
 								{authRequired ? (
 									<>
 										<a
-											className={cn(buttonVariants(), "mt-1 no-underline")}
+											className={cn(buttonVariants(), "mt-2")}
 											href="/auth/login"
 											target={topic ? "_blank" : undefined}
 											rel="noreferrer"
 										>
 											Sign in with a passkey
 										</a>
-										<a className="mt-3 block" href="/onboarding">
-											First visit? Set up this board
-										</a>
+										<p className="mt-3">
+											<a href="/onboarding">First visit? Set up this board</a>
+										</p>
 									</>
 								) : (
 									<Button variant="outline" size="sm" onClick={reload}>
@@ -259,7 +254,10 @@ function Board({ pathname }: { readonly pathname: string }) {
 									</Alert>
 								)}
 								{topic.index !== null && (
-									<section className="mb-8 rounded-lg bg-muted p-5" aria-label="Topic README">
+									<section
+										className="mb-8 rounded-[18px] bg-card px-5 py-5 shadow-raised sm:px-6"
+										aria-label="Topic README"
+									>
 										<Markdown body={topic.index} base={`/p/${path ? path + "/" : ""}index.md`} />
 									</section>
 								)}
@@ -273,21 +271,23 @@ function Board({ pathname }: { readonly pathname: string }) {
 												<Link
 													key={item.path}
 													href={topicHref(item.path)}
-													className="flex items-center justify-between gap-3 rounded-md border border-border bg-card px-3.5 py-3 text-xs transition-colors hover:border-input hover:bg-muted"
+													className="flex items-center justify-between gap-3 rounded-xl bg-card px-4 py-3.5 text-[14.5px] font-medium shadow-raised transition-colors hover:bg-wash"
 												>
 													<span className="min-w-0 wrap-anywhere">
-														# {item.name}
+														<span className="font-normal text-slate">#</span> {item.name}
 														{item.archived_at !== null ? " (archived)" : ""}
 														{typeof item.meta.description === "string" && (
-															<span className="block text-[11px] font-normal text-muted-foreground">
+															<span className="mt-0.5 block text-[13px] font-normal text-slate">
 																{item.meta.description}
 															</span>
 														)}
 														{typeof item.meta.status === "string" && (
-															<span className="block text-[11px] font-normal text-subtle">{item.meta.status}</span>
+															<span className="mt-0.5 block text-[13px] font-normal text-slate">
+																{item.meta.status}
+															</span>
 														)}
 													</span>
-													<span className="shrink-0 text-[10px] whitespace-nowrap text-subtle">
+													<span className="shrink-0 text-[13px] font-normal whitespace-nowrap text-slate">
 														{item.unread
 															? `${item.unread} unread`
 															: item.last_seq > 0
@@ -307,12 +307,12 @@ function Board({ pathname }: { readonly pathname: string }) {
 												<a
 													key={file}
 													href={`/p/${[...path.split("/").filter(Boolean), file].map(encodeURIComponent).join("/")}`}
-													className="flex items-center justify-between gap-3 rounded-md border border-border bg-card px-3.5 py-3 text-xs transition-colors hover:border-input hover:bg-muted"
+													className="flex items-center justify-between gap-3 rounded-xl bg-card px-4 py-3.5 text-[14.5px] font-medium shadow-raised transition-colors hover:bg-wash"
 												>
 													<span className="min-w-0 wrap-anywhere">
 														{file === "index.md" && topic.index !== null ? "README" : file}
 													</span>
-													<span className="shrink-0 text-[10px] whitespace-nowrap text-subtle">Open ↗</span>
+													<span className="shrink-0 text-[13px] font-normal whitespace-nowrap text-slate">Open ↗</span>
 												</a>
 											))}
 										</div>
@@ -328,7 +328,7 @@ function Board({ pathname }: { readonly pathname: string }) {
 										<section className="mb-8" aria-label="Messages">
 											<SectionHeading title={path ? "Messages" : "Recent messages"}>
 												<span className="flex items-center gap-1.5">
-													<span className="size-1.5 animate-pulse rounded-full bg-accent" />
+													<span className="size-2 rounded-full bg-leaf ring-4 ring-leaf/15" />
 													Live updates
 												</span>
 											</SectionHeading>
@@ -340,7 +340,7 @@ function Board({ pathname }: { readonly pathname: string }) {
 												topic.messages.map((message) => <Message key={message.id} message={message} />)
 											)}
 											{topic.messages.length >= 100 && (
-												<div className="flex items-center justify-between gap-4 text-[11px] text-subtle">
+												<div className="flex items-center justify-between gap-4 pt-4 text-[13px] text-slate">
 													<p>Showing the latest 100 messages.</p>
 													{path !== "" && (
 														<Button variant="outline" size="sm" type="button" onClick={() => setBrowsingHistory(true)}>

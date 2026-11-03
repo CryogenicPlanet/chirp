@@ -11,8 +11,7 @@ import { SectionHeading } from "./ui/section-heading.tsx";
 
 type MessageFilters = { readonly q: string; readonly topic: string; readonly tag: string; readonly agent: string };
 
-const labelClass =
-	"block font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground [&>input]:mt-1.5 [&>input]:font-sans [&>input]:font-normal [&>input]:normal-case [&>input]:tracking-normal";
+const labelClass = "block text-[13.5px] font-medium text-slate [&>input]:mt-1.5 [&>input]:font-normal";
 
 export function Search({ path, onActive }: { readonly path: string; readonly onActive: (active: boolean) => void }) {
 	const client = useBoardClient();
@@ -86,13 +85,13 @@ export function Search({ path, onActive }: { readonly path: string; readonly onA
 	};
 	return (
 		<section className="mb-7" aria-label="Message search">
-			<details className="group rounded-lg border border-border bg-card px-4 py-3">
-				<summary className="flex cursor-pointer list-none items-center gap-2 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
+			<details className="group rounded-[18px] bg-card shadow-raised">
+				<summary className="flex min-h-12 cursor-pointer list-none items-center gap-2 rounded-[18px] px-5 text-[14.5px] font-medium text-ink-soft transition-colors hover:text-ink sm:px-6 [&::-webkit-details-marker]:hidden">
 					<SearchIcon className="size-3.5" />
 					Search messages
 					<ChevronRight className="ml-auto size-3.5 transition-transform group-open:rotate-90" />
 				</summary>
-				<form className="mt-4" onSubmit={submit}>
+				<form className="px-5 pt-1 pb-5 sm:px-6" onSubmit={submit}>
 					<label className={labelClass}>
 						Words or phrases
 						<Input
@@ -102,7 +101,7 @@ export function Search({ path, onActive }: { readonly path: string; readonly onA
 							placeholder={'Try: release "ready to ship"'}
 						/>
 					</label>
-					<div className="mt-2.5 grid gap-2.5 sm:grid-cols-[2fr_1fr_1fr]">
+					<div className="mt-3 grid gap-3 sm:grid-cols-[2fr_1fr_1fr]">
 						<label className={labelClass}>
 							Search topic
 							<Input
@@ -126,7 +125,7 @@ export function Search({ path, onActive }: { readonly path: string; readonly onA
 							/>
 						</label>
 					</div>
-					<p className="mt-1.5 mb-3 text-[10px] leading-relaxed text-subtle">
+					<p className="mt-2 mb-4 text-[13px] leading-relaxed text-slate">
 						Filters combine. Topic includes subtopics and archives. Words and quoted phrases search message bodies.
 					</p>
 					<Button variant="outline" size="sm" type="submit" disabled={loading}>
@@ -153,14 +152,22 @@ export function Search({ path, onActive }: { readonly path: string; readonly onA
 							Back to conversation
 						</Button>
 					</SectionHeading>
-					<p className="mt-1.5 mb-2 text-[10px] leading-relaxed text-subtle">
+					<p className="mb-2 text-[13px] leading-relaxed text-slate">
 						{items.length} shown, oldest first. Search again to include new messages and edits.
 					</p>
 					{items.map((message) => (
 						<Message key={message.id} message={message} />
 					))}
-					{!loading && !error && items.length === 0 && <p role="status">No messages match these filters.</p>}
-					{loading && <p role="status">Loading results…</p>}
+					{!loading && !error && items.length === 0 && (
+						<p className="py-4 text-[14px] text-slate" role="status">
+							No messages match these filters.
+						</p>
+					)}
+					{loading && (
+						<p className="py-4 text-[14px] text-slate" role="status">
+							Loading results…
+						</p>
+					)}
 					{error && (
 						<Button variant="outline" size="sm" type="button" onClick={() => load(applied, items.length ? cursor : 0)}>
 							Retry search

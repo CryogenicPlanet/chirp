@@ -3,20 +3,19 @@ import type { ButtonHTMLAttributes } from "react";
 import { cn } from "../cn.ts";
 
 export const buttonVariants = cva(
-	"inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-md text-[13px] font-medium whitespace-nowrap transition-[background-color,border-color,color,box-shadow,transform] not-disabled:active:scale-[0.98] disabled:cursor-default disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
+	"inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-[10px] font-medium whitespace-nowrap transition-[background-color,color,box-shadow] duration-150 disabled:cursor-default disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
 	{
 		variants: {
 			variant: {
-				default: "bg-primary text-primary-foreground not-disabled:hover:bg-primary-hover",
-				outline: "border border-input bg-card text-foreground not-disabled:hover:bg-muted",
-				ghost: "text-muted-foreground not-disabled:hover:bg-muted not-disabled:hover:text-foreground",
-				destructive:
-					"border border-destructive/25 bg-destructive-surface text-destructive not-disabled:hover:bg-destructive/10",
+				default: "bg-ink text-white not-disabled:hover:bg-ink-soft",
+				outline: "bg-card text-ink shadow-xs ring-1 ring-ink/12 not-disabled:hover:bg-wash",
+				ghost: "rounded-lg text-slate not-disabled:hover:bg-wash not-disabled:hover:text-ink",
+				destructive: "bg-danger text-white not-disabled:hover:bg-danger/90",
 			},
 			size: {
-				default: "px-3.5 py-2",
-				sm: "px-2.5 py-1.5 text-xs",
-				icon: "size-9",
+				default: "h-10 px-4 text-[14.5px]",
+				sm: "h-9 px-3 text-[13.5px]",
+				icon: "size-10",
 			},
 		},
 		defaultVariants: { variant: "default", size: "default" },
