@@ -7,6 +7,7 @@ import { createServer as createNetServer } from "node:net";
 import { join } from "node:path";
 import { Schema } from "effect";
 import { expect, it, type TestContext } from "vitest";
+import { suggestedAgent } from "../../../src/ext/mcp/oauth.ts";
 import { conversation } from "../../fixtures/conversation.ts";
 
 type App = Awaited<ReturnType<Awaited<ReturnType<typeof conversation>>["launch"]>>;
@@ -121,16 +122,23 @@ const mcp = (app: App, access: string, id: number, method: string, params?: unkn
 		},
 		body: JSON.stringify({ jsonrpc: "2.0", id, method, ...(params === undefined ? {} : { params }) }),
 	});
-/** The consent step's editing page: its request code, boot's approval link and the continuation token. */
-const editingStep = async (response: Response) => {
-	expect(response.status).toBe(200);
-	const html = await response.text();
-	return {
-		code: /request code is <code>([0-9A-F]{6})<\/code>/.exec(html)?.[1] ?? "",
-		approval: /href="([^"]+)"/.exec(html)?.[1]?.replaceAll("&amp;", "&") ?? "",
-		consent: /name="consent" value="([^"]+)"/.exec(html)?.[1] ?? "",
-	};
+/** Consent with editing goes straight to boot's approval page, whose return link carries the continuation token. */
+const editingStep = (response: Response) => {
+	expect(response.status).toBe(303);
+	const approval = new URL(response.headers.get("location") ?? "");
+	expect(approval.origin + approval.pathname).toMatch(/^https:\/\/comms\.test\/approve\/e_[A-Za-z0-9_-]{43}$/);
+	const back = approval.searchParams.get("return") ?? "";
+	expect(back).toMatch(/^\/mcp\/oauth\/continue\?consent=mcp_consent_[A-Za-z0-9_-]{43}$/);
+	return { approval: approval.href, consent: new URL(back, approval).searchParams.get("consent") ?? "" };
 };
+/** The detail line of a page refusing the person, unescaped. */
+const detail = (html: string) =>
+	(/<p class="detail">([^<]*)<\/p>/.exec(html)?.[1] ?? "")
+		.replaceAll("&lt;", "<")
+		.replaceAll("&gt;", ">")
+		.replaceAll("&quot;", '"')
+		.replaceAll("&#39;", "'")
+		.replaceAll("&amp;", "&");
 /** The human approving read and write on boot's page, signed with the test passkey. */
 const approveAtBoot = async (app: App, approveUrl: string) => {
 	const id = new URL(approveUrl).pathname.split("/").at(-1) ?? "";
@@ -157,7 +165,8 @@ const connectionInfo = async (app: App, access: string) =>
 /** A refusal shown to the person at consent instead of a redirect: the client or its redirect is not trusted. */
 const refused = async (response: Response) => {
 	expect(response.status).toBe(400);
-	return decode(OAuthError, await response.json()).error_description;
+	expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
+	return detail(await response.text());
 };
 const callback = (response: Response) => {
 	expect(response.status).toBe(302);
@@ -194,19 +203,21 @@ it("connects each approval of a metadata-document client as its own connection",
 	const page = await consent(app, cookie, firstQuery);
 	expect(page.status).toBe(200);
 	const html = await page.text();
-	expect(html).toContain("Authorize Metadata Client");
+	expect(html).toContain("<h1>Connect Metadata Client to chirp</h1>");
+	expect(html).toContain("Posts as <strong>metadata-client</strong>");
 	expect(html).toContain('name="agent" value="metadata-client"');
-	expect(html).toContain(`published by <strong>${new URL(clientId).host}</strong>`);
-	expect(html).toContain("returns to <strong>client.test</strong>");
+	// The document is published somewhere other than where the browser returns, so consent names both.
+	expect(html).toContain(`Its details are published by <strong>${new URL(clientId).host}</strong>.`);
+	expect(html).toContain("You'll go back to <strong>client.test</strong>.");
 	expect(html).toContain(`name="client_id" value="${clientId}"`);
 	// Editing goes through boot's passkey approval; finishing from there is an authorization response too.
-	const step = await editingStep(
+	const step = editingStep(
 		await decide(app, cookie, firstQuery, { decision: "approve", agent: "meta-bot", editing: "1" }),
 	);
 	await approveAtBoot(app, step.approval);
 	expect(
 		await (await fetch(`${app.url}/mcp/oauth/continue?consent=${step.consent}`, { headers: { cookie } })).text(),
-	).toContain("Finish connecting Metadata Client");
+	).toContain("<h1>Finish connecting Metadata Client</h1>");
 	const firstCallback = callback(await submit(app, cookie, "/mcp/oauth/continue", { consent: step.consent }));
 	expect(firstCallback.origin + firstCallback.pathname).toBe("https://client.test/callback");
 	expect(firstCallback.searchParams.get("iss")).toBe("https://comms.test");
@@ -241,10 +252,10 @@ it("connects each approval of a metadata-document client as its own connection",
 	const secondQuery = authorizeQuery(clientId, second.challenge);
 	expect(await (await consent(app, cookie, secondQuery)).text()).toContain('name="agent" value="meta-bot"');
 	expect(host.hits("/client.json")).toBe(1);
-	const again = await editingStep(
+	const again = editingStep(
 		await decide(app, cookie, secondQuery, { decision: "approve", agent: "meta-bot", editing: "1" }),
 	);
-	expect(again.code).not.toBe(step.code);
+	expect(new URL(again.approval).pathname).not.toBe(new URL(step.approval).pathname);
 	const secondCallback = callback(await submit(app, cookie, "/mcp/oauth/continue", { consent: again.consent }));
 	const secondTokens = decode(
 		Tokens,
@@ -319,6 +330,12 @@ it("refuses metadata documents that do not describe the client", async (test) =>
 			body: metadataDocument(`${base}/large.json`, { client_uri: `https://client.test/${"x".repeat(6000)}` }),
 		},
 		"/moved.json": { status: 302, headers: { location: `${base}/client.json` }, body: "" },
+		// The URL parser keeps ; and ' in a host, and consent writes the callback's origin into its CSP.
+		"/hostile-host.json": {
+			body: metadataDocument(`${base}/hostile-host.json`, {
+				redirect_uris: ["https://client.test;script-src*/callback", "https://client'test/callback"],
+			}),
+		},
 		"/stall.json": "stall",
 		// ChatGPT's document prefers private_key_jwt and also lists none, which it uses with a public-client server.
 		"/chatgpt.json": {
@@ -427,6 +444,9 @@ it("refuses metadata documents that do not describe the client", async (test) =>
 	expect(await refused(await ask("/default-secret.json"))).toContain("accepts only public clients");
 	expect(await refused(await ask("/secret-methods.json"))).toContain("accepts only public clients");
 	expect(await refused(await ask("/large.json"))).toContain("is larger than 5 KiB");
+	expect(
+		await refused(await ask("/hostile-host.json", { redirect_uri: "https://client.test;script-src*/callback" })),
+	).toContain("lists no HTTPS or loopback redirect URI");
 	// Redirects are never followed, so the document they point at is not fetched for them.
 	expect(await refused(await ask("/moved.json"))).toContain("answered HTTP 302");
 	expect(host.hits("/client.json")).toBe(1);
@@ -565,7 +585,7 @@ it("names the issuer in every authorization response and keeps registered client
 	);
 	expect(blank.searchParams.get("state")).toBe("");
 	const page = await (await consent(app, cookie, query)).text();
-	expect(page).toContain("returns to <strong>client.test</strong>.</p>");
+	expect(page).toContain("You'll go back to <strong>client.test</strong>.</p>");
 	expect(page).not.toContain("published by");
 	const approved = callback(await decide(app, cookie, query, { decision: "approve", agent: "registered-bot" }));
 	expect(approved.searchParams.get("iss")).toBe("https://comms.test");
@@ -584,7 +604,7 @@ it("names the issuer in every authorization response and keeps registered client
 		const loopback = await consent(app, cookie, authorizeQuery(clientId, challenge, { redirect_uri: redirect }));
 		expect(loopback.status, redirect).toBe(200);
 		expect(await loopback.text()).toContain(
-			`returns to <strong>${new URL(redirect).host}</strong>. That is a program on this device`,
+			`You'll go back to <strong>${new URL(redirect).host}</strong>, a program on this computer. Any program here can claim to be Registered client, so connect only if you just started this.`,
 		);
 	}
 	expect(
@@ -612,3 +632,287 @@ it("names the issuer in every authorization response and keeps registered client
 		),
 	).toBe("redirect_uri is not registered for this client.");
 }, 40000);
+
+it("lets a registration lapse after an hour unless a human approves it, and evicts the oldest past the cap", async (test) => {
+	const { fixture, app, cookie } = await installed(test, false);
+	const registered = async (name: string) => {
+		const response = await fetch(`${app.url}/mcp/oauth/register`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ client_name: name, redirect_uris: ["https://client.test/callback"] }),
+		});
+		expect(response.status, name).toBe(201);
+		return decode(Schema.Struct({ client_id: Schema.String }), await response.json()).client_id;
+	};
+	const clients = async () =>
+		decode(
+			Schema.Array(Schema.Struct({ id: Schema.String, expires_at: Schema.Finite })),
+			await fixture.sql("SELECT id,expires_at FROM example_mcp_oauth WHERE kind='client'"),
+		);
+	const expiry = async (id: string) => (await clients()).find((row) => row.id === id)?.expires_at;
+	const waitingCount = async () => (await clients()).filter((row) => row.expires_at > 0).length;
+	const hour = 60 * 60 * 1000;
+	const { challenge } = pkce("lapse");
+
+	const before = Date.now();
+	const waiting = await registered("Waiting client");
+	expect(await expiry(waiting)).toBeGreaterThanOrEqual(before + hour);
+	expect(await expiry(waiting)).toBeLessThanOrEqual(Date.now() + hour);
+	// Approving it at consent keeps it for good, with or without editing. Denying is not approving.
+	const approved = await registered("Approved client");
+	callback(
+		await decide(app, cookie, authorizeQuery(approved, challenge), { decision: "approve", agent: "approved-bot" }),
+	);
+	expect(await expiry(approved)).toBe(0);
+	const editing = await registered("Editing client");
+	editingStep(
+		await decide(app, cookie, authorizeQuery(editing, challenge), {
+			decision: "approve",
+			agent: "editing-bot",
+			editing: "1",
+		}),
+	);
+	expect(await expiry(editing)).toBe(0);
+	const denied = await registered("Denied client");
+	callback(await decide(app, cookie, authorizeQuery(denied, challenge), { decision: "deny" }));
+	expect(await expiry(denied)).toBeGreaterThan(0);
+
+	// An hour on, an unapproved registration is gone: consent refuses it, then the next registration purges it.
+	await fixture.sql(`UPDATE example_mcp_oauth SET expires_at=1 WHERE id IN ('${waiting}','${denied}')`);
+	expect(await refused(await consent(app, cookie, authorizeQuery(waiting, challenge)))).toBe(
+		"client_id is not registered with this board.",
+	);
+	expect(
+		await refused(await decide(app, cookie, authorizeQuery(denied, challenge), { decision: "approve", agent: "late" })),
+	).toBe("client_id is not registered with this board.");
+
+	// A generation from before approvals kept clients, run again after a rollback, approves without keeping. A lapsed
+	// registration that a token names still works, and the next registration keeps it instead of purging it.
+	const rolledBack = await registered("Rolled back client");
+	await fixture.sql(
+		`INSERT INTO example_mcp_oauth(id,kind,client_id,family,payload,expires_at,created_at) VALUES('${"e".repeat(64)}','refresh','${rolledBack}','rolled-back','{"resource":"https://comms.test/mcp","scopes":["read","write"],"subject":"rahul","agent":"old-bot"}',${Date.now() + hour},${Date.now()})`,
+	);
+	await fixture.sql(`UPDATE example_mcp_oauth SET expires_at=1 WHERE id='${rolledBack}'`);
+	expect((await consent(app, cookie, authorizeQuery(rolledBack, challenge))).status).toBe(200);
+	const purging = await registered("Purging client");
+	const kept = (await clients()).map((row) => row.id);
+	expect(kept).not.toContain(waiting);
+	expect(kept).not.toContain(denied);
+	expect(kept).toEqual(expect.arrayContaining([approved, editing, rolledBack, purging]));
+	expect(await expiry(rolledBack)).toBe(0);
+	// An approved client still connects after any number of purges.
+	callback(
+		await decide(app, cookie, authorizeQuery(approved, challenge), { decision: "approve", agent: "approved-bot" }),
+	);
+
+	// At most 500 wait at once. Past that a registration still succeeds and evicts the oldest waiting one, so a burst
+	// only pushes out other unapproved registrations; approved clients never count and are never evicted.
+	const soon = Date.now() + hour / 2;
+	const fillers = Array.from({ length: 500 - (await waitingCount()) }, (_, index) => `mcp_client_filler${index}`);
+	await fixture.sql(
+		`INSERT INTO example_mcp_oauth(id,kind,client_id,family,payload,expires_at,created_at) VALUES ${fillers
+			.map(
+				(id, index) =>
+					`('${id}','client','${id}','','{"client_name":"Filler","redirect_uris":["https://client.test/callback"]}',${soon + index},${Date.now()})`,
+			)
+			.join(",")}`,
+	);
+	expect(await waitingCount()).toBe(500);
+	const over = await registered("Over the cap");
+	expect(await waitingCount()).toBe(500);
+	expect(await expiry("mcp_client_filler0")).toBeUndefined();
+	expect(await expiry(over)).toBeGreaterThan(0);
+	await registered("Over again");
+	expect(await expiry("mcp_client_filler1")).toBeUndefined();
+	expect(await waitingCount()).toBe(500);
+	expect((await clients()).map((row) => row.id)).toEqual(expect.arrayContaining([approved, editing, rolledBack]));
+	// An evicted registration is gone like a lapsed one.
+	expect(await refused(await consent(app, cookie, authorizeQuery("mcp_client_filler0", challenge)))).toBe(
+		"client_id is not registered with this board.",
+	);
+}, 60000);
+
+it("offers a client's name as its posting name without a trailing (chirp)", () => {
+	// Claude Code names itself after the server it connects to, so on a board named chirp it registers this way.
+	expect(suggestedAgent("Claude Code (chirp)")).toBe("claude-code");
+	expect(suggestedAgent("Claude Code(chirp)")).toBe("claude-code");
+	expect(suggestedAgent("Claude Code (Chirp) ")).toBe("claude-code");
+	expect(suggestedAgent("ChatGPT")).toBe("chatgpt");
+	expect(suggestedAgent("chirp (beta)")).toBe("chirp-beta");
+	expect(suggestedAgent("(chirp)")).toBe("chirp");
+	expect(suggestedAgent("System (chirp)")).toBe("mcp");
+});
+
+it("reloads a cross-site consent link once from the board, so a signed-in human skips signing in", async (test) => {
+	const { app, cookie } = await installed(test, false);
+	const registration = await fetch(`${app.url}/mcp/oauth/register`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ client_name: "Claude Code (chirp)", redirect_uris: ["https://client.test/callback"] }),
+	});
+	const clientId = decode(Schema.Struct({ client_id: Schema.String }), await registration.json()).client_id;
+	const query = authorizeQuery(clientId, pkce("bounce").challenge);
+	const authorize = (path: string, headers: Readonly<Record<string, string>>) =>
+		fetch(`${app.url}${path}`, { redirect: "manual", headers });
+	const signsIn = (response: Response) => {
+		expect(response.status).toBe(302);
+		const login = new URL(response.headers.get("location") ?? "", app.url);
+		expect(login.pathname).toBe("/auth/login");
+		return new URL(login.searchParams.get("next") ?? "", app.url);
+	};
+
+	// A link from the client's site arrives without boot's SameSite=Strict cookie, so the board loads it again itself.
+	const crossSite = await authorize(`/mcp/oauth/authorize?${query}`, { "sec-fetch-site": "cross-site" });
+	expect(crossSite.status).toBe(200);
+	expect(crossSite.headers.get("content-security-policy")).toBe(
+		"default-src 'none'; style-src 'unsafe-inline'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'",
+	);
+	// As on boot's own bounce page. A page without a form sends no referrer at all.
+	expect(crossSite.headers.get("referrer-policy")).toBe("no-referrer");
+	expect(crossSite.headers.get("x-content-type-options")).toBe("nosniff");
+	const html = await crossSite.text();
+	const next = (/<meta http-equiv="refresh" content="0;url=([^"]+)">/.exec(html)?.[1] ?? "").replaceAll("&amp;", "&");
+	expect(html).toContain(`<a href="${next.replaceAll("&", "&amp;")}">Continue</a>`);
+	const reload = new URL(next, app.url);
+	expect(reload.origin + reload.pathname).toBe(`${app.url}/mcp/oauth/authorize`);
+	expect(reload.searchParams.get("bounced")).toBe("1");
+	reload.searchParams.delete("bounced");
+	expect(Object.fromEntries(reload.searchParams)).toEqual(Object.fromEntries(query));
+
+	// That load is same-site, so the cookie rides and consent shows. The marker goes no further than this request.
+	const consented = await authorize(next, { cookie, "sec-fetch-site": "same-origin" });
+	expect(consented.status).toBe(200);
+	const page = await consented.text();
+	expect(page).toContain("<h1>Connect Claude Code to chirp</h1>");
+	expect(page).toContain('name="agent" value="claude-code"');
+	expect(page).not.toContain("bounced");
+
+	// Still signed out after that one load means signed out: sign in as before, never another reload.
+	for (const site of ["same-origin", "cross-site"]) {
+		const returnsTo = signsIn(await authorize(next, { "sec-fetch-site": site }));
+		expect(returnsTo.pathname).toBe("/mcp/oauth/authorize");
+		expect(returnsTo.searchParams.has("bounced")).toBe(false);
+		expect(Object.fromEntries(returnsTo.searchParams)).toEqual(Object.fromEntries(query));
+	}
+	// Any other navigation already carries the cookie, so without a session it goes straight to sign-in.
+	for (const headers of [
+		{ "sec-fetch-site": "same-origin" },
+		{ "sec-fetch-site": "same-site" },
+		{ "sec-fetch-site": "none" },
+		{},
+	])
+		signsIn(await authorize(`/mcp/oauth/authorize?${query}`, headers));
+	// A session that does arrive cross-site goes straight to consent.
+	const signedIn = await authorize(`/mcp/oauth/authorize?${query}`, { cookie, "sec-fetch-site": "cross-site" });
+	expect(signedIn.status).toBe(200);
+	expect(await signedIn.text()).toContain("<h1>Connect Claude Code to chirp</h1>");
+}, 30000);
+
+it("keeps a hostile client name and callback host out of consent's markup and policy", async (test) => {
+	const { app, cookie } = await installed(test, false);
+	const register = (name: string, redirects: ReadonlyArray<string>) =>
+		fetch(`${app.url}/mcp/oauth/register`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ client_name: name, redirect_uris: redirects }),
+		});
+	// The URL parser keeps these characters in a host, and consent writes the callback's origin into its CSP.
+	for (const redirect of [
+		"https://client.test;script-src*/callback",
+		"https://client'test/callback",
+		'https://client"test/callback',
+		"https://client{test}/callback",
+	]) {
+		const refusedRegistration = await register("Hostile host", [redirect]);
+		expect(refusedRegistration.status, redirect).toBe(400);
+		expect(decode(OAuthError, await refusedRegistration.json()).error).toBe("invalid_client_metadata");
+	}
+	// An IDN, which the parser turns into punycode, and an IPv6 loopback still register.
+	expect((await register("Plain hosts", ["https://bücher.example/callback", "http://[::1]/callback"])).status).toBe(
+		201,
+	);
+
+	const name = `</title><script>alert(1)</script><img src=x onerror=alert(2)>"'&`;
+	const registration = await register(name, ["https://client.test/callback", "http://[::1]/callback"]);
+	expect(registration.status).toBe(201);
+	const clientId = decode(Schema.Struct({ client_id: Schema.String }), await registration.json()).client_id;
+	for (const [redirect, origin] of [
+		["https://client.test/callback", "https://client.test"],
+		["http://[::1]:5555/callback", "http://[::1]:5555"],
+	] as const) {
+		const page = await consent(
+			app,
+			cookie,
+			authorizeQuery(clientId, pkce("hostile").challenge, { redirect_uri: redirect }),
+		);
+		expect(page.status, redirect).toBe(200);
+		const html = await page.text();
+		const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1] ?? "");
+		// One script, the page's own; the name shows only escaped.
+		expect(html.match(/<script/g)).toHaveLength(1);
+		expect(html).not.toContain("<img");
+		expect(html).toContain(
+			"<h1>Connect &lt;/title&gt;&lt;script&gt;alert(1)&lt;/script&gt;&lt;img src=x onerror=alert(2)&gt;&quot;&#39;&amp; to chirp</h1>",
+		);
+		expect(html).toContain(
+			"<title>Connect &lt;/title&gt;&lt;script&gt;alert(1)&lt;/script&gt;&lt;img src=x onerror=alert(2)&gt;&quot;&#39;&amp; · chirp</title>",
+		);
+		expect(page.headers.get("content-security-policy")).toBe(
+			`default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-${createHash("sha256")
+				.update(scripts[0] ?? "")
+				.digest("base64")}'; form-action 'self' ${origin}; base-uri 'none'; frame-ancestors 'none'`,
+		);
+	}
+}, 30000);
+
+it("lets boot refuse a consent or continue post from anywhere but the board", async (test) => {
+	const { fixture, app, cookie } = await installed(test, false);
+	const registration = await fetch(`${app.url}/mcp/oauth/register`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ client_name: "Origin client", redirect_uris: ["https://client.test/callback"] }),
+	});
+	const clientId = decode(Schema.Struct({ client_id: Schema.String }), await registration.json()).client_id;
+	const post = (path: string, origin: string | undefined, fields: Readonly<Record<string, string>>) =>
+		fetch(`${app.url}${path}`, {
+			method: "POST",
+			redirect: "manual",
+			headers: {
+				cookie,
+				"content-type": "application/x-www-form-urlencoded",
+				...(origin === undefined ? {} : { origin }),
+			},
+			body: new URLSearchParams(fields),
+		});
+	const refusedBy = async (response: Response) => {
+		expect(response.status).toBe(403);
+		return decode(Schema.Struct({ error: Schema.Struct({ code: Schema.String }) }), await response.json()).error.code;
+	};
+	// A browser sends Origin: null from a sandboxed frame or under a no-referrer policy.
+	const elsewhere = ["https://evil.test", undefined, "null", "https://comms.test.evil.test"];
+	const approve = {
+		...Object.fromEntries(authorizeQuery(clientId, pkce("origin").challenge)),
+		decision: "approve",
+		agent: "origin-bot",
+		editing: "1",
+	};
+	for (const origin of elsewhere)
+		expect(await refusedBy(await post("/mcp/oauth/authorize", origin, approve)), String(origin)).toBe("origin_invalid");
+	// None reached the extension: nothing was issued or stored for the client.
+	expect(
+		await fixture.sql(`SELECT kind FROM example_mcp_oauth WHERE client_id='${clientId}' AND kind<>'client'`),
+	).toEqual([]);
+	const step = editingStep(await post("/mcp/oauth/authorize", "https://comms.test", approve));
+	for (const origin of elsewhere)
+		for (const decision of ["connect", "cancel"])
+			expect(
+				await refusedBy(await post("/mcp/oauth/continue", origin, { consent: step.consent, decision })),
+				`${String(origin)} ${decision}`,
+			).toBe("origin_invalid");
+	// The continuation is untouched, so the board's own post still finishes connecting.
+	expect(
+		callback(await post("/mcp/oauth/continue", "https://comms.test", { consent: step.consent })).searchParams.get(
+			"code",
+		),
+	).toMatch(/^mcp_code_/);
+}, 30000);

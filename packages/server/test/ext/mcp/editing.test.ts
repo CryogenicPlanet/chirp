@@ -103,19 +103,48 @@ const decide = async (app: App, approveUrl: string, decision: "approve" | "deny"
 	});
 	expect(decided.status, await decided.clone().text()).toBe(200);
 };
-/** The consent step's page: it shows the request code, then links to boot's approval page. */
+/** Consent with editing sends the human straight to boot's approval page, which returns to the continue route. */
 const editingStep = async (app: App, response: Response) => {
-	expect(response.status).toBe(200);
-	const html = await response.text();
-	const code = /request code is <code>([0-9A-F]{6})<\/code>/.exec(html)?.[1] ?? "";
-	expect(code).toMatch(/^[0-9A-F]{6}$/);
-	const approval = new URL(/href="([^"]+)"/.exec(html)?.[1]?.replaceAll("&amp;", "&") ?? "");
+	expect(response.status).toBe(303);
+	const approval = new URL(response.headers.get("location") ?? "");
 	expect(approval.origin + approval.pathname).toMatch(/^https:\/\/comms\.test\/approve\/e_[A-Za-z0-9_-]{43}$/);
-	// Boot's page shows the same code, which is how the human knows the request came from this consent.
-	expect(await (await fetch(`${app.url}${approval.pathname}`)).text()).toContain(code);
 	const back = approval.searchParams.get("return") ?? "";
-	expect(back).toMatch(/^\/mcp\/oauth\/continue\?consent=mcp_consent_/);
-	return { code, approval, back, consent: new URL(back, app.url).searchParams.get("consent") ?? "" };
+	expect(back).toMatch(/^\/mcp\/oauth\/continue\?consent=mcp_consent_[A-Za-z0-9_-]{43}$/);
+	// Boot accepts the return link, so its page comes back here once the human decides.
+	const bootPage = await (await fetch(`${app.url}${approval.pathname}${approval.search}`)).text();
+	expect(bootPage).toContain(`data-return="${back}"`);
+	const code = /<code>([0-9A-F]{6})<\/code>/.exec(bootPage)?.[1] ?? "";
+	expect(code).toMatch(/^[0-9A-F]{6}$/);
+	return { approval, back, code, consent: new URL(back, app.url).searchParams.get("consent") ?? "" };
+};
+/** The continue page as boot's return lands on it, with the policy that admits its one script. */
+const continuePage = async (app: App, cookie: string, back: string) => {
+	const response = await fetch(`${app.url}${back}`, { headers: { cookie } });
+	expect(response.status).toBe(200);
+	return { html: await response.text(), policy: response.headers.get("content-security-policy") ?? "" };
+};
+/** The page finishes by itself: its inline script, allowed by hash and nothing else, sends the continue form. */
+const finishesByItself = (page: { readonly html: string; readonly policy: string }) => {
+	const scripts = [...page.html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1] ?? "");
+	expect(scripts).toHaveLength(1);
+	const script = scripts[0] ?? "";
+	expect(script).toContain('document.getElementById("finish").submit()');
+	expect(page.html).toContain('<form id="finish" method="post" action="/mcp/oauth/continue">');
+	expect(page.policy).toContain(`script-src 'sha256-${createHash("sha256").update(script).digest("base64")}';`);
+	expect(page.policy).toContain("default-src 'none'");
+	expect(page.policy).toContain("form-action 'self' https://client.test;");
+	expect(page.policy).toContain("frame-ancestors 'none'");
+};
+/**
+ * Without an approval the page waits for the human: no script, and a choice between connecting without editing and
+ * not connecting at all, since denying at boot may have meant either.
+ */
+const waitsForChoice = (page: { readonly html: string; readonly policy: string }) => {
+	expect(page.html).not.toContain("<script");
+	expect(page.policy).not.toContain("script-src");
+	expect(page.html).toContain(
+		'<button name="decision" value="connect">Connect without editing</button><button class="secondary" name="decision" value="cancel">Don\'t connect</button>',
+	);
 };
 /** The live grant families mcp holds, as the board's token list shows them. */
 const held = async (app: App, cookie: string) =>
@@ -181,14 +210,46 @@ const mcp = (app: App, token: string, userAgent?: string) => {
 it("connects with editing approved by passkey, then edits, publishes and live-edits as the posting agent", async (test) => {
 	const { fixture, app, cookie } = await installed(test, true);
 	const client = await register(app, "Dot Client");
-	const consentPage = await (
-		await fetch(`${app.url}/mcp/oauth/authorize?${new URLSearchParams(client.query)}`, { headers: { cookie } })
-	).text();
-	expect(consentPage).toContain('name="editing" value="1" checked');
-	expect(consentPage).toContain("unticked by default");
+	const consentResponse = await fetch(`${app.url}/mcp/oauth/authorize?${new URLSearchParams(client.query)}`, {
+		headers: { cookie },
+	});
+	const consentPage = await consentResponse.text();
+	// Consent runs one script, allowed by its hash and nothing else. It opens the posting name's closed details when the
+	// name is invalid, and ignores a send until the page has been visible and focused for half a second, so a page that
+	// opens consent in a popup under the cursor cannot turn a double click into Connect. That timing needs a real
+	// browser, so this checks only that the guard ships and the policy admits exactly it.
+	const scripts = [...consentPage.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1] ?? "");
+	expect(scripts).toHaveLength(1);
+	const script = scripts[0] ?? "";
+	expect(script).toContain('agent.addEventListener("invalid"');
+	expect(script).toContain('document.getElementById("consent").addEventListener("submit"');
+	expect(script).toContain("document.hasFocus()?performance.now()+500:Infinity");
+	expect(consentPage).toContain('<form id="consent" method="post" action="/mcp/oauth/authorize">');
+	// The buttons render enabled, so the page works without scripts.
+	expect(consentPage).toContain('<button name="decision" value="approve">Connect</button>');
+	expect(consentResponse.headers.get("content-security-policy")).toBe(
+		`default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-${createHash("sha256")
+			.update(script)
+			.digest("base64")}'; form-action 'self' https://client.test; base-uri 'none'; frame-ancestors 'none'`,
+	);
+	// A page with a form keeps the referrer within the board: under no-referrer a form post carries Origin: null.
+	expect(consentResponse.headers.get("referrer-policy")).toBe("same-origin");
+	expect(consentResponse.headers.get("x-content-type-options")).toBe("nosniff");
+	expect(consentPage).toContain(
+		'<details class="name"><summary><span>Posts as <strong>dot-client</strong></span><span class="change">Change</span></summary>',
+	);
+	expect(consentPage).toContain('name="agent" value="dot-client" required maxlength="64"');
+	expect(consentPage).toContain(
+		'<input type="checkbox" name="editing" value="1" checked><span>Also let it edit and delete its own posts and manage topics. You\'ll confirm with your passkey on the next screen.</span>',
+	);
+	expect(consentPage).toContain("Editing pages and the board's own code is a separate choice on the next screen.");
+	expect(consentPage).toContain(">Connect</button>");
+	expect(consentPage).toContain(">Cancel</button>");
+	// A person reads this page, so it speaks in their words, not the board's internals.
+	expect(consentPage.replace(/<style>[^<]*<\/style>/, "")).not.toMatch(/\bboot\b|\bfs\b|token list|request code/i);
 
-	// Consent with editing shows the request code, then boot's approval page comes back to the continue route.
-	const { code, approval, back, consent } = await editingStep(
+	// Consent with editing goes straight to boot's approval page, which comes back to the continue route.
+	const { approval, back, code, consent } = await editingStep(
 		app,
 		await form(app, cookie, "/mcp/oauth/authorize", {
 			...client.query,
@@ -197,16 +258,29 @@ it("connects with editing approved by passkey, then edits, publishes and live-ed
 			editing: "1",
 		}),
 	);
-	expect(await (await fetch(`${app.url}${back}`, { headers: { cookie } })).text()).toContain("still waiting");
+	// Reached before deciding, the page waits for the human instead of finishing by itself.
+	const waiting = await continuePage(app, cookie, back);
+	expect(waiting.html).toContain("Editing is still waiting for your approval.");
+	waitsForChoice(waiting);
 	await decide(app, approval.href, "approve", ["read", "write", "fs"]);
-	const returned = await (await fetch(`${app.url}${back}`, { headers: { cookie } })).text();
-	expect(returned).toContain("Editing approved");
-	expect(returned).toContain("<strong>dot</strong>");
-	expect(returned).toContain(code);
+	const returned = await continuePage(app, cookie, back);
+	expect(returned.html).toContain(
+		"Editing is approved. Dot Client can edit and delete its own posts and manage topics, and edit pages and the board's own code as <strong>dot</strong> until ",
+	);
+	// The code is boot's to show; nothing here repeats it.
+	expect(waiting.html).not.toContain(code);
+	expect(returned.html).not.toContain(code);
+	finishesByItself(returned);
 	const finished = await form(app, cookie, "/mcp/oauth/continue", { consent });
 	expect(finished.status).toBe(302);
 	const access = await exchange(app, client, finished.headers.get("location"));
 	expect((await form(app, cookie, "/mcp/oauth/continue", { consent })).status).toBe(400);
+	// Coming back to the page afterwards finds the token spent, so it explains instead of sending it again.
+	const spent = await fetch(`${app.url}${back}`, { headers: { cookie } });
+	expect(spent.status).toBe(400);
+	const spentPage = await spent.text();
+	expect(spentPage).toContain("<h1>This link has expired</h1>");
+	expect(spentPage).not.toContain("<script");
 	const { tool } = mcp(app, access);
 
 	const info = (await tool("connection_info")).ok;
@@ -389,7 +463,7 @@ it("connects with editing approved by passkey, then edits, publishes and live-ed
 }, 240000);
 
 it("lets an existing connection request editing, keeps fs opt-in, and never blocks a connection on denial", async (test) => {
-	const { app, cookie } = await installed(test, false);
+	const { fixture, app, cookie } = await installed(test, false);
 	// Connected the way dot already is: consent without the editing step.
 	const client = await register(app, "Existing Client");
 	const connected = await form(app, cookie, "/mcp/oauth/authorize", {
@@ -535,25 +609,108 @@ it("lets an existing connection request editing, keeps fs opt-in, and never bloc
 	// One grant per connection: the new identity's request replaces the earlier one, which no token uses any more.
 	expect((await tool("connection_info")).ok).toMatchObject({ editing: { status: "none" } });
 
-	// A denied editing approval still finishes connecting: the client reads and posts as before.
-	const denied = await register(app, "Denied Client");
-	const step = await editingStep(
-		app,
-		await form(app, cookie, "/mcp/oauth/authorize", {
-			...denied.query,
-			decision: "approve",
-			agent: "denied-bot",
-			editing: "1",
-		}),
-	);
-	await decide(app, step.approval.href, "deny", []);
-	expect(await (await fetch(`${app.url}${step.back}`, { headers: { cookie } })).text()).toContain("not approved");
-	const finished = await form(app, cookie, "/mcp/oauth/continue", { consent: step.consent });
-	const deniedTool = mcp(app, await exchange(app, denied, finished.headers.get("location"))).tool;
+	// Consent with editing for a new client, then whatever boot's page should have decided.
+	const started = async (name: string, agent: string) => {
+		const registered = await register(app, name);
+		const step = await editingStep(
+			app,
+			await form(app, cookie, "/mcp/oauth/authorize", {
+				...registered.query,
+				decision: "approve",
+				agent,
+				editing: "1",
+			}),
+		);
+		return { registered, step };
+	};
+	const connectWithout = async (client: Awaited<ReturnType<typeof register>>, consent: string) =>
+		mcp(
+			app,
+			await exchange(
+				app,
+				client,
+				(await form(app, cookie, "/mcp/oauth/continue", { consent, decision: "connect" })).headers.get("location"),
+			),
+		).tool;
+	const choice = (name: string) =>
+		`You can still connect ${name} to read this board and post to it, without editing, or not connect it.`;
+
+	// Denying editing at boot leaves the human to choose: connecting without editing reads and posts as before.
+	const denied = await started("Denied Client", "denied-bot");
+	await decide(app, denied.step.approval.href, "deny", []);
+	const deniedPage = await continuePage(app, cookie, denied.step.back);
+	expect(deniedPage.html).toContain(`Editing wasn't approved. ${choice("Denied Client")}`);
+	waitsForChoice(deniedPage);
+	const deniedTool = await connectWithout(denied.registered, denied.step.consent);
 	expect((await deniedTool("connection_info")).ok).toMatchObject({ editing: { status: "denied" } });
 	expect(
 		(await deniedTool("post_message", { topic: "existing", body: "no editing", idempotencyKey: "d-1" })).ok,
-	).toMatchObject({ agent: "denied-bot", instance: `extension:mcp:${denied.clientId}` });
+	).toMatchObject({ agent: "denied-bot", instance: `extension:mcp:${denied.registered.clientId}` });
+
+	// Or not connecting at all: the token is spent and the client hears a denial, with no code to redeem.
+	const declined = await started("Declined Client", "declined-bot");
+	await decide(app, declined.step.approval.href, "deny", []);
+	waitsForChoice(await continuePage(app, cookie, declined.step.back));
+	const refusedConnection = await form(app, cookie, "/mcp/oauth/continue", {
+		consent: declined.step.consent,
+		decision: "cancel",
+	});
+	expect(refusedConnection.status).toBe(302);
+	const deniedCallback = new URL(refusedConnection.headers.get("location") ?? "");
+	expect(deniedCallback.origin + deniedCallback.pathname).toBe("https://client.test/callback");
+	expect(Object.fromEntries(deniedCallback.searchParams)).toEqual({
+		error: "access_denied",
+		state: declined.registered.query.state,
+		iss: "https://comms.test",
+	});
+	expect(
+		await fixture.sql(
+			`SELECT kind FROM example_mcp_oauth WHERE client_id='${declined.registered.clientId}' AND kind<>'client'`,
+		),
+	).toEqual([]);
+	expect(
+		(await form(app, cookie, "/mcp/oauth/continue", { consent: declined.step.consent, decision: "connect" })).status,
+	).toBe(400);
+
+	// A request that expired before the human decided offers the same choice.
+	const lapsed = await started("Lapsed Client", "lapsed-bot");
+	const enrollment = lapsed.step.approval.pathname.split("/").at(-1) ?? "";
+	await fixture.sql(`UPDATE enrollments SET expires_at=1 WHERE id='${enrollment}'`, "boot.db");
+	const lapsedPage = await continuePage(app, cookie, lapsed.step.back);
+	expect(lapsedPage.html).toContain(`The editing request expired before it was approved. ${choice("Lapsed Client")}`);
+	waitsForChoice(lapsedPage);
+	const lapsedTool = await connectWithout(lapsed.registered, lapsed.step.consent);
+	expect((await lapsedTool("connection_info")).ok).toMatchObject({ editing: { status: "expired" } });
+
+	// So does a grant revoked from the token list before the human came back.
+	const revoked = await started("Revoked Client", "revoked-bot");
+	await decide(app, revoked.step.approval.href, "approve", ["read", "write"]);
+	await revoke(app, cookie, "revoked-bot");
+	const revokedPage = await continuePage(app, cookie, revoked.step.back);
+	expect(revokedPage.html).toContain(`Editing was turned off. ${choice("Revoked Client")}`);
+	waitsForChoice(revokedPage);
+	const revokedTool = await connectWithout(revoked.registered, revoked.step.consent);
+	expect((await revokedTool("connection_info")).ok).toMatchObject({ editing: { status: "revoked" } });
+
+	// And a request replaced by a later consent under another posting name, which leaves this one with none.
+	const replaced = await started("Replaced Client", "first-name");
+	await editingStep(
+		app,
+		await form(app, cookie, "/mcp/oauth/authorize", {
+			...replaced.registered.query,
+			decision: "approve",
+			agent: "second-name",
+			editing: "1",
+		}),
+	);
+	const replacedPage = await continuePage(app, cookie, replaced.step.back);
+	expect(replacedPage.html).toContain(`Editing wasn't set up. ${choice("Replaced Client")}`);
+	waitsForChoice(replacedPage);
+	const replacedTool = await connectWithout(replaced.registered, replaced.step.consent);
+	expect((await replacedTool("connection_info")).ok).toMatchObject({
+		posting_name: "first-name",
+		editing: { status: "none" },
+	});
 
 	// A grant the human narrowed to read leaves posting as it was.
 	const narrowed = decode(Requested, (await deniedTool("request_editing")).ok);
@@ -561,7 +718,7 @@ it("lets an existing connection request editing, keeps fs opt-in, and never bloc
 	expect((await deniedTool("connection_info")).ok).toMatchObject({ editing: { status: "active", scopes: ["read"] } });
 	expect(
 		(await deniedTool("post_message", { topic: "existing", body: "read-only grant", idempotencyKey: "d-2" })).ok,
-	).toMatchObject({ agent: "denied-bot", instance: `extension:mcp:${denied.clientId}` });
+	).toMatchObject({ agent: "denied-bot", instance: `extension:mcp:${denied.registered.clientId}` });
 	// After a revocation, request_editing asks boot afresh instead of reporting the old grant.
 	await revoke(app, cookie, "denied-bot");
 	const again = decode(Requested, (await deniedTool("request_editing")).ok);
