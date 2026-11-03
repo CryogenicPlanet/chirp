@@ -269,6 +269,11 @@ it("creates, approves and collects a held grant, then forwards it as the approve
 	expect(mismatched.status).toBe(401);
 	expect(await errorCode(mismatched)).toBe("challenge_invalid");
 	expect((await app.approve(created.id, ["read", "write", "fs"])).status).toBe(200);
+	// Once decided, the page offers the way back instead of a dead end.
+	const decided = await (
+		await fetch(`${app.url}/approve/${created.id}?return=${encodeURIComponent("/mcp/oauth/finish")}`)
+	).text();
+	expect(decided).toContain('<a href="/mcp/oauth/finish">Return to mcp</a> to finish connecting.');
 	const collected = await (await internal.call(`/_boot/grants/${created.id}`, { extension: "mcp" })).json();
 	const approved = Schema.decodeUnknownSync(Approved)(collected);
 	expect(Object.keys(collected).sort()).toEqual(["agent", "expires_at", "family", "label", "scopes", "status"]);

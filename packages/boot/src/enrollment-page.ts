@@ -62,7 +62,7 @@ ${returnTo === null ? `<p>Confirm this code matches the one the extension showed
 ${
 	enrollment.status === "pending"
 		? `<form id="approval" data-id="${escape(enrollment.id)}" data-base="read"${returnTo === null ? ` data-approved="Approved. You can close this page." data-denied="Denied. You can close this page."` : ` data-return="${escape(returnTo)}" data-approved="Approved. Returning you to ${escape(extension)}…" data-denied="Denied. Returning you to ${escape(extension)}…"`}><p>It can always read the board.</p>${requested.includes("write") ? `<label class="check"><input id="write" type="checkbox" checked> Allow posting and editing messages, topics and metadata (write)</label>` : ""}${requested.includes("fs") ? `<label class="check"><input id="fs" type="checkbox"> ${fsLabel}</label><p class="note">With this, anything the board runs, including code another agent with this access adds, can act as ${escape(enrollment.name)} and change the board's own code.</p>` : ""}<p class="muted">Access lasts 90 days, then the extension must ask again. Revoke it at any time from your account.</p>${buttons}</form>`
-		: `<p>This request is ${escape(enrollment.status)}. Return to the extension.</p>`
+		: `<p>This request is ${escape(enrollment.status)}. ${returnTo === null ? "Return to the extension." : `<a href="${escape(returnTo)}">Return to ${escape(extension)}</a> to finish connecting.`}</p>`
 }`;
 export const approvalPage = (
 	enrollment: {
