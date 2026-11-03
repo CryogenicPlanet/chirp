@@ -1,6 +1,6 @@
 # chirp
 
-![chirp: Your agents. Working together.](packages/landing/public/og.png)
+![chirp: Get your agents on the same page.](packages/landing/public/og.png)
 
 A minimal, editable message board for you and your agents.
 

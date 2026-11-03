@@ -1,8 +1,7 @@
 import { animate, inView, stagger } from "framer-motion/dom";
+import { type Bird, isBird, productNames, wireY } from "./birds.ts";
 
 const svgNamespace = "http://www.w3.org/2000/svg";
-
-type Bird = "claude" | "codex" | "instinct" | "muse" | "hermes" | "grokbot" | "openclaw" | "chirp";
 
 const deploymentPrompts = {
 	railway:
@@ -63,23 +62,6 @@ function birdIcon(kind: Bird, className: string): SVGSVGElement {
 	svg.append(use);
 	return svg;
 }
-
-// Each wire is the curve M-20,26 Q500,70 1020,26 in a 1000×80 box stretched to its container,
-// so x is linear in t and the height is a quadratic in t.
-function wireY(fraction: number): number {
-	const t = (fraction * 1000 + 20) / 1040;
-	return (26 + 88 * t * (1 - t)) / 80;
-}
-
-const productNames: Readonly<Record<Exclude<Bird, "chirp">, string>> = {
-	claude: "Claude Code",
-	codex: "Codex",
-	instinct: "Instinct",
-	muse: "Muse",
-	hermes: "Hermes",
-	grokbot: "Grok bot",
-	openclaw: "OpenClaw",
-};
 
 function perch(wire: HTMLElement, perches: readonly (readonly [Bird, number])[], labelled: boolean): void {
 	for (const [kind, fraction] of perches) {
@@ -162,6 +144,7 @@ function pulse(wire: HTMLElement, from: number, to: number, duration: number, la
 function arrive(wire: HTMLElement): Promise<void> {
 	if (reducedMotion.matches) return Promise.resolve();
 	const spots = [...wire.querySelectorAll<HTMLElement>("[data-bird]")];
+	const running: Animation[] = [];
 	const flights = spots.map((spot, index) => {
 		const icon = spot.querySelector("svg");
 		const use = icon?.querySelector("use");
@@ -176,19 +159,28 @@ function arrive(wire: HTMLElement): Promise<void> {
 			clearInterval(flap);
 			use.setAttribute("href", "#bird");
 		};
-		label?.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 300, delay: 900 + index * 110, fill: "backwards" });
-		return icon
-			.animate(
-				[
-					{ transform: `translate(${-from}px, ${-lift}px) rotate(-6deg)`, opacity: 0 },
-					{ opacity: 1, offset: 0.15 },
-					{ transform: `translate(${-from * 0.2}px, ${-lift * 0.55}px) rotate(-4deg)`, offset: 0.65 },
-					{ transform: "translate(0, -8px) rotate(2deg)", offset: 0.9 },
-					{ transform: "none", opacity: 1 },
-				],
-				{ duration: 1100, delay: index * 110, easing: "cubic-bezier(0.25, 0.7, 0.3, 1)", fill: "backwards" },
-			)
-			.finished.then(land, land);
+		const fade = label?.animate([{ opacity: 0 }, { opacity: 1 }], {
+			duration: 300,
+			delay: 900 + index * 110,
+			fill: "backwards",
+		});
+		if (fade) running.push(fade);
+		const flight = icon.animate(
+			[
+				{ transform: `translate(${-from}px, ${-lift}px) rotate(-6deg)`, opacity: 0 },
+				{ opacity: 1, offset: 0.15 },
+				{ transform: `translate(${-from * 0.2}px, ${-lift * 0.55}px) rotate(-4deg)`, offset: 0.65 },
+				{ transform: "translate(0, -8px) rotate(2deg)", offset: 0.9 },
+				{ transform: "none", opacity: 1 },
+			],
+			{ duration: 1100, delay: index * 110, easing: "cubic-bezier(0.25, 0.7, 0.3, 1)", fill: "backwards" },
+		);
+		running.push(flight);
+		return flight.finished.then(land, land);
+	});
+	// Turning on reduced motion mid-flight lands every bird at once.
+	onReduce(() => {
+		for (const animation of running) animation.finish();
 	});
 	return Promise.all(flights).then(() => undefined);
 }
@@ -281,6 +273,83 @@ function setupScene(): void {
 	// The thread starts while the last birds are still landing, so the board is never left empty.
 	whenVisible(
 		scene,
+		0.4,
+		() => void Promise.race([landed, new Promise((resolve) => setTimeout(resolve, 600))]).then(play),
+	);
+}
+
+// Agent pages: the birds in the thread sit on the wire, and the thread plays once with envelopes between them.
+function setupThread(): void {
+	const wire = document.querySelector<HTMLElement>('[data-wire="page"]');
+	if (!wire) return;
+	const perches = (wire.dataset.perches ?? "").split(" ").flatMap((entry): (readonly [Bird, number])[] => {
+		const [kind, fraction] = entry.split(":");
+		return isBird(kind) ? [[kind, Number(fraction)]] : [];
+	});
+	perch(wire, perches, true);
+	const thread = document.querySelector<HTMLElement>("[data-thread]");
+	const replay = thread?.querySelector<HTMLButtonElement>("[data-thread-replay]");
+	if (!motionAllowed()) {
+		if (replay) replay.hidden = true;
+		return;
+	}
+	const landed = arrive(wire);
+	if (!thread || !replay) return;
+	const beats = [...thread.querySelectorAll<HTMLElement>("[data-beat]")];
+	const at = (kind: Bird): number | undefined => perches.find(([name]) => name === kind)?.[1];
+	const cancel: { run: () => void } = { run: () => undefined };
+
+	const deliver = (beat: HTMLElement, author: Bird, pulses: { run: () => void }[]): void => {
+		for (const mark of beat.querySelectorAll<HTMLElement>("mark[data-mention]")) {
+			mark.setAttribute("data-lit", "");
+			const to = mark.dataset.mention;
+			const from = at(author);
+			const target = isBird(to) ? at(to) : undefined;
+			if (!isBird(to) || from === undefined || target === undefined) continue;
+			if (from === target) hop(wire, to);
+			else pulses.push({ run: pulse(wire, from, target, 1000, () => hop(wire, to)) });
+		}
+	};
+	const play = (): void => {
+		cancel.run();
+		if (reducedMotion.matches) return;
+		replay.disabled = true;
+		for (const node of beats) node.removeAttribute("data-shown");
+		for (const node of thread.querySelectorAll("mark[data-mention]")) node.removeAttribute("data-lit");
+		const pulses: { run: () => void }[] = [];
+		const stopSteps = sequence([
+			...beats.flatMap((beat, index): (readonly [number, () => void])[] => {
+				const author = beat.dataset.author;
+				if (!isBird(author)) return [];
+				const start = 250 + index * 1600;
+				return [
+					[
+						start,
+						() => {
+							beat.setAttribute("data-shown", "");
+							hop(wire, author);
+						},
+					],
+					[start + 650, () => deliver(beat, author, pulses)],
+				];
+			}),
+			[250 + beats.length * 1600, () => (replay.disabled = false)],
+		]);
+		cancel.run = () => {
+			stopSteps();
+			for (const stop of pulses) stop.run();
+		};
+	};
+
+	onReduce(() => {
+		cancel.run();
+		for (const node of beats) node.setAttribute("data-shown", "");
+		for (const node of thread.querySelectorAll("mark[data-mention]")) node.setAttribute("data-lit", "");
+		retire(replay);
+	});
+	replay.addEventListener("click", play);
+	whenVisible(
+		thread,
 		0.4,
 		() => void Promise.race([landed, new Promise((resolve) => setTimeout(resolve, 600))]).then(play),
 	);
@@ -462,7 +531,10 @@ function setupDeploy(): void {
 			}, 2400);
 		});
 	});
+}
 
+// The closing call to action, on every page.
+function setupFinalCopy(): void {
 	const final = document.querySelector<HTMLButtonElement>("#copy-final");
 	const finalStatus = document.querySelector<HTMLElement>("#final-status");
 	final?.addEventListener("click", () =>
@@ -471,9 +543,64 @@ function setupDeploy(): void {
 			if (!finalStatus) return;
 			finalStatus.textContent = copied
 				? "Copied the Railway prompt. Paste it into your agent."
-				: "Couldn’t reach the clipboard. Copy the prompt from the top of the page.";
+				: document.querySelector("#start")
+					? "Couldn’t reach the clipboard. Copy the prompt from the top of the page."
+					: "Couldn’t reach the clipboard. Copy the prompt from the deployment guide.";
 		}),
 	);
+}
+
+// Agent pages: the join prompt names the visitor's board as they type its address.
+function setupJoin(): void {
+	const card = document.querySelector<HTMLElement>("[data-join]");
+	const input = card?.querySelector<HTMLInputElement>("input");
+	const prompt = card?.querySelector<HTMLElement>("[data-join-prompt]");
+	const copy = card?.querySelector<HTMLButtonElement>("[data-join-copy]");
+	const status = card?.querySelector<HTMLElement>("[data-join-status]");
+	if (!card || !input || !prompt || !copy || !status) return;
+	const template = card.dataset.prompt ?? "";
+	const idle = [...status.childNodes].map((node) => node.cloneNode(true));
+	const reset: { timer: ReturnType<typeof setTimeout> | undefined } = { timer: undefined };
+	// Every route hangs off the board's origin, so a pasted deep link or invite address still finds /init.
+	const board = (): string | undefined => {
+		const typed = input.value.trim();
+		if (typed === "") return input.placeholder;
+		try {
+			const address = new URL(/^[a-z][a-z\d+.-]*:\/\//i.test(typed) ? typed : `https://${typed}`);
+			// A host like board.example or localhost; the parser would otherwise percent-encode stray text into one.
+			const host = /^[a-z\d-]+(\.[a-z\d-]+)*$/i.test(address.hostname);
+			const named = address.hostname.includes(".") || address.hostname === "localhost";
+			return /^https?:$/.test(address.protocol) && host && named ? address.origin : undefined;
+		} catch {
+			return undefined;
+		}
+	};
+	const text = (): string => template.replace("{board}", () => board() ?? input.placeholder);
+	input.addEventListener("input", () => {
+		prompt.textContent = text();
+	});
+	copy.addEventListener("click", () => {
+		clearTimeout(reset.timer);
+		if (input.value.trim() === "" || board() === undefined) {
+			status.textContent =
+				input.value.trim() === ""
+					? "Type your board’s address first."
+					: "That isn’t a web address. Check it and try again.";
+			input.focus();
+			return;
+		}
+		copyText(text(), (copied) => {
+			clearTimeout(reset.timer);
+			status.textContent = !copied
+				? "Copying was blocked. Select the prompt and copy it."
+				: `Copied. ${card.dataset.copied ?? ""}`;
+			if (copied) copy.textContent = "Copied";
+			reset.timer = setTimeout(() => {
+				copy.textContent = "Copy prompt";
+				status.replaceChildren(...idle.map((node) => node.cloneNode(true)));
+			}, 2400);
+		});
+	});
 }
 
 // Birds stand on the tops of the wordmark's letters, measured from the glyphs themselves.
@@ -483,7 +610,8 @@ function perchOnWordmark(root: HTMLElement): void {
 	if (!text || !baseline) return;
 	const letters = [...text.querySelectorAll<HTMLElement>("[data-letter]")];
 	const birds = letters.map((letter) => {
-		const kind = (letter.dataset.letter ?? "chirp") as Bird;
+		const named = letter.dataset.letter;
+		const kind = isBird(named) ? named : "chirp";
 		const spot = element("div", "absolute -translate-x-1/2 -translate-y-[88%]");
 		const icon = birdIcon(
 			kind,
@@ -984,8 +1112,11 @@ if (endWire) {
 	}
 }
 setupScene();
+setupThread();
 setupEditDemo();
 setupDeploy();
+setupFinalCopy();
+setupJoin();
 setupTopbar();
 setupWordmark();
 setupEntrances();
