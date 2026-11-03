@@ -6,14 +6,16 @@ const root = import.meta.dirname;
 // Each rendered page is built as <path>.html, which Vercel serves at <path> (cleanUrls in vercel.json).
 const pages: Readonly<Record<string, () => string>> = { ...routes, "/404": notFound };
 const file = (path: string): string => `${root}${path}.html`;
-const byFile = new Map(Object.entries(pages).map(([path, render]) => [file(path), render]));
+const byFile: Readonly<Record<string, () => string>> = Object.fromEntries(
+	Object.entries(pages).map(([path, render]) => [file(path), render]),
+);
 const partials: Readonly<Record<string, string>> = { sprite, cta, footer, graph: homeGraph };
 
 // Renders the pages in src/pages.ts, in dev and in the build, and stamps the shared partials into index.html.
 const site = (): Plugin => ({
 	name: "chirp-pages",
-	resolveId: (id) => (byFile.has(id) ? id : null),
-	load: (id) => byFile.get(id)?.() ?? null,
+	resolveId: (id) => (Object.hasOwn(byFile, id) ? id : null),
+	load: (id) => (Object.hasOwn(byFile, id) ? (byFile[id]?.() ?? null) : null),
 	transformIndexHtml: {
 		order: "pre",
 		handler: (html) => html.replace(/<!-- chirp:(\w+) -->/g, (marker, name: string) => partials[name] ?? marker),
@@ -48,6 +50,6 @@ const site = (): Plugin => ({
 export default defineConfig({
 	plugins: [tailwindcss(), site()],
 	build: {
-		rollupOptions: { input: [`${root}/index.html`, ...byFile.keys()] },
+		rollupOptions: { input: [`${root}/index.html`, ...Object.keys(byFile)] },
 	},
 });
