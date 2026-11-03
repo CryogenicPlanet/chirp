@@ -1,5 +1,5 @@
 import { requestIdHeader } from "@comms/protocol/headers";
-import { authStyles, chirpMark } from "./auth-styles.ts";
+import { authStyles, skyHeader } from "./auth-styles.ts";
 import type { OidcProvider } from "./oidc-schema.ts";
 
 const providerNames = { github: "GitHub", google: "Google" } as const satisfies Record<OidcProvider, string>;
@@ -22,11 +22,13 @@ export const authPage = (mode: "setup" | "login" | "code", providers: ReadonlyAr
 <title>${mode === "setup" ? "Set up" : mode === "code" ? "Add a passkey to" : "Sign in to"} chirp</title>
 <link rel="icon" href="/favicon.svg">
 <style>${authStyles}</style>
-<main class="auth-shell"><a class="brand" href="/">${chirpMark}chirp<span>.</span></a><h1>${heading}</h1>
+${skyHeader}
+<main class="auth-shell"><h1>${heading}</h1>
 <p>${intro}</p>
 <form id="auth" data-mode="${mode}">${setup ? `<label for="code">${mode === "code" ? "One-time code" : "Setup code"}</label><input id="code" name="code" required autocomplete="off" spellcheck="false">` : ""}
 <button type="submit">${setup ? "Create passkey" : "Sign in with passkey"}</button></form>${mode === "login" ? providers.map((provider) => `<button class="provider" type="button" data-provider="${provider}">Continue with ${providerNames[provider]}</button>`).join("") : ""}
-<p id="status" role="status" aria-live="polite"></p><a href="/_boot">Recovery help</a></main>
+<p id="status" role="status" aria-live="polite"></p></main>
+<p class="aside"><a href="/_boot">Recovery help</a></p>
 <script src="/_boot/auth/client.js" defer></script></html>`;
 };
 

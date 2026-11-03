@@ -1,4 +1,4 @@
-import { authStyles, chirpMark } from "./auth-styles.ts";
+import { authStyles, skyHeader } from "./auth-styles.ts";
 import type { AuthError } from "./auth.ts";
 import { escape } from "./enrollment-page.ts";
 import { humanAgent } from "./human-agent.ts";
@@ -16,7 +16,8 @@ const page = (title: string, body: string, head = "") => `<!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${head}
 <title>${title}</title>
 <style>${authStyles}</style>
-<main class="auth-shell"><a class="brand" href="/">${chirpMark}chirp<span>.</span></a>${body}</main></html>`;
+${skyHeader}
+<main class="auth-shell">${body}</main></html>`;
 
 /** A same-site navigation onward from the cross-site callback. A redirect would continue the issuer's cross-site
  * navigation, and the SameSite=Strict session cookie would not be sent with it. */

@@ -226,7 +226,7 @@ it("creates, approves and collects a held grant, then forwards it as the approve
 	// The approval page describes the request only from boot's row, with fs unticked and no device code.
 	const page = await (await fetch(`${app.url}/approve/${created.id}`)).text();
 	expect(page).toContain(
-		"Extension <strong>mcp</strong> asks to act as agent <strong>dot</strong> (chatgpt). Boot keeps this access; it is never sent to the extension.",
+		"Extension <strong>mcp</strong> asks to act as agent <strong>dot</strong>. Its posts show as <strong>dot@chatgpt</strong>. The board keeps this access; it is never sent to the extension.",
 	);
 	expect(page).toContain('<input id="fs" type="checkbox">');
 	expect(page).toContain('<input id="write" type="checkbox" checked>');
@@ -235,15 +235,23 @@ it("creates, approves and collects a held grant, then forwards it as the approve
 	// The requester's code ties this link to the connection that asked for it.
 	expect(created.user_code).toMatch(/^[A-F0-9]{6}$/);
 	expect(page).toContain(`<code>${created.user_code}</code>`);
-	expect(page).toContain("Anything the board's app runs can use this access");
+	expect(page).toContain("Anything the board runs can use this access");
 	expect(page).toContain(
-		"With fs, anything running in the app, including code another fs agent installs, can act as dot",
+		"With this, anything the board runs, including code another agent with this access adds, can act as dot",
 	);
 	expect(page).not.toContain("data-return");
+	// Boot keeps the credential, so the human has nothing to carry back.
+	expect(page).toContain('data-approved="Approved. You can close this page."');
 	const returned = await (
 		await fetch(`${app.url}/approve/${created.id}?return=${encodeURIComponent("/mcp/oauth/authorize?state=a&b=<x>")}`)
 	).text();
 	expect(returned).toContain('data-return="/mcp/oauth/authorize?state=a&amp;b=%3Cx%3E"');
+	// Anyone can add a return link, so the code stays visible; the page only stops asking for a comparison the flow
+	// never offered.
+	expect(returned).toContain(`<code>${created.user_code}</code>`);
+	expect(returned).toContain("If an app or agent gave you a different code, deny it.");
+	expect(returned).not.toContain("Confirm this code matches");
+	expect(returned).toContain('data-approved="Approved. Returning you to mcp…"');
 	for (const target of [
 		"https://evil.test/x",
 		"//evil.test/x",
@@ -261,6 +269,11 @@ it("creates, approves and collects a held grant, then forwards it as the approve
 	expect(mismatched.status).toBe(401);
 	expect(await errorCode(mismatched)).toBe("challenge_invalid");
 	expect((await app.approve(created.id, ["read", "write", "fs"])).status).toBe(200);
+	// Once decided, the page offers the way back instead of a dead end.
+	const decided = await (
+		await fetch(`${app.url}/approve/${created.id}?return=${encodeURIComponent("/mcp/oauth/finish")}`)
+	).text();
+	expect(decided).toContain('<a href="/mcp/oauth/finish">Return to mcp</a> to finish connecting.');
 	const collected = await (await internal.call(`/_boot/grants/${created.id}`, { extension: "mcp" })).json();
 	const approved = Schema.decodeUnknownSync(Approved)(collected);
 	expect(Object.keys(collected).sort()).toEqual(["agent", "expires_at", "family", "label", "scopes", "status"]);
