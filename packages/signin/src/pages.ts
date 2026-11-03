@@ -9,20 +9,32 @@ const escapeHtml = (text: string) =>
 		.replace(/"/g, "&quot;")
 		.replace(/'/g, "&#39;");
 
-// Self-contained: no scripts, assets or external requests, matching the board's sign-in pages.
+// Self-contained: no scripts, assets or external requests, matching the board's sign-in pages. The CSP loads no
+// images and refuses a data: URL too, so there is no favicon. The look is chirp.wiki's, in the system sans.
+// "chirp" in Pixelify Sans 600, drawn as a path because these pages load no fonts.
+const wordmark =
+	`<svg width="60" height="20" viewBox="0 0 2506 817" role="img" aria-label="chirp">` +
+	`<path fill="#202a3a" d="M89 647V561H0V262H89V175H385V262H475V385H356V299H118V523H356V436H475V561H385V647ZM597 647V0H715V262H774V175H982V262H1072V647H953V299H804V385H715V647ZM1194 647V175H1312V647ZM1194 125V0H1312V125ZM1434 647V262H1523V175H1819V262H1909V385H1790V299H1552V647ZM2031 817V262H2120V175H2416V262H2506V561H2416V647H2149V817ZM2149 523H2387V299H2149Z"/></svg>`;
+const bird =
+	`<svg width="31" height="28" viewBox="0 0 88 80" shape-rendering="crispEdges" aria-hidden="true">` +
+	`<path fill="#ed9b83" d="M8 24h16V8h32v8h8v8h16v8H64v16h-8v8H24v-8h-8V40H8zM0 16h8v16H0z"/>` +
+	`<path fill="#b9b0df" d="M24 32h8v8h16v8H24z"/><path fill="#ffd166" d="M64 24h16v8H64z"/>` +
+	`<path fill="#202a3a" d="M44 16h8v8h-8zM24 56h8v16H16v-8h8zM48 56h8v8h8v8H48z"/></svg>`;
 const styles = `
-*{box-sizing:border-box}body{margin:0;background:#161b1d;color:#eeeee7;font:16px/1.65 system-ui,sans-serif;-webkit-font-smoothing:antialiased}
-main{max-width:32rem;margin:10vh auto;padding:1.5rem}
-.brand{font-size:1.1rem;font-weight:650;letter-spacing:-.04em;color:#e69b83}
-h1{font:normal clamp(2rem,5vw,3rem)/1.15 Georgia,serif;letter-spacing:-.03em;margin:2rem 0 1rem;overflow-wrap:anywhere}p{margin-top:0;color:#a8b4b4}strong{color:#eeeee7;overflow-wrap:anywhere}a{color:#c9bfdf}
-form{display:flex;gap:.75rem;margin-top:1.5rem}button{flex:1;font:inherit;font-weight:550;padding:.75rem 1rem;border-radius:4px;border:0;cursor:pointer;background:#b8d7c3;color:#17201d}
-button[value=cancel]{background:transparent;color:#eeeee7;border:1px solid #52625e}button:focus-visible{outline:2px solid #c9bfdf;outline-offset:4px}
-@media(max-width:600px){main{margin:4vh auto}}
+*{box-sizing:border-box}html{background:#f7f5f0}body{margin:0;background:#f7f5f0;color:#202a3a;font:16px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+:focus-visible{outline:2px solid #202a3a;outline-offset:3px}header{padding:24px max(16px,calc(50% - 232px)) 128px;background:#c2dff9}
+.brand{display:flex;align-items:center;gap:8px;font-size:24px;font-weight:650;letter-spacing:-.035em;line-height:28px}.brand svg{flex:none}
+main{width:min(464px,calc(100% - 32px));margin:-88px auto 48px;padding:32px;background:#fff;border-radius:20px;box-shadow:0 0 0 1px rgb(32 42 58/.07),0 1px 3px rgb(32 42 58/.06),0 6px 16px -6px rgb(32 42 58/.08)}main>:last-child{margin-bottom:0}
+h1{margin:0 0 12px;font-size:28px;line-height:1.2;font-weight:650;letter-spacing:-.03em;text-wrap:balance;overflow-wrap:anywhere}p{margin:0 0 16px;color:#3a4558;text-wrap:pretty}strong{color:#202a3a;font-weight:600;overflow-wrap:anywhere}
+a{color:#202a3a;text-decoration-color:rgb(32 42 58/.3);text-underline-offset:3px}a:hover{text-decoration-color:currentColor}
+form{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px}button{flex:1 1 160px;min-height:44px;padding:10px 16px;border:0;border-radius:10px;background:#202a3a;color:#fff;font:inherit;font-size:15px;font-weight:500;cursor:pointer}button:hover{background:#3a4558}
+button[value=cancel]{background:transparent;color:#202a3a;box-shadow:inset 0 0 0 1px #948d7e}button[value=cancel]:hover{background:#f1eee7}
+@media(max-width:600px){header{padding-top:16px;padding-bottom:104px}main{margin-top:-72px;padding:24px 20px}h1{font-size:24px}}
 `;
 
 const document = (title: string, body: string) =>
 	`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
-	`<title>${escapeHtml(title)}</title><style>${styles}</style></head><body><main><div class="brand">chirp sign-in</div>${body}</main></body></html>`;
+	`<title>${escapeHtml(title)}</title><style>${styles}</style></head><body><header><div class="brand">${bird}${wordmark}</div></header><main>${body}</main></body></html>`;
 
 const pageHeaders = {
 	"cache-control": "no-store",

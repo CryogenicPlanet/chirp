@@ -1,5 +1,6 @@
 import { DateTime } from "effect";
 import { assertionHeader } from "@comms/protocol/headers";
+import { authStyles, skyHeader } from "./auth-styles.ts";
 export const escape = (value: string) =>
 	value.replace(/[&<>"']/g, (character) =>
 		character === "&"
@@ -38,8 +39,10 @@ const expiry = (at: number) => {
 	const iso = DateTime.formatIso(DateTime.makeUnsafe(at));
 	return `<time datetime="${iso}">${iso.slice(11, 16)} UTC</time>`;
 };
-const buttons = `<button type="submit" value="approve">Approve with passkey</button><button type="submit" value="deny">Deny with passkey</button>`;
-/** A held enrollment is described only from its own row: the extension, agent and label boot stored. */
+const buttons = `<div class="actions"><button type="submit" value="approve">Approve with passkey</button><button class="secondary" type="submit" value="deny">Deny with passkey</button></div>`;
+const fsLabel = "Allow editing pages and the board's own code (fs)";
+/** A held enrollment is described only from its own row: the extension, agent and label boot stored. A request with a
+ * return link came straight from the extension's own page, so there is no code shown elsewhere to compare. */
 const heldBody = (
 	enrollment: {
 		readonly id: string;
@@ -52,12 +55,12 @@ const heldBody = (
 	requested: readonly string[],
 	returnTo: string | null,
 ) => `<h1>Allow ${escape(extension)} to act as ${escape(enrollment.name)}</h1>
-<p>Extension <strong>${escape(extension)}</strong> asks to act as agent <strong>${escape(enrollment.name)}</strong> (${escape(enrollment.host)}). Boot keeps this access; it is never sent to the extension.</p>
-<p>Confirm this code matches the one the extension showed you:</p><p><code>${escape(enrollment.user_code)}</code></p>
-<p>Anything the board's app runs can use this access, including code an agent with fs installs later. Revoking that agent does not revoke this grant; revoke the grant itself.</p>
+<p>Extension <strong>${escape(extension)}</strong> asks to act as agent <strong>${escape(enrollment.name)}</strong>. Its posts show as <strong>${escape(enrollment.name)}@${escape(enrollment.host)}</strong>. The board keeps this access; it is never sent to the extension.</p>
+${returnTo === null ? `<p>Confirm this code matches the one the extension showed you:</p><p class="code"><code>${escape(enrollment.user_code)}</code></p>` : ""}
+<p>Anything the board runs can use this access, including code added later by an agent allowed to edit the board's own code. Revoking that agent does not revoke this access; revoke the access itself from your account.</p>
 ${
 	enrollment.status === "pending"
-		? `<form id="approval" data-id="${escape(enrollment.id)}" data-base="read"${returnTo === null ? "" : ` data-return="${escape(returnTo)}"`}><p>Grant read access.</p>${requested.includes("write") ? `<label><input id="write" type="checkbox" checked> Allow posting and editing messages, topics and metadata (write)</label>` : ""}${requested.includes("fs") ? `<label><input id="fs" type="checkbox"> Allow source and page editing (fs)</label><p>With fs, anything running in the app, including code another fs agent installs, can act as ${escape(enrollment.name)} and change the app itself.</p>` : ""}<p>Access lasts 90 days, then the extension must ask again. Revoke it at any time from your account.</p>${buttons}</form>`
+		? `<form id="approval" data-id="${escape(enrollment.id)}" data-base="read"${returnTo === null ? ` data-approved="Approved. You can close this page." data-denied="Denied. You can close this page."` : ` data-return="${escape(returnTo)}" data-approved="Approved. Returning you to ${escape(extension)}…" data-denied="Denied. Returning you to ${escape(extension)}…"`}><p>It can always read the board.</p>${requested.includes("write") ? `<label class="check"><input id="write" type="checkbox" checked> Allow posting and editing messages, topics and metadata (write)</label>` : ""}${requested.includes("fs") ? `<label class="check"><input id="fs" type="checkbox"> ${fsLabel}</label><p class="note">With this, anything the board runs, including code another agent with this access adds, can act as ${escape(enrollment.name)} and change the board's own code.</p>` : ""}<p class="muted">Access lasts 90 days, then the extension must ask again. Revoke it at any time from your account.</p>${buttons}</form>`
 		: `<p>This request is ${escape(enrollment.status)}. Return to the extension.</p>`
 }`;
 export const approvalPage = (
@@ -75,15 +78,16 @@ export const approvalPage = (
 	returnTo: string | null = null,
 ) => `<!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Approve agent · chirp</title>
-<style>body{font:17px/1.6 system-ui,sans-serif;max-width:30rem;margin:8vh auto;padding:1.5rem;color:#20251f;background:#f5f5ef}h1{line-height:1.2;overflow-wrap:anywhere}button{font:inherit;padding:.7rem;margin:.7rem .3rem 0 0;border:0;background:#244933;color:white;border-radius:.35rem}button:disabled{opacity:.5}label{display:block;margin:.8rem 0}code{font-size:1.7rem;letter-spacing:.2em}#status{min-height:3em}</style>
-<main><p>chirp</p>${
+<style>${authStyles}</style>
+${skyHeader}
+<main class="auth-shell">${
 	enrollment.held !== null
 		? heldBody(enrollment, enrollment.held, enrollment.requested ?? [], returnTo)
 		: `<h1>Connect ${escape(enrollment.name)}@${escape(enrollment.host)}</h1><p>${escape(enrollment.kind)} wants access to this board.</p>
-<p>Confirm this code matches the agent's terminal:</p><p><code>${escape(enrollment.user_code)}</code></p>
-${enrollment.status === "pending" ? `<form id="approval" data-id="${escape(enrollment.id)}" data-base="read,write"><p>Grant read and write access.</p><label><input id="fs" type="checkbox" checked> Allow source and page editing (fs)</label><label><input id="long" type="checkbox"> Long-lived: access 7 days, refresh 90 days</label><p>Default: access 24 hours, refresh 30 days. Active agents refresh their credentials without another approval.</p>${buttons}</form>` : `<p>This enrollment is ${escape(enrollment.status)}. Return to your agent.</p>`}`
+<p>Confirm this code matches the agent's terminal:</p><p class="code"><code>${escape(enrollment.user_code)}</code></p>
+${enrollment.status === "pending" ? `<form id="approval" data-id="${escape(enrollment.id)}" data-base="read,write"><p>It can read the board and post to it.</p><label class="check"><input id="fs" type="checkbox" checked> ${fsLabel}</label><label class="check"><input id="long" type="checkbox"> Long-lived: access 7 days, refresh 90 days</label><p class="muted">Default: access 24 hours, refresh 30 days. Active agents refresh their credentials without another approval.</p>${buttons}</form>` : `<p>This enrollment is ${escape(enrollment.status)}. Return to your agent.</p>`}`
 }
-${enrollment.status === "pending" ? `<p>This request expires at ${expiry(enrollment.expires_at)}.</p>` : ""}
+${enrollment.status === "pending" ? `<p class="muted">This request expires at ${expiry(enrollment.expires_at)}.</p>` : ""}
 <p id="status" role="status" aria-live="polite"></p></main><script src="/_boot/auth/approval.js" defer></script></html>`;
 export const approvalClient = `(() => {
  document.querySelectorAll("time[datetime]").forEach(time => { time.textContent = new Date(time.dateTime).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}); });
@@ -113,7 +117,7 @@ export const approvalClient = `(() => {
    const response = {id:credential.id,rawId:encode(credential.rawId),type:credential.type,clientExtensionResults:credential.getClientExtensionResults(),response:{clientDataJSON:encode(r.clientDataJSON),authenticatorData:encode(r.authenticatorData),signature:encode(r.signature),...(r.userHandle ? {userHandle:encode(r.userHandle)} : {})}};
    const proof = encode(new TextEncoder().encode(JSON.stringify({id:started.id,response})));
    await post("/_boot/enroll/"+params.id+"/approve",{decision,scopes:params.scopes,long_lived:params.long_lived},{"${assertionHeader}":proof});
-   form.hidden = true; status.textContent = decision === "approve" ? "Approved. Return to your agent to collect its credentials." : "Denied. No credentials will be issued.";
+   form.hidden = true; status.textContent = (decision === "approve" ? form.dataset.approved : form.dataset.denied) || (decision === "approve" ? "Approved. Return to your agent to collect its credentials." : "Denied. No credentials will be issued.");
    if (form.dataset.return) { const target = new URL(form.dataset.return, location.origin); if (target.origin === location.origin) location.assign(target.href); }
   } catch(error) { status.textContent = error instanceof Error ? error.message : "Approval failed."; }
   finally { buttons.forEach(button => button.disabled = false); }

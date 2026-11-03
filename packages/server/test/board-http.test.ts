@@ -92,7 +92,7 @@ it("serves a compiled board with a public onboarding shell from its generation a
 	expect(fallback.status).toBe(503);
 	expect(fallback.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
 	expect(fallback.headers.get("content-security-policy")).toContain("form-action 'self'");
-	expect(await fallback.text()).toContain("open recovery help");
+	expect(await fallback.text()).toContain("Recovery help");
 	expect((await get("/api/messages?since=0")).status).toBe(200);
 	await app.stop();
 	const preparedBoard = join(fixture.root, "gen", String(generation), "source.board");
