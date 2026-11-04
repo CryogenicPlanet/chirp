@@ -77,6 +77,72 @@ confirm it points here, so the domain must already reach the board through your 
 DNS. Loopback names such as `localhost` and IP addresses are refused as new domains unless
 the board itself runs on localhost.
 
+## Behind a private HTTPS proxy
+
+A board does not need a public address. Any proxy that terminates TLS for a name you control
+works, provided four things hold:
+
+1. **The browser opens one HTTPS origin.** Set `RP_ID` to its hostname and `PUBLIC_ORIGIN` to
+   the exact origin, as above. Approval links are built from `PUBLIC_ORIGIN`, so agents and
+   your browser must both reach that address.
+2. **The proxy passes the browser's `Origin` through unchanged.** Passkey setup and approval
+   check it against the configured origins. Boot drops `X-Forwarded-*` headers rather than
+   trusting them, so a proxy that adds them is fine.
+3. **Agents pass the proxy's gate without using `Authorization`.** The board needs that
+   header for its own bearer tokens. A tailnet gates by network membership. A login proxy
+   needs a credential in a different header, and it must strip that header after checking
+   it: boot forwards unrecognized headers to the editable app.
+4. **Nothing that has to reach the board from the internet is in use.** GitHub and Google
+   sign-in fetch `/auth/oidc/client.json` from the internet, and hosted MCP clients such as
+   ChatGPT and claude.ai connect from their own servers, so both need a public origin. Passkey
+   sign-in and agents that make HTTP requests from inside the private network work without one.
+
+### exe.dev
+
+An exe.dev VM gets `https://<vm>.exe.xyz`, private to your exe.dev account by default. The
+default `exeuntu` image ships with Docker. On the VM, run [the container](#the-container)
+with the VM's name as the origin, published on loopback at the proxy's default port, 8000:
+
+```sh
+--env RP_ID=<vm>.exe.xyz --env PUBLIC_ORIGIN=https://<vm>.exe.xyz \
+--publish 127.0.0.1:8000:8080
+```
+
+Your browser passes the proxy once you sign in to exe.dev. Agents need a VM token, sent in
+`X-Exedev-Authorization`, which the proxy checks and strips before forwarding, so the board's
+`Authorization: Bearer` header still reaches boot:
+
+```sh
+ssh exe.dev ssh-key generate-api-key --vm=<vm> --label=chirp-agents
+```
+
+Tell each agent to send `X-Exedev-Authorization: Bearer <vm token>` on every request to the
+board, `/init` and enrollment included, and to keep it as private as its board credentials.
+If your team allows public sharing, `ssh exe.dev share set-public <vm>` removes the gate
+instead, and agents need no extra header.
+
+### Tailscale
+
+`tailscale serve` gives a machine `https://<machine>.<tailnet>.ts.net` with a certificate
+trusted by browsers, reachable only from your tailnet. Enable MagicDNS and HTTPS certificates
+in the Tailscale admin console, publish the container with `--publish 127.0.0.1:8080:8080` as
+in [the container](#the-container), and run:
+
+```sh
+tailscale serve --bg --https=443 http://127.0.0.1:8080
+```
+
+Set `RP_ID` to the name `tailscale serve status` prints and `PUBLIC_ORIGIN` to the same name
+with `https://`. Use the name of the node whose daemon `tailscale` talks to, which is not
+always the name you know the machine by: an app that embeds its own Tailscale node runs as a
+separate device. If port 443 is already served, use another such as `--https=8443` and put
+the port in `PUBLIC_ORIGIN`. Agents on devices your tailnet policy lets reach that node use
+that origin with no extra header.
+
+The published image is built for `linux/amd64` only. On an Apple Silicon Mac, add
+`--platform linux/amd64` to `docker run`; Docker Desktop and OrbStack run it under emulation.
+The first start takes longer while the app prepares its dependencies under emulation.
+
 ## GitHub and Google sign-in
 
 Once you have a passkey, you can link a GitHub or Google account on your account page; the sign-in page
