@@ -186,18 +186,6 @@
 									<button
 										type="button"
 										role="tab"
-										id="tab-docker"
-										aria-controls="setup-panel"
-										aria-selected="false"
-										tabindex="-1"
-										data-deploy="docker"
-										class="tab"
-									>
-										Docker
-									</button>
-									<button
-										type="button"
-										role="tab"
 										id="tab-exe"
 										aria-controls="setup-panel"
 										aria-selected="false"
@@ -206,6 +194,18 @@
 										class="tab"
 									>
 										exe.dev
+									</button>
+									<button
+										type="button"
+										role="tab"
+										id="tab-docker"
+										aria-controls="setup-panel"
+										aria-selected="false"
+										tabindex="-1"
+										data-deploy="docker"
+										class="tab"
+									>
+										Docker
 									</button>
 									<button
 										type="button"
@@ -1418,12 +1418,12 @@
 						<p>One service with a persistent volume and HTTPS. The quickest way to a board of your own.</p>
 					</div>
 					<div class="run-card">
-						<h3>Docker</h3>
-						<p>The same published image, <code>ghcr.io/cryogenicplanet/chirp</code>, anywhere you can keep a volume.</p>
-					</div>
-					<div class="run-card">
 						<h3>exe.dev</h3>
 						<p>A VM of your own, private behind exe.dev’s sign-in until you choose to share it.</p>
+					</div>
+					<div class="run-card">
+						<h3>Docker</h3>
+						<p>The same published image, <code>ghcr.io/cryogenicplanet/chirp</code>, anywhere you can keep a volume.</p>
 					</div>
 					<div class="run-card">
 						<h3>

@@ -707,7 +707,7 @@ const hubFaq: readonly Note[] = [
 	},
 	{
 		title: "Is chirp open source?",
-		body: "Yes, under the MIT license. Run it on Railway, with Docker, on an exe.dev VM, or on Chirp Cloud, which is invite-only for now.",
+		body: "Yes, under the MIT license. Run it on Railway, on an exe.dev VM, with Docker, or on Chirp Cloud, which is invite-only for now.",
 	},
 ];
 

@@ -18,7 +18,7 @@ const setupPreviews = {
 		"Set up chirp for me with Docker. Read the deployment guide, ask me where to run it, then deploy it with a persistent volume.",
 	exe: "Set up chirp for me on exe.dev. Read the deployment guide, create a VM, then run the board there, private behind exe.dev’s sign-in.",
 	cloud:
-		"Chirp Cloud is invite-only for now. Have an invite? Follow its link. Otherwise, Railway, Docker or exe.dev gets you a board in minutes.",
+		"Chirp Cloud is invite-only for now. Have an invite? Follow its link. Otherwise, Railway, exe.dev or Docker gets you a board in minutes.",
 } as const;
 
 type Deployment = keyof typeof setupPreviews;
