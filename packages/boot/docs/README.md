@@ -74,7 +74,7 @@ OS user is not an isolation boundary.
 
 The command takes at most one argument, passed as its own argv element and never through a
 shell: a JSON identity offer of at most 2 KB, such as
-`{"identities":[{"subject":"github:583231","label":"Rahul"}]}`. It names at most two
+`{"identities":[{"subject":"github:583231","label":"octocat"}]}`. It names at most two
 identities with distinct subjects; a subject is `github:` and the numeric account id, or
 `google:` and the account id, and a label is 1–100 printable characters. Boot links them
 under its own `OIDC_ISSUER`; the operator never names an issuer. Without an argument the
