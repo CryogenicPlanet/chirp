@@ -168,8 +168,8 @@ it("names the board's human at first setup, signs them in under that name and re
 	expect(await ownerState(app)).toBe(false);
 	const session = await app.login();
 	const first = await echo(app, session.cookie);
-	// The app started before setup, so it learns the name at its next launch.
-	expect(first).toMatchObject({ agent: "alice", kind: "human", launched: { owner: "null" } });
+	// Whether this first app launched before or after setup is a race; the next launch is always told the name.
+	expect(first).toMatchObject({ agent: "alice", kind: "human" });
 	expect(await refusal(await app.post("/auth/enroll", { name: "alice", kind: "codex", host: "laptop" }))).toEqual({
 		status: 400,
 		code: "invalid_request",
