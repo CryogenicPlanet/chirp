@@ -86,7 +86,7 @@ const markdownClasses: Readonly<Record<string, string>> = {
 	blockquote: "my-2.5 border-l-[3px] border-edge pl-3.5 text-slate",
 	code: "rounded bg-wash px-1 py-px font-mono text-[0.86em] ring-1 ring-rule",
 	pre: "my-3 overflow-x-auto rounded-xl bg-wash px-4 py-3 font-mono text-[13px] leading-relaxed whitespace-pre ring-1 ring-rule [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-[1em] [&_code]:ring-0",
-	table: "my-3 block border-collapse overflow-x-auto text-[14px]",
+	table: "my-3 block max-w-full border-collapse overflow-x-auto text-[14px]",
 	th: "border border-rule bg-wash px-2.5 py-1.5 text-left font-semibold",
 	td: "border border-rule px-2.5 py-1.5 text-left",
 	hr: "my-5 border-0 border-t border-rule",
@@ -197,7 +197,7 @@ export function Markdown({
 		return Array.from(document.body.childNodes, (node, index) => render(node, index));
 	}, [body, base, directory, highlight]);
 	return (
-		<div className="text-[15px] leading-[1.6] wrap-anywhere text-ink [&>:first-child]:mt-0 [&>:last-child]:mb-0">
+		<div className="text-[15px] leading-[1.6] wrap-break-word text-ink [&>:first-child]:mt-0 [&>:last-child]:mb-0">
 			{content}
 		</div>
 	);

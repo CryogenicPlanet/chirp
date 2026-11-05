@@ -71,7 +71,7 @@ function useMessageMatches(query: string) {
 					.read(
 						client.messages({
 							since: 0,
-							limit: 8,
+							limit: 6,
 							newest: "1",
 							recursive: "1",
 							mark: "0",
@@ -96,7 +96,7 @@ function useMessageMatches(query: string) {
 	return state;
 }
 
-function PaletteBody({ close }: { readonly close: () => void }) {
+function PaletteBody({ close, go: open }: { readonly close: () => void; readonly go: (href: string) => void }) {
 	const client = useBoardClient();
 	const directory = useDirectory();
 	const location = useLocation();
@@ -106,7 +106,7 @@ function PaletteBody({ close }: { readonly close: () => void }) {
 	const messages = useMessageMatches(query);
 	const go = (href: string) => {
 		close();
-		navigate(href);
+		open(href);
 	};
 	const topics = root?.subtopics ?? [];
 	const here = location.pathname.startsWith("/t/") || location.pathname === "/" ? location.pathname : "/";
@@ -170,46 +170,14 @@ function PaletteBody({ close }: { readonly close: () => void }) {
 					</CommandGroup>
 				)}
 				{trimmed === "" && <CommandEmpty>Type to search messages, topics and agents.</CommandEmpty>}
-				{trimmed !== "" && (
-					<CommandGroup heading="Search" forceMount>
-						<CommandItem
-							value={`search all messages ${trimmed}`}
-							forceMount
-							onSelect={() => go(`${here}?q=${encodeURIComponent(trimmed)}`)}
-						>
-							<SearchIcon />
-							<span className="min-w-0 truncate">
-								Search messages for <span className="font-medium text-ink">“{trimmed}”</span>
-							</span>
-							<Kbd className="ml-auto">↵</Kbd>
-						</CommandItem>
-					</CommandGroup>
-				)}
-				{messages.loading && messages.items.length === 0 && <CommandLoading>Searching messages…</CommandLoading>}
-				{messages.items.length > 0 && (
-					<CommandGroup heading="Messages" forceMount>
-						{messages.items.map((message) => (
-							<CommandItem
-								key={message.id}
-								value={`message ${message.seq}`}
-								forceMount
-								onSelect={() => go(`${topicHref(message.topic)}#message-${message.seq}`)}
-								className="items-start"
-							>
-								<MessageSquareText className="mt-0.5" />
-								<span className="min-w-0 flex-1">
-									<span className="block truncate text-ink">{snippet(message.body)}</span>
-									<span className="block truncate text-[12.5px] text-slate">
-										{message.agent} in #{message.topic}
-									</span>
-								</span>
-							</CommandItem>
-						))}
-					</CommandGroup>
-				)}
 				<CommandGroup heading="Topics">
 					{topics.map((topic) => (
-						<CommandItem key={topic.path} value={`topic ${topic.path}`} onSelect={() => go(topicHref(topic.path))}>
+						<CommandItem
+							key={topic.path}
+							value={topic.path}
+							keywords={[topic.name, "topic"]}
+							onSelect={() => go(topicHref(topic.path))}
+						>
 							<Hash />
 							<span className="min-w-0 truncate">
 								{topic.path.includes("/") && (
@@ -234,6 +202,43 @@ function PaletteBody({ close }: { readonly close: () => void }) {
 								{agent.labels.length > 0 && (
 									<span className="ml-auto truncate text-[12.5px] text-slate">{agent.labels.join(", ")}</span>
 								)}
+							</CommandItem>
+						))}
+					</CommandGroup>
+				)}
+				{trimmed !== "" && (
+					<CommandGroup heading="Search" forceMount>
+						<CommandItem
+							value={`search all messages ${trimmed}`}
+							forceMount
+							onSelect={() => go(`${here}?q=${encodeURIComponent(trimmed)}`)}
+						>
+							<SearchIcon />
+							<span className="min-w-0 truncate">
+								Search messages for <span className="font-medium text-ink">“{trimmed}”</span>
+							</span>
+							<Kbd className="ml-auto">↵</Kbd>
+						</CommandItem>
+					</CommandGroup>
+				)}
+				{messages.loading && messages.items.length === 0 && <CommandLoading>Searching messages…</CommandLoading>}
+				{messages.items.length > 0 && (
+					<CommandGroup heading="Messages" forceMount>
+						{messages.items.map((message) => (
+							<CommandItem
+								key={message.id}
+								value={`message ${message.seq}`}
+								forceMount
+								onSelect={() => go(`${topicHref(message.topic)}?message=${message.seq}#message-${message.seq}`)}
+								className="items-start"
+							>
+								<MessageSquareText className="mt-0.5" />
+								<span className="min-w-0 flex-1">
+									<span className="block truncate text-ink">{snippet(message.body)}</span>
+									<span className="block truncate text-[12.5px] text-slate">
+										{message.agent} in #{message.topic}
+									</span>
+								</span>
 							</CommandItem>
 						))}
 					</CommandGroup>
@@ -326,9 +331,23 @@ function PaletteBody({ close }: { readonly close: () => void }) {
 }
 
 /** ⌘K / Ctrl+K anywhere on the board. Closes on navigation. */
-export function CommandPalette({ children }: { readonly children: ReactNode }) {
+export function CommandPalette({
+	children,
+	go = navigate,
+	container,
+}: {
+	readonly children?: ReactNode;
+	/** How to follow a result: client navigation on the board, a full load on a page. */
+	readonly go?: (href: string) => void;
+	readonly container?: HTMLElement;
+}) {
 	const [open, setOpen] = useState(false);
 	const location = useLocation();
+	useEffect(() => {
+		const show = () => setOpen(true);
+		window.addEventListener("chirp:open-palette", show);
+		return () => window.removeEventListener("chirp:open-palette", show);
+	}, []);
 	useEffect(() => {
 		const toggle = (event: KeyboardEvent) => {
 			if (event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
@@ -344,8 +363,13 @@ export function CommandPalette({ children }: { readonly children: ReactNode }) {
 	return (
 		<PaletteContext.Provider value={openPalette}>
 			{children}
-			<CommandDialog open={open} onOpenChange={setOpen} label="Command palette">
-				{open && <PaletteBody close={() => setOpen(false)} />}
+			<CommandDialog
+				open={open}
+				onOpenChange={setOpen}
+				label="Command palette"
+				{...(container === undefined ? {} : { container })}
+			>
+				{open && <PaletteBody close={() => setOpen(false)} go={go} />}
 			</CommandDialog>
 		</PaletteContext.Provider>
 	);

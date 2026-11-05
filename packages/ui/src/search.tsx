@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import { Atom } from "effect/unstable/reactivity";
 import { Hash, LoaderCircle, SearchIcon, Tag, X } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { validTopic, type BoardMessage } from "./board-api.ts";
@@ -73,7 +74,13 @@ export function Search({ path, onActive }: { readonly path: string; readonly onA
 	const field = useRef<HTMLInputElement>(null);
 	const request = useRef<AbortController | null>(null);
 	const directory = useDirectory();
-	const { value: board } = useLoad(client.allTopics);
+	// The topic tree feeds in:/tag: suggestions; read it only once one is being typed (heavy on a big board).
+	const [wantTree, setWantTree] = useState(false);
+	const treeRequest = useMemo(
+		() => (wantTree ? client.allTopics : Atom.make(Effect.succeed(null))),
+		[client, wantTree],
+	);
+	const { value: board } = useLoad(treeRequest);
 	const [caret, setCaret] = useState(0);
 	const [active, setActive] = useState(0);
 	const [dismissed, setDismissed] = useState<string | null>(null);
@@ -88,6 +95,9 @@ export function Search({ path, onActive }: { readonly path: string; readonly onA
 	// The from:/in:/tag: operator being typed at the caret, and what it could become.
 	const operator = /(?:^|\s)(from|by|in|tag):(\S*)$/iu.exec(input.slice(0, caret));
 	const kind = operator?.[1]?.toLowerCase();
+	useEffect(() => {
+		if (kind === "in" || kind === "tag") setWantTree(true);
+	}, [kind]);
 	const partial = (operator?.[2] ?? "").replace(/^[@#]/u, "").toLowerCase();
 	const tags = useMemo(() => [...new Set((board?.messages ?? []).flatMap((message) => message.tags))].sort(), [board]);
 	const choices: ReadonlyArray<{ readonly value: string; readonly hint: string }> =
@@ -122,7 +132,13 @@ export function Search({ path, onActive }: { readonly path: string; readonly onA
 		setActive(0);
 	};
 
-	useEffect(() => setInput(fromUrl), [fromUrl]);
+	// Adopt ?q= when navigation brings one (the palette), not when this field wrote it.
+	const written = useRef(fromUrl);
+	useEffect(() => {
+		if (fromUrl === written.current) return;
+		written.current = fromUrl;
+		setInput(fromUrl);
+	}, [fromUrl]);
 	useEffect(() => {
 		const focus = (event: globalThis.KeyboardEvent) => {
 			if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey || typingInField(event.target)) return;
@@ -161,6 +177,7 @@ export function Search({ path, onActive }: { readonly path: string; readonly onA
 		const timer = window.setTimeout(() => {
 			const url = new URL(window.location.href);
 			url.searchParams.set("q", input.trim());
+			written.current = input.trim();
 			window.history.replaceState(window.history.state, "", url.href);
 			void Effect.runPromise(
 				client
@@ -203,6 +220,7 @@ export function Search({ path, onActive }: { readonly path: string; readonly onA
 		setInput("");
 		const url = new URL(window.location.href);
 		url.searchParams.delete("q");
+		written.current = "";
 		window.history.replaceState(window.history.state, "", url.href);
 		field.current?.focus();
 	};

@@ -2,6 +2,7 @@ import { BookOpen, ChevronsUpDown, LogOut, Menu, SearchIcon, UserRound, X } from
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { toast } from "sonner";
 import { useBoardClient } from "./board-client.tsx";
 import { cn } from "./cn.ts";
 import { paletteShortcut, useOpenPalette } from "./command-palette.tsx";
@@ -57,8 +58,13 @@ function SearchTrigger() {
 }
 
 const signOut = () => {
-	void fetch("/_boot/auth/logout", { method: "POST", credentials: "same-origin" }).finally(() =>
-		window.location.assign("/auth/login"),
+	void fetch("/_boot/auth/logout", { method: "POST", credentials: "same-origin" }).then(
+		(response) => {
+			// 401 means the session had already ended; anything else kept it, so stay and say so.
+			if (response.ok || response.status === 401) window.location.assign("/auth/login");
+			else toast.error("Could not sign out", { description: "Reload the page and try again." });
+		},
+		() => toast.error("Could not sign out", { description: "Check your connection and try again." }),
 	);
 };
 

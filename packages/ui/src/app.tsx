@@ -23,6 +23,7 @@ import { TopicSettings } from "./topic-controls.tsx";
 import { MessageHistory } from "./message-history.tsx";
 import { useLoad } from "./use-load.ts";
 import { Composer } from "./composer.tsx";
+import { LoadProblem, useAutoRetry } from "./load-problem.tsx";
 import { Link, useLocation, useScrollOnNavigate } from "./router.tsx";
 import { Bot, FileText, Hash, Home, Puzzle, RefreshCw, Settings2 } from "lucide-react";
 import { Button, buttonVariants } from "./ui/button.tsx";
@@ -166,7 +167,6 @@ function Board({
 		});
 	}, [client, path, showArchived, searching, browsingHistory, visible]);
 	const { value, error, loading, reload, update } = useLoad(request);
-	const { value: everyTopic } = useLoad(client.allTopics);
 	const root = value?.root;
 	const topic = value?.topic;
 	const onSent = (message: BoardMessage) => {
@@ -188,44 +188,55 @@ function Board({
 		requestAnimationFrame(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" }));
 	};
 	// A topic opens at its latest message, like any chat; a linked message or search keeps its own position.
+	// Wait for this route's own data (the previous route's stays visible while loading), and scroll after the
+	// router's own scroll-to-top, which runs in the parent's effect.
+	const fresh = topic !== undefined && path !== null && topic.path === path;
+	// What this route shows: its own data only, never the previous route's while the new one loads.
+	const view = fresh ? topic : undefined;
+	const retry = useAutoRetry(error, reload);
 	const landed = useRef<string | null>(null);
-	const messageCount = topic?.messages.length ?? 0;
-	useLayoutEffect(() => {
-		if (path === null || path === "" || hash !== "" || searching || messageCount === 0 || landed.current === pathname)
-			return;
+	const messageCount = fresh ? topic.messages.length : 0;
+	useEffect(() => {
+		if (!fresh || path === "" || hash !== "" || searching || messageCount === 0 || landed.current === pathname) return;
 		landed.current = pathname;
-		window.scrollTo(0, document.documentElement.scrollHeight);
-	}, [pathname, path, hash, searching, messageCount]);
+		const frame = requestAnimationFrame(() => {
+			window.scrollTo(0, document.documentElement.scrollHeight);
+			pinned.current = true;
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [fresh, pathname, path, hash, searching, messageCount]);
 	// Stay pinned to the bottom when new messages arrive while reading the latest.
-	const lastSeq = topic?.messages.at(-1)?.seq ?? 0;
+	const lastSeq = fresh ? (topic.messages.at(-1)?.seq ?? 0) : 0;
 	const pinned = useRef(true);
 	useEffect(() => {
 		const track = () => {
 			pinned.current = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 160;
 		};
-		track();
 		window.addEventListener("scroll", track, { passive: true });
 		return () => window.removeEventListener("scroll", track);
 	}, []);
 	useLayoutEffect(() => {
-		if (pinned.current && path !== "" && !searching && hash === "")
+		if (lastSeq !== 0 && pinned.current && landed.current === pathname && path !== "" && !searching && hash === "")
 			window.scrollTo(0, document.documentElement.scrollHeight);
-	}, [lastSeq, path, searching, hash]);
+	}, [lastSeq, pathname, path, searching, hash]);
 
 	const authRequired = error?.status === 401;
 	const segments = path?.split("/") ?? [];
 	const description = path
-		? typeof topic?.meta?.description === "string"
-			? topic.meta.description
+		? typeof view?.meta.description === "string"
+			? view.meta.description
 			: undefined
 		: undefined;
-	const status = path && typeof topic?.meta?.status === "string" ? topic.meta.status : undefined;
+	const status = path && typeof view?.meta.status === "string" ? view.meta.status : undefined;
 	// Alphabetical, so the sidebar never reshuffles under the pointer when a message arrives.
 	const sidebarTopics = useMemo(
 		() => [...(root?.subtopics ?? [])].sort((a, b) => a.name.localeCompare(b.name)),
 		[root],
 	);
-	const topicPaths = useMemo(() => (everyTopic?.subtopics ?? []).map((item) => item.path), [everyTopic]);
+	const topicPaths = useMemo(
+		() => [...new Set([...(root?.subtopics ?? []).map((item) => item.path), ...(path ? [path] : [])])],
+		[root, path],
+	);
 	return (
 		<BoardLayout
 			navigation={<TopicNav path={path} topics={sidebarTopics} />}
@@ -329,42 +340,35 @@ function Board({
 						</EmptyState>
 					) : (
 						<>
-							{error && (
+							{authRequired ? (
 								<Alert className="mb-5">
-									<h2>{authRequired ? "Sign in to your board" : "Could not refresh the board"}</h2>
-									<p>{authRequired ? "Use your passkey to read and write messages." : error.message}</p>
-									{authRequired ? (
-										<>
-											<a
-												className={cn(buttonVariants(), "mt-2")}
-												href="/auth/login"
-												target={topic ? "_blank" : undefined}
-												rel="noreferrer"
-											>
-												Sign in with a passkey
-											</a>
-											<p className="mt-3">
-												<a href="/onboarding">First visit? Set up this board</a>
-											</p>
-										</>
-									) : (
-										<Button variant="outline" size="sm" onClick={reload}>
-											Try again
-										</Button>
-									)}
+									<h2>Sign in to your board</h2>
+									<p>Use your passkey to read and write messages.</p>
+									<a className={cn(buttonVariants(), "mt-2")} href={`/auth/login?next=${encodeURIComponent(pathname)}`}>
+										Sign in with a passkey
+									</a>
+									<p className="mt-3">
+										<a href="/onboarding">First visit? Set up this board</a>
+									</p>
 								</Alert>
-							)}
-							{loading && !topic && !error && <MessagesSkeleton />}
-							{topic && !authRequired && (
+							) : error && error.status === 404 && view === undefined ? (
+								<EmptyState title="This view has no messages yet">
+									Write the first message below and the view starts with it.
+								</EmptyState>
+							) : error ? (
+								<LoadProblem error={error} stale={view !== undefined} retrying={retry.waiting} onRetry={reload} />
+							) : null}
+							{view === undefined && !error && <MessagesSkeleton />}
+							{view && !authRequired && (
 								<>
 									{path !== "" && (
 										<TopicSettings
 											open={settingsOpen}
 											onOpenChange={setSettingsOpen}
 											path={path}
-											meta={topic.meta}
-											archived={topic.archived_at !== null}
-											parentArchived={topic.archived_root !== null && topic.archived_root !== path}
+											meta={view.meta}
+											archived={view.archived_at !== null}
+											parentArchived={view.archived_root !== null && view.archived_root !== path}
 											onSaved={(saved) => {
 												update(
 													(previous) =>
@@ -382,24 +386,24 @@ function Board({
 											}}
 										/>
 									)}
-									{topic.archived_root !== null && (
+									{view.archived_root !== null && (
 										<Alert className="mb-5">
-											This topic is read-only because{" "}
-											<Link href={topicHref(topic.archived_root)}>{topic.archived_root}</Link> is archived.
+											This view is read-only because{" "}
+											<Link href={topicHref(view.archived_root)}>{view.archived_root}</Link> is archived.
 										</Alert>
 									)}
-									{topic.index !== null && (
+									{view.index !== null && (
 										<section
 											className="mb-6 rounded-2xl bg-card px-5 py-5 shadow-raised sm:px-6"
 											aria-label="Topic README"
 										>
-											<Markdown body={topic.index} base={`/p/${path ? path + "/" : ""}index.md`} />
+											<Markdown body={view.index} base={`/p/${path ? path + "/" : ""}index.md`} />
 										</section>
 									)}
-									{topic.subtopics.length > 0 && (
+									{view.subtopics.length > 0 && (
 										<section className="mb-6" aria-label={path ? "Subtopics" : "Topics"}>
-											<div className="grid gap-2 sm:grid-cols-2 min-[1900px]:grid-cols-3">
-												{topic.subtopics.map((item) => (
+											<div className="grid grid-cols-1 gap-2 sm:grid-cols-2 min-[1900px]:grid-cols-3">
+												{view.subtopics.map((item) => (
 													<Link
 														key={item.path}
 														href={topicHref(item.path)}
@@ -432,17 +436,17 @@ function Board({
 											</div>
 										</section>
 									)}
-									{topic.pages.length > 0 && (
+									{view.pages.length > 0 && (
 										<section className="mb-6 flex flex-wrap items-center gap-1.5" aria-label="Pages">
 											<span className="mr-1 text-[12.5px] font-medium text-slate">Pages</span>
-											{topic.pages.map((file) => (
+											{view.pages.map((file) => (
 												<a
 													key={file}
 													href={`/p/${[...path.split("/").filter(Boolean), file].map(encodeURIComponent).join("/")}`}
 													className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-card px-2.5 text-[13.5px] text-ink-soft shadow-raised transition-colors hover:text-ink [&_svg]:size-3.5 [&_svg]:text-slate"
 												>
 													<FileText />
-													{file === "index.md" && topic.index !== null ? "README" : file}
+													{file === "index.md" && view.index !== null ? "README" : file}
 												</a>
 											))}
 										</section>
@@ -453,9 +457,9 @@ function Board({
 									)}
 									{!searching && !browsingHistory && (
 										<>
-											<ReferencedMessage visible={topic.messages} />
+											<ReferencedMessage visible={view.messages} />
 											<section className="flex-1 pb-2" aria-label="Messages">
-												{topic.messages.length >= 100 && (
+												{view.messages.length >= 100 && (
 													<div className="flex items-center justify-between gap-4 pb-3 text-[13px] text-slate">
 														<p>Showing the latest 100 messages.</p>
 														{path !== "" && (
@@ -465,14 +469,14 @@ function Board({
 														)}
 													</div>
 												)}
-												{topic.messages.length === 0 ? (
+												{view.messages.length === 0 ? (
 													<EmptyState title="No messages yet">
 														Say hello below, or invite an agent from the <a href="/init">agent guide</a>.
 													</EmptyState>
 												) : (
 													<>
 														<h2 className="sr-only">{path ? "Messages" : "Recent messages"}</h2>
-														<MessageList messages={topic.messages} currentTopic={path || undefined} />
+														<MessageList messages={view.messages} currentTopic={path || undefined} />
 													</>
 												)}
 											</section>
@@ -480,7 +484,7 @@ function Board({
 									)}
 								</>
 							)}
-							{topic && topic.archived_root === null && (
+							{((view && view.archived_root === null) || error?.status === 404) && (
 								<Composer
 									path={path}
 									topics={topicPaths}

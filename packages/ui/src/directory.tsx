@@ -2,7 +2,6 @@ import { Effect, Schema } from "effect";
 import { HttpClientRequest } from "effect/unstable/http";
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { accountRequest, getFamilies } from "./account-api.ts";
-import { getActivity } from "./agents.tsx";
 import { useBoardClient } from "./board-client.tsx";
 import type { Directory } from "./mentions.ts";
 import { useLoad } from "./use-load.ts";
@@ -28,8 +27,9 @@ const getCustomMentions = () =>
 const DirectoryContext = createContext<Directory | null>(null);
 
 /**
- * Loads who can be mentioned once per board view: token families give names and labels, post activity adds
- * MCP clients, and an optional extension route adds custom names. Any source may be missing; until all settle the
+ * Loads who can be mentioned once per board view: token families (agents and MCP
+ * connections alike) give names and labels, and an optional extension route adds custom names. Post activity is
+ * left out: on a big board it is a heavy aggregate, and this loads on every view. Any source may be missing; until all settle the
  * directory is null and mentions render plainly.
  */
 export function DirectoryProvider({ children }: { readonly children: ReactNode }) {
@@ -41,22 +41,19 @@ export function DirectoryProvider({ children }: { readonly children: ReactNode }
 					Effect.map((list) => list.items),
 					Effect.orElseSucceed(() => []),
 				),
-				activity: getActivity().pipe(
-					Effect.map((list) => list.items),
-					Effect.orElseSucceed(() => []),
-				),
 				custom: getCustomMentions(),
 				me: client.read(client.me).pipe(Effect.option),
 			},
 			{ concurrency: "unbounded" },
 		).pipe(
-			Effect.map(({ families, activity, custom, me }): Directory => {
+			Effect.map(({ families, custom, me }): Directory => {
 				const self = me._tag === "Some" && me.value.kind === "human" ? me.value.agent : undefined;
 				const live = families.filter((family) => !family.revoked);
-				const names = [...new Set([...live.map((family) => family.agent), ...activity.map((item) => item.agent)])]
-					.filter((name) => !hidden.has(name) && name !== self)
+				const names = [...new Set([...live.map((family) => family.agent), ...(self === undefined ? [] : [self])])]
+					.filter((name) => !hidden.has(name))
 					.sort((a, b) => a.localeCompare(b));
 				return {
+					self: self ?? null,
 					custom: custom.filter((item) => item.mention !== "@here"),
 					agents: names.map((name) => ({
 						name,

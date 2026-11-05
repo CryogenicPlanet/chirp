@@ -59,9 +59,9 @@ const makeClient = (registry: AtomRegistry.AtomRegistry) => {
 						query: { archived: archived ? "1" : "0", mark: mark ? "1" : "0" },
 						reactivityKeys: ["board"],
 					}),
-		/** Every topic, for the command palette and topic picker. Never marks reads. */
+		/** Topics three levels deep, for the palette and pickers; loaded on demand. Never marks reads. */
 		allTopics: Client.query("topics", "root", {
-			query: { depth: 8, mark: "0" },
+			query: { depth: 3, mark: "0" },
 			reactivityKeys: ["board"],
 		}),
 		messages: (
@@ -96,11 +96,26 @@ const makeClient = (registry: AtomRegistry.AtomRegistry) => {
 	};
 };
 const ClientContext = createContext<ReturnType<typeof makeClient> | null>(null);
-export function BoardClientProvider({ children }: { readonly children: ReactNode }) {
+function LiveEvents({ client }: { readonly client: ReturnType<typeof makeClient> }) {
+	useAtomMount(client.live);
+	return null;
+}
+/** `live` follows the board's event stream; pages that only borrow the palette leave it off. */
+export function BoardClientProvider({
+	children,
+	live = true,
+}: {
+	readonly children: ReactNode;
+	readonly live?: boolean;
+}) {
 	const registry = useContext(RegistryContext);
 	const [client] = useState(() => makeClient(registry));
-	useAtomMount(client.live);
-	return <ClientContext.Provider value={client}>{children}</ClientContext.Provider>;
+	return (
+		<ClientContext.Provider value={client}>
+			{live && <LiveEvents client={client} />}
+			{children}
+		</ClientContext.Provider>
+	);
 }
 export function useBoardClient() {
 	const client = useContext(ClientContext);

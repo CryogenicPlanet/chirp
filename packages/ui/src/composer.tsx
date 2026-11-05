@@ -14,6 +14,7 @@ import {
 } from "react";
 import { validTopic, type BoardMessage, type PendingMessage } from "./board-api.ts";
 import { useBoardClient } from "./board-client.tsx";
+import { useLoad } from "./use-load.ts";
 import { cn } from "./cn.ts";
 import type { ComposerBridge } from "./composer-bridge.tsx";
 import { useDirectory } from "./directory.tsx";
@@ -27,6 +28,25 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover.tsx";
 const isMac = /Mac|iPhone|iPad/.test(navigator.userAgent);
 // The partial @mention immediately before the caret, using the server's boundary rule.
 const partialMention = /(?:^|[^\p{L}\p{N}\p{M}@/:])@([a-z0-9._/-]*)$/u;
+
+/** Nested topics, read only while the picker is open: the whole tree is a heavy query on a big board. */
+function NestedTopics({
+	known,
+	onPick,
+}: {
+	readonly known: ReadonlyArray<string>;
+	readonly onPick: (topic: string) => void;
+}) {
+	const client = useBoardClient();
+	const { value } = useLoad(client.allTopics);
+	const nested = (value?.subtopics ?? []).map((item) => item.path).filter((path) => !known.includes(path));
+	return nested.map((item) => (
+		<CommandItem key={item} value={item} onSelect={() => onPick(item)}>
+			<Hash />
+			<span className="truncate">{item}</span>
+		</CommandItem>
+	));
+}
 
 function TopicPicker({
 	topic,
@@ -100,6 +120,13 @@ function TopicPicker({
 									<span className="truncate">{item}</span>
 								</CommandItem>
 							))}
+							<NestedTopics
+								known={topics}
+								onPick={(item) => {
+									onChange(item);
+									setOpen(false);
+								}}
+							/>
 						</CommandGroup>
 					</CommandList>
 				</Command>

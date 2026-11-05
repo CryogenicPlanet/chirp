@@ -26,9 +26,11 @@ export const mentionsIn = (body: string): ReadonlyArray<string> => [
 export interface Directory {
 	readonly agents: ReadonlyArray<{ readonly name: string; readonly labels: ReadonlyArray<string> }>;
 	readonly custom: ReadonlyArray<{ readonly mention: string; readonly description: string }>;
+	/** The signed-in viewer: reachable, but not offered when they write. */
+	readonly self: string | null;
 }
 
-export const emptyDirectory: Directory = { agents: [], custom: [] };
+export const emptyDirectory: Directory = { agents: [], custom: [], self: null };
 
 export interface MentionOption {
 	readonly mention: string;
@@ -40,16 +42,18 @@ export interface MentionOption {
 export const mentionOptions = (directory: Directory): ReadonlyArray<MentionOption> => [
 	{ mention: "@here", name: "here", hint: "Every listening agent" },
 	...directory.custom.map((item) => ({ mention: item.mention, name: "here", hint: item.description || "Custom" })),
-	...directory.agents.flatMap((agent) => [
-		{
-			mention: `@${agent.name}`,
-			name: agent.name,
-			hint: agent.labels.length > 1 ? `All ${agent.labels.length} instances` : "Agent",
-		},
-		...(agent.labels.length > 1
-			? agent.labels.map((label) => ({ mention: `@${agent.name}/${label}`, name: agent.name, hint: "One instance" }))
-			: []),
-	]),
+	...directory.agents
+		.filter((agent) => agent.name !== directory.self)
+		.flatMap((agent) => [
+			{
+				mention: `@${agent.name}`,
+				name: agent.name,
+				hint: agent.labels.length > 1 ? `All ${agent.labels.length} instances` : "Agent",
+			},
+			...(agent.labels.length > 1
+				? agent.labels.map((label) => ({ mention: `@${agent.name}/${label}`, name: agent.name, hint: "One instance" }))
+				: []),
+		]),
 ];
 
 /** A mention is known when it names @here, a custom name, a known agent, or one of its labels. */

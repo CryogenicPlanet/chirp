@@ -16,12 +16,15 @@ export function CommandDialog({
 	label,
 	children,
 	shouldFilter,
+	container,
 }: {
 	readonly open: boolean;
 	readonly onOpenChange: (open: boolean) => void;
 	readonly label: string;
 	readonly children: ReactNode;
 	readonly shouldFilter?: boolean;
+	/** Where the dialog portals to; a shadow root when embedded in a page. */
+	readonly container?: HTMLElement;
 }) {
 	return (
 		<CommandPrimitive.Dialog
@@ -30,6 +33,7 @@ export function CommandDialog({
 			label={label}
 			loop
 			{...(shouldFilter === undefined ? {} : { shouldFilter })}
+			{...(container === undefined ? {} : { container })}
 			overlayClassName="fixed inset-0 z-50 bg-ink/25 backdrop-blur-[2px] data-[state=open]:animate-[fade-in_120ms_ease-out]"
 			contentClassName="fixed top-[12vh] left-1/2 z-50 flex max-h-[min(560px,76vh)] w-[min(640px,calc(100vw-24px))] -translate-x-1/2 flex-col overflow-hidden rounded-2xl bg-card shadow-float data-[state=open]:animate-[pop-in_140ms_cubic-bezier(0.32,0.72,0,1)]"
 		>
