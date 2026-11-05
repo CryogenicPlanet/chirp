@@ -311,8 +311,14 @@ it("redirects unauthenticated page navigations to login and forwards to open set
 	expect(api.status).toBe(401);
 	expect((await api.json()).error.code).toBe("session_invalid");
 	await app.setup();
+	const session = await app.login();
 	const loginAfter = await fetch(`${app.url}/auth/login`, { redirect: "manual" });
 	expect(loginAfter.status).toBe(200);
+	// Requested without the session cookie, as a link from another site is, the page asks boot whether the browser
+	// is signed in. Requested with it, the session was already refused, so the page must not send the human on again.
+	expect(await loginAfter.text()).toContain('data-mode="login" data-check-session>');
+	const loginWithCookie = await fetch(`${app.url}/auth/login`, { headers: { cookie: session.cookie } });
+	expect(await loginWithCookie.text()).not.toContain("data-check-session");
 	const stillRedirects = await fetch(`${app.url}/`, { headers: { accept: "text/html" }, redirect: "manual" });
 	expect(stillRedirects.status).toBe(302);
 	expect(stillRedirects.headers.get("location")).toBe("/auth/login?next=%2F");

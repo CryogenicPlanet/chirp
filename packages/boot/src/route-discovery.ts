@@ -173,7 +173,7 @@ const routes = [
 		"get",
 		["/auth/login"],
 		"public",
-		"Human passkey sign-in page. ?provider=github or google acts only when the page offers that provider, because an identity from it is linked: it starts that provider's sign-in, or goes straight to ?next= when the browser is already signed in.",
+		"Human passkey sign-in page. Requested without the session cookie, as a link from another site is, it asks /_boot/auth/state and goes straight to ?next= when the browser already holds a session and ?next= is a board page, not an API, boot, sign-in, approval or setup route. ?provider=github or google acts only when the page offers that provider, because an identity from it is linked: it starts that provider's sign-in, or, under the same board-page rule, goes straight to ?next= when the browser is already signed in.",
 	],
 	[
 		"post",

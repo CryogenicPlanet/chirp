@@ -212,9 +212,9 @@ it("fills in a setup code from the fragment, clears it, and shows offered identi
 });
 
 it("asks first setup what agents should call the human, and sends the name with the code", async () => {
-	expect(authPage("setup", [], true)).toContain('<input id="name" name="name" required');
+	expect(authPage("setup", [], { askName: true })).toContain('<input id="name" name="name" required');
 	expect(authPage("setup")).not.toContain('id="name"');
-	expect(authPage("code", [], true)).not.toContain('id="name"');
+	expect(authPage("code", [], { askName: true })).not.toContain('id="name"');
 	const named = await setupFromFragment({}, " alice ");
 	expect(named.requests[0]?.body).toEqual({ code: "0123456789ABCDEF", name: "alice" });
 	expect(named.assigned).toBe("/");
@@ -319,7 +319,8 @@ it("starts a rendered provider's sign-in from ?provider=, unless the browser is 
 		const status = { textContent: "" };
 		const requests: string[] = [];
 		const replaced: string[] = [];
-		let assigned = "";
+		let assigned = "",
+			continued = "";
 		runInNewContext(authClient, {
 			document: {
 				querySelectorAll: (selector: string) =>
@@ -342,6 +343,9 @@ it("starts a rendered provider's sign-in from ?provider=, unless the browser is 
 					hash: "",
 					assign: (value: string) => {
 						assigned = value;
+					},
+					replace: (value: string) => {
+						continued = value;
 					},
 				},
 			},
@@ -366,20 +370,29 @@ it("starts a rendered provider's sign-in from ?provider=, unless the browser is 
 			},
 		});
 		await new Promise((resolve) => setTimeout(resolve, 20));
-		return { assigned, requests, replaced };
+		return { assigned, continued, requests, replaced };
 	};
 	expect(await run("?provider=github&next=/t/design", false)).toEqual({
 		assigned: "https://auth.chirp.wiki/authorize?state=x",
+		continued: "",
 		requests: ["/_boot/auth/state", "/_boot/auth/oidc/start"],
 		replaced: ["/auth/login?next=%2Ft%2Fdesign"],
 	});
 	// Already signed in: straight to the requested page, by the same same-origin rule as sign-in.
 	expect(await run("?provider=github&next=/t/design", true)).toEqual({
-		assigned: "/t/design",
+		assigned: "",
+		continued: "/t/design",
 		requests: ["/_boot/auth/state"],
 		replaced: ["/auth/login?next=%2Ft%2Fdesign"],
 	});
-	expect((await run("?provider=github&next=//evil.example", true)).assigned).toBe("/");
+	expect((await run("?provider=github&next=//evil.example", true)).continued).toBe("/");
+	// Signed in already, but next is not a board page: nothing goes on, and no provider sign-in starts either.
+	expect(await run("?provider=github&next=/api/topics/security", true)).toEqual({
+		assigned: "",
+		continued: "",
+		requests: ["/_boot/auth/state"],
+		replaced: ["/auth/login?next=%2Fapi%2Ftopics%2Fsecurity"],
+	});
 	// Only a provider whose button the page rendered starts, and nothing starts when boot cannot be asked.
 	for (const [search, rendered] of [
 		["?provider=google", ["github"]],
@@ -387,16 +400,201 @@ it("starts a rendered provider's sign-in from ?provider=, unless the browser is 
 		["?provider=__proto__", ["github"]],
 		["?next=/", ["github"]],
 	] as const)
-		expect(await run(search, false, [...rendered])).toEqual({ assigned: "", requests: [], replaced: [] });
-	expect((await run("?provider=github", "unreachable")).assigned).toBe("");
-	expect((await run("?provider=github", "unreachable")).requests).toEqual(["/_boot/auth/state"]);
+		expect(await run(search, false, [...rendered])).toEqual({
+			assigned: "",
+			continued: "",
+			requests: [],
+			replaced: [],
+		});
+	expect(await run("?provider=github", "unreachable")).toEqual({
+		assigned: "",
+		continued: "",
+		requests: ["/_boot/auth/state"],
+		replaced: ["/auth/login"],
+	});
 	expect((await run("?provider=github", "failing")).requests).toEqual(["/_boot/auth/state"]);
 	// A session boot no longer accepts (for example one ended by an unlink in another browser) counts as signed out.
 	expect(await run("?provider=github&next=/t/design", "revoked")).toEqual({
 		assigned: "https://auth.chirp.wiki/authorize?state=x",
+		continued: "",
 		requests: ["/_boot/auth/state", "/_boot/auth/oidc/start"],
 		replaced: ["/auth/login?next=%2Ft%2Fdesign"],
 	});
+});
+
+it("sends a signed-in browser that arrived without its session cookie on to the requested page", async () => {
+	expect(authPage("login", [], { checkSession: true })).toContain(
+		'<form id="auth" data-mode="login" data-check-session>',
+	);
+	expect(authPage("login")).not.toContain("data-check-session");
+	expect(authPage("setup", [], { checkSession: true })).not.toContain("data-check-session");
+	expect(authPage("code", [], { checkSession: true })).not.toContain("data-check-session");
+	const run = async (
+		search: string,
+		state: boolean | "unreachable" | "revoked" | "failing",
+		{
+			checkSession = true,
+			hash = "",
+			storage,
+		}: { readonly checkSession?: boolean; readonly hash?: string; readonly storage?: Map<string, string> } = {},
+	) => {
+		const status = { textContent: "" },
+			button = { disabled: false };
+		let submit: (() => Promise<void>) | undefined;
+		const requests: string[] = [];
+		let assigned = "",
+			continued = "";
+		class Assertion {
+			clientDataJSON = new Uint8Array([1]).buffer;
+			authenticatorData = new Uint8Array([2]).buffer;
+			signature = new Uint8Array([3]).buffer;
+		}
+		const credential = {
+			id: "credential",
+			rawId: new Uint8Array([4]).buffer,
+			type: "public-key",
+			getClientExtensionResults: () => ({}),
+			response: new Assertion(),
+		};
+		runInNewContext(authClient, {
+			document: {
+				querySelectorAll: () => [],
+				getElementById: (id: string) =>
+					id === "status"
+						? status
+						: id === "auth"
+							? {
+									dataset: checkSession ? { mode: "login", checkSession: "" } : { mode: "login" },
+									querySelector: () => button,
+									addEventListener: (
+										_name: string,
+										callback: (event: { preventDefault: () => void }) => Promise<void>,
+									) => {
+										submit = () => callback({ preventDefault: () => {} });
+									},
+								}
+							: null,
+			},
+			window: {
+				isSecureContext: true,
+				location: {
+					origin: "https://comms.test",
+					pathname: "/auth/login",
+					search,
+					hash,
+					assign: (value: string) => {
+						assigned = value;
+					},
+					replace: (value: string) => {
+						continued = value;
+					},
+				},
+			},
+			// Without storage, as in a browser that refuses it, the page still works.
+			...(storage
+				? {
+						sessionStorage: {
+							getItem: (key: string) => storage.get(key) ?? null,
+							setItem: (key: string, value: string) => storage.set(key, value),
+							removeItem: (key: string) => storage.delete(key),
+						},
+					}
+				: {}),
+			navigator: { credentials: { get: async () => credential } },
+			AuthenticatorAttestationResponse: class {},
+			URL,
+			URLSearchParams,
+			atob,
+			btoa,
+			Uint8Array,
+			fetch: async (path: string, init: RequestInit) => {
+				requests.push(path);
+				expect(init.redirect).toBe("manual");
+				if (path === "/_boot/auth/state") {
+					if (state === "unreachable") throw new Error("offline");
+					if (state === "revoked") return Response.json({ error: { code: "session_invalid" } }, { status: 401 });
+					if (state === "failing") return Response.json({ error: { code: "boot_unavailable" } }, { status: 503 });
+					return Response.json({ setup_required: false, authenticated: state });
+				}
+				return Response.json(
+					{ id: "challenge", options: { challenge: "YWJj" } },
+					{ headers: { [requestIdHeader]: "1234567890abcdef1234567890abcdef" } },
+				);
+			},
+		});
+		// The check is visible while it runs, so the sign-in form does not look like the answer.
+		const shown = status.textContent;
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		return {
+			shown,
+			status: status.textContent,
+			requests: [...requests],
+			continued,
+			signIn: async () => {
+				if (!submit) throw new Error("Missing submit handler");
+				await submit();
+				return assigned;
+			},
+		};
+	};
+	// Signed in: replaced, so going back does not return to the sign-in page, and next keeps the same-origin rule.
+	const signedIn = await run("?next=/t/design", true);
+	expect(signedIn).toMatchObject({
+		shown: "Checking your session…",
+		requests: ["/_boot/auth/state"],
+		continued: "/t/design",
+	});
+	expect((await run("?next=//evil.example", true)).continued).toBe("/");
+	expect((await run("?next=/.//evil.example", true)).continued).toBe("/");
+	expect((await run("", true)).continued).toBe("/");
+	// Signed out, revoked, or boot unreachable: the page stays, the check line clears, and the passkey still signs in.
+	for (const state of [false, "revoked", "unreachable", "failing"] as const) {
+		const stays = await run("?next=/t/design", state);
+		expect(stays).toMatchObject({ status: "", requests: ["/_boot/auth/state"], continued: "" });
+		expect(await stays.signIn()).toBe("/t/design");
+	}
+	// A page boot rendered with the session cookie asks nothing: that session was already refused.
+	expect(await run("?next=/t/design", true, { checkSession: false })).toMatchObject({
+		shown: "",
+		requests: [],
+		continued: "",
+	});
+	// The fragment the browser kept across boot's redirect survives both ways in, unless next names its own.
+	expect((await run("?next=/t/design", true, { hash: "#m-42" })).continued).toBe("/t/design#m-42");
+	expect((await run("?next=%2Ft%2Fdesign%23m-1", true, { hash: "#m-42" })).continued).toBe("/t/design#m-1");
+	expect(await (await run("?next=/t/design", false, { hash: "#m-42" })).signIn()).toBe("/t/design#m-42");
+	// Another site started this navigation, so it goes on only to a board page. Anything else, however spelled,
+	// asks nothing and needs a sign-in as before.
+	for (const next of [
+		"/api/topics/security",
+		"/API/topics",
+		"/%61pi/topics",
+		"/api",
+		"/_boot/status",
+		"/_boot",
+		"/auth/login",
+		"/approve/abc",
+		"/setup",
+		"/onboarding",
+		"/mcp",
+		"/.well-known/agent.json",
+		"/%E0%A4%A",
+	]) {
+		const refused = await run(`?next=${encodeURIComponent(next)}`, true);
+		expect(refused, next).toMatchObject({ shown: "", requests: [], continued: "" });
+	}
+	// Board pages that merely look like those routes still go on.
+	expect((await run("?next=/t/api", true)).continued).toBe("/t/api");
+	expect((await run("?next=/apis", true)).continued).toBe("/apis");
+	// A second continue to the same page within ten seconds is refused once, then allowed again.
+	const storage = new Map<string, string>();
+	expect((await run("?next=/t/design", true, { storage })).continued).toBe("/t/design");
+	expect(await run("?next=/t/design", true, { storage })).toMatchObject({ requests: [], continued: "" });
+	expect((await run("?next=/t/design", true, { storage })).continued).toBe("/t/design");
+	// Only for the same page, and only while recent.
+	expect((await run("?next=/t/other", true, { storage })).continued).toBe("/t/other");
+	storage.set("chirp.auth.continued", JSON.stringify({ next: "/t/design", at: Date.now() - 11_000 }));
+	expect((await run("?next=/t/design", true, { storage })).continued).toBe("/t/design");
 });
 
 it("offers only linked providers, and starts their sign-in with JSON before navigating itself", async () => {
