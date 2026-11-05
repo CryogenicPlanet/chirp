@@ -3,7 +3,7 @@ import { TopicSummary } from "@comms/protocol/topics";
 import { Effect, FileSystem, Path, Schema, type PlatformError } from "effect";
 import type { SqlClient } from "effect/unstable/sql/SqlClient";
 import { StoredMessage, validTopic } from "../../src/ext/core/messages.ts";
-import type { PageRejected, Pages } from "../../src/ext/core/pages.ts";
+import { PageRejected, type Pages } from "../../src/ext/core/pages.ts";
 import { publishedMessages } from "../../src/ext/core/published-messages.ts";
 import { publishedTopics } from "../../src/ext/core/published-topics.ts";
 
@@ -217,6 +217,8 @@ export const seedBoard = (sql: SqlClient, shape: BoardShape, pagesDirectory: str
 				"pages-only/nested",
 				"pages-only/nested/deeper",
 				"r00/page-folder",
+				"zz/removed/notes",
+				"zz/shelved/notes",
 				"Not-A-Topic",
 			];
 			for (const directory of directories) {
@@ -227,11 +229,73 @@ export const seedBoard = (sql: SqlClient, shape: BoardShape, pagesDirectory: str
 			}
 			yield* fs.writeFileString(path.join(pagesDirectory, "index.md"), "# Board");
 			yield* fs.writeFileString(path.join(pagesDirectory, "r00", "index.md"), "# r00");
+			// Symlinks are never pages: one aliases a folder inside the root, others escape it. The caller owns
+			// the pages directory's parent, which holds the outside target.
+			const outside = path.join(path.dirname(pagesDirectory), "outside-pages");
+			yield* fs.makeDirectory(path.join(outside, "nested"), { recursive: true });
+			yield* fs.writeFileString(path.join(outside, "secret.md"), "# outside");
+			yield* fs.makeDirectory(path.join(pagesDirectory, "r00", "linked"), { recursive: true });
+			yield* fs.symlink(path.join(pagesDirectory, "pages-only"), path.join(pagesDirectory, "r00", "alias"));
+			yield* fs.symlink(outside, path.join(pagesDirectory, "r00", "linked", "escape"));
+			yield* fs.symlink(outside, path.join(pagesDirectory, "escape"));
+			yield* fs.symlink(path.join(outside, "secret.md"), path.join(pagesDirectory, "r00", "secret.md"));
 		}
 		return { ceiling, paths };
 	});
 
 const StoredTopic = Schema.Struct({ ...TopicSummary.fields, meta: Schema.fromJsonString(Schema.JsonObject) });
+
+/** The page walk as it was: every entry takes the public full-path check, ancestors and visibility included. */
+export const legacyPageTopic = (pages: Pages["Service"], path: string, depth: number) =>
+	Effect.gen(function* () {
+		const fs = yield* FileSystem.FileSystem;
+		const entries = (name: string) =>
+			Effect.gen(function* () {
+				const target = yield* pages.resolve(name);
+				if (target.type !== "Directory") return yield* Effect.fail(new PageRejected({ code: "page_not_found" }));
+				const result: Array<{ readonly name: string; readonly directory: boolean }> = [];
+				for (const child of (yield* fs.readDirectory(target.absolute)).sort()) {
+					const entry = yield* pages
+						.resolve(name ? `${name}/${child}` : child)
+						.pipe(
+							Effect.catchTag("PageRejected", (error) =>
+								error.code === "pages_unavailable" ? Effect.fail(error) : Effect.succeed(null),
+							),
+						);
+					if (entry) result.push({ name: child, directory: entry.type === "Directory" });
+				}
+				return result;
+			});
+		const first = yield* entries(path).pipe(
+			Effect.catchTag("PageRejected", (error) =>
+				error.code === "page_not_found" || error.code === "pages_move_pending"
+					? Effect.succeed(null)
+					: Effect.fail(error),
+			),
+		);
+		const directories: string[] = [];
+		const visit = (
+			base: string,
+			children: NonNullable<typeof first>,
+			remaining: number,
+		): Effect.Effect<void, PageRejected | PlatformError.PlatformError> =>
+			Effect.gen(function* () {
+				for (const child of children) {
+					const childName = base ? `${base}/${child.name}` : child.name;
+					if (!child.directory || !validTopic(childName)) continue;
+					directories.push(childName);
+					if (remaining > 1) yield* visit(childName, yield* entries(childName), remaining - 1);
+				}
+			});
+		if (first) yield* visit(path, first, depth);
+		const pageFiles = first ? first.filter((entry) => !entry.directory).map((entry) => entry.name) : [];
+		return {
+			exists: first !== null,
+			index: pageFiles.includes("index.md") ? yield* pages.read(path ? `${path}/index.md` : "index.md") : null,
+			pages: pageFiles,
+			directories,
+		};
+	});
 
 /** The topic read as it was before rollup aggregation: the reference these tests compare against. */
 export const legacyDetail = (
@@ -244,37 +308,7 @@ export const legacyDetail = (
 	archived = false,
 ) =>
 	Effect.gen(function* () {
-		const first = yield* pages
-			.entries(path)
-			.pipe(
-				Effect.catchTag("PageRejected", (error) =>
-					error.code === "page_not_found" || error.code === "pages_move_pending"
-						? Effect.succeed(null)
-						: Effect.fail(error),
-				),
-			);
-		const directories: string[] = [];
-		const visit = (
-			base: string,
-			children: NonNullable<typeof first>,
-			remaining: number,
-		): Effect.Effect<void, PageRejected | PlatformError.PlatformError> =>
-			Effect.gen(function* () {
-				for (const child of children) {
-					const childName = base ? `${base}/${child.name}` : child.name;
-					if (!child.directory || !validTopic(childName)) continue;
-					directories.push(childName);
-					if (remaining > 1) yield* visit(childName, yield* pages.entries(childName), remaining - 1);
-				}
-			});
-		if (first) yield* visit(path, first, depth);
-		const pageFiles = first ? first.filter((entry) => !entry.directory).map((entry) => entry.name) : [];
-		const page = {
-			exists: first !== null,
-			index: pageFiles.includes("index.md") ? yield* pages.read(path ? `${path}/index.md` : "index.md") : null,
-			pages: pageFiles,
-			directories,
-		};
+		const page = yield* legacyPageTopic(pages, path, depth);
 		const rows =
 			yield* sql`WITH visible_topics AS (${publishedTopics(sql, ceiling)}), visible_messages AS (${publishedMessages(sql, ceiling)}) SELECT t.path,t.name,t.meta,t.archived_at,
    COALESCE((SELECT MAX(m.seq) FROM visible_messages m WHERE m.seq<=${ceiling} AND (m.topic=t.path OR ${isDescendant(sql, sql("m.topic"), sql("t.path"))})),0) AS last_seq,

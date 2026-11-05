@@ -138,9 +138,11 @@ const make = (directory: string) =>
 				if (target.type !== "File") return yield* new PageRejected({ code: "page_not_found" });
 				return yield* fs.readFileString(target.absolute);
 			});
-		const resolve = locate(visible);
-		const entries = list(resolve);
-		const read = load(resolve);
+		const located = locate(visible);
+		// The canonical-parent shortcut stays internal to listings; callers always get the full-path check.
+		const resolve = (name: string) => located(name);
+		const entries = list(located);
+		const read = load(located);
 		const topic = Effect.fn("Pages.topic")(function* (name: string, depth = 1) {
 			const find = locate(yield* visibility);
 			const listing = list(find);

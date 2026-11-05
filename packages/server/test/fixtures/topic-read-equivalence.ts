@@ -5,7 +5,7 @@ import { Reactivity } from "effect/unstable/reactivity";
 import { SqlClient } from "effect/unstable/sql";
 import { readTransaction } from "@comms/storage/dialect";
 import { testStore } from "./test-store.ts";
-import { boardTables, createBoardTables, legacyDetail, seedBoard } from "./topic-read-board.ts";
+import { boardTables, createBoardTables, legacyDetail, legacyPageTopic, seedBoard } from "./topic-read-board.ts";
 import { BootChannel } from "../../src/kernel/boot-channel.ts";
 import { Pages, layer as pagesLayer } from "../../src/ext/core/pages.ts";
 import { makeTopics } from "../../src/ext/core/topics.ts";
@@ -21,7 +21,9 @@ const board = (seed: number) =>
 			tables: boardTables,
 		});
 		yield* createBoardTables(sql, epoch);
-		const directory = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({ prefix: "comms-topic-rollup-" });
+		// The scoped root also holds the symlink targets outside the pages directory.
+		const root = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({ prefix: "comms-topic-rollup-" });
+		const directory = `${root}/pages`;
 		const { ceiling, paths } = yield* seedBoard(sql, { seed, topics: 90, messages: 3000, bodyLength: 40 }, directory);
 		const boot: BootChannel["Service"] = {
 			epoch,
@@ -53,12 +55,25 @@ const board = (seed: number) =>
 				"pages-only",
 				"pages-only/nested",
 				"r00/page-folder",
+				"r00/linked",
+				"r00/alias",
+				"escape",
 				"missing/topic",
 			];
 			const instances = ["root-reader", "nested-reader", "deep-reader", "ahead-reader", "no-marks"];
 			let compared = 0;
 			for (const path of views)
-				for (const depth of [1, 3, 8])
+				for (const depth of [1, 3, 8]) {
+					// The snapshot walk must list exactly what the per-entry full-path walk listed.
+					assert.deepEqual(
+						yield* readTransaction(sql, pages.topic(path, depth)).pipe(
+							Effect.catchTag("PageRejected", (error) => Effect.succeed(error.code)),
+						),
+						yield* readTransaction(sql, legacyPageTopic(pages, path, depth)).pipe(
+							Effect.catchTag("PageRejected", (error) => Effect.succeed(error.code)),
+						),
+						`${engine} seed ${seed} pages ${path || "(root)"} ${depth}`,
+					);
 					for (const archived of [false, true]) {
 						const instance = instances[compared % instances.length] ?? "no-marks";
 						const expected = yield* readTransaction(
@@ -67,7 +82,10 @@ const board = (seed: number) =>
 						).pipe(Effect.catchTag("PageRejected", (error) => Effect.succeed(error.code)));
 						const actual = yield* topics
 							.detail({ agent: "reader", instance, request: "read", kind: "agent" }, path, depth, archived)
-							.pipe(Effect.catchTag("KernelError", (error) => Effect.succeed(error.code)));
+							.pipe(
+								Effect.catchTag("KernelError", (error) => Effect.succeed(error.code)),
+								Effect.catchTag("PageRejected", (error) => Effect.succeed(error.code)),
+							);
 						assert.deepEqual(
 							actual,
 							expected,
@@ -75,6 +93,7 @@ const board = (seed: number) =>
 						);
 						compared++;
 					}
+				}
 			// The fixture must exercise every rule, not compare empty views.
 			const root = yield* topics.detail(
 				{ agent: "reader", instance: "nested-reader", request: "read", kind: "agent" },
@@ -84,6 +103,17 @@ const board = (seed: number) =>
 			);
 			assert.ok(root.unread > 0 && root.subtopics.some((row) => row.archived_at !== null));
 			assert.ok(root.subtopics.some((row) => row.unread > 0 && row.unread < row.last_seq));
+			// Symlinked folders and files, inside or escaping the root, never become topics or pages.
+			const listed = root.subtopics.map((row) => row.path);
+			assert.ok(listed.includes("r00/linked"));
+			for (const link of ["escape", "r00/alias", "r00/linked/escape"]) assert.ok(!listed.includes(link), link);
+			const r00 = yield* topics.detail(
+				{ agent: "reader", instance: "nested-reader", request: "read", kind: "agent" },
+				"r00",
+				1,
+				true,
+			);
+			assert.ok(r00.pages.includes("index.md") && !r00.pages.includes("secret.md"));
 			return compared;
 		}).pipe(
 			Effect.provide(pagesLayer(directory)),
