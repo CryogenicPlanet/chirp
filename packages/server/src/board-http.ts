@@ -75,6 +75,7 @@ export const routes = (directory: string) =>
 		HttpRouter.add("GET", "/t/*", board(directory)),
 		HttpRouter.add("GET", "/ext", board(directory)),
 		HttpRouter.add("GET", "/agents", board(directory)),
+		HttpRouter.add("GET", "/search", board(directory)),
 		HttpRouter.add("GET", "/@:agent", board(directory)),
 		HttpRouter.add("GET", "/assets/*", board(directory)),
 	);
