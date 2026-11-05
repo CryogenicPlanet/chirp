@@ -4,28 +4,32 @@ import { useVisible } from "./use-visible.ts";
 import { Atom } from "effect/unstable/reactivity";
 import { BoardClientProvider, useBoardClient } from "./board-client.tsx";
 import { Effect } from "effect";
-import { useEffect, useMemo, useState } from "react";
-import { topicHref, validTopic, type BoardMessage } from "./board-api.ts";
-import { Message } from "./message.tsx";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Toaster } from "sonner";
+import { topicHref, validTopic, type BoardMessage, type BoardTopic } from "./board-api.ts";
+import { MessageList } from "./message.tsx";
+import { CommandPalette } from "./command-palette.tsx";
+import { ComposerBridgeContext, type ComposerBridge } from "./composer-bridge.tsx";
+import { DirectoryProvider } from "./directory.tsx";
+import { TooltipProvider, Tooltip } from "./ui/tooltip.tsx";
 import { Markdown } from "./markdown.tsx";
 import { ReferencedMessage } from "./referenced-message.tsx";
 import { Extensions } from "./extensions.tsx";
 import { Agents } from "./agents.tsx";
-import { Profile, ProfileLink } from "./profile.tsx";
+import { Profile } from "./profile.tsx";
 import { profileFromPath } from "./profile-api.ts";
 import { Search } from "./search.tsx";
-import { TopicControls } from "./topic-controls.tsx";
+import { TopicSettings } from "./topic-controls.tsx";
 import { MessageHistory } from "./message-history.tsx";
 import { useLoad } from "./use-load.ts";
 import { Composer } from "./composer.tsx";
 import { Link, useLocation, useScrollOnNavigate } from "./router.tsx";
-import { RefreshCw } from "lucide-react";
+import { Bot, FileText, Hash, Home, Puzzle, RefreshCw, Settings2 } from "lucide-react";
 import { Button, buttonVariants } from "./ui/button.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { Alert } from "./ui/alert.tsx";
 import { EmptyState } from "./ui/empty-state.tsx";
 import { PageHeader } from "./ui/page-header.tsx";
-import { SectionHeading } from "./ui/section-heading.tsx";
 import { MessagesSkeleton } from "./ui/skeleton.tsx";
 import { cn } from "./cn.ts";
 
@@ -48,30 +52,103 @@ export function App() {
 	/* No keyed remount here: the layout and loaded data stay put, only the routed view swaps. */
 	if (location.pathname === "/onboarding") return <Onboarding />;
 	return (
-		<BoardClientProvider>
-			{location.pathname === "/ext" ? (
-				<Extensions />
-			) : location.pathname === "/agents" ? (
-				<Agents />
-			) : agent !== null ? (
-				<Profile agent={agent} />
-			) : (
-				<Board pathname={location.pathname} />
-			)}
-		</BoardClientProvider>
+		<TooltipProvider delayDuration={300}>
+			<BoardClientProvider>
+				<DirectoryProvider>
+					<CommandPalette>
+						{location.pathname === "/ext" ? (
+							<Extensions />
+						) : location.pathname === "/agents" ? (
+							<Agents />
+						) : agent !== null ? (
+							<Profile agent={agent} />
+						) : (
+							<Board pathname={location.pathname} search={location.search} hash={location.hash} />
+						)}
+					</CommandPalette>
+				</DirectoryProvider>
+			</BoardClientProvider>
+			<Toaster
+				position="bottom-center"
+				toastOptions={{
+					className: "!rounded-xl !bg-ink !text-white !border-0 !shadow-float !text-[14px]",
+					descriptionClassName: "!text-white/75",
+				}}
+			/>
+		</TooltipProvider>
 	);
 }
 
-function Board({ pathname }: { readonly pathname: string }) {
+function TopicNav({
+	path,
+	topics,
+}: {
+	readonly path: string | null;
+	readonly topics: ReadonlyArray<BoardTopic["subtopics"][number]>;
+}) {
+	return (
+		<>
+			<NavLink href="/" active={path === ""}>
+				<Home />
+				All topics
+			</NavLink>
+			<NavLink href="/agents">
+				<Bot />
+				Agents
+			</NavLink>
+			<NavLink href="/ext">
+				<Puzzle />
+				Extensions
+			</NavLink>
+			<div className="mx-2.5 mt-6 mb-1 text-[12.5px] font-medium text-slate">Topics</div>
+			{topics.map((item) => {
+				const active = path === item.path || (path !== null && path.startsWith(`${item.path}/`));
+				return (
+					<NavLink
+						href={topicHref(item.path)}
+						key={item.path}
+						active={active}
+						className={cn(item.unread > 0 && !active && "font-semibold text-ink")}
+					>
+						<Hash />
+						<span className="min-w-0 truncate">{item.name}</span>
+						{item.archived_at !== null && <span className="text-[12px] font-normal text-slate">archived</span>}
+						{item.unread > 0 && (
+							<Badge variant="count" className="ml-auto" title={`${item.unread} unread messages`}>
+								{item.unread > 99 ? "99+" : item.unread}
+							</Badge>
+						)}
+					</NavLink>
+				);
+			})}
+			{topics.length === 0 && (
+				<p className="px-2.5 text-[13px] leading-relaxed text-slate">Your first message starts a topic.</p>
+			)}
+		</>
+	);
+}
+
+function Board({
+	pathname,
+	search,
+	hash,
+}: {
+	readonly pathname: string;
+	readonly search: string;
+	readonly hash: string;
+}) {
 	const client = useBoardClient();
 	const visible = useVisible();
 	const path = currentPath(pathname);
 	const [showArchived, setShowArchived] = useState(false);
 	const [browsingHistory, setBrowsingHistory] = useState(false);
-	const [searching, setSearching] = useState(false);
+	const [searching, setSearching] = useState(() => new URLSearchParams(search).has("q"));
+	const [settingsOpen, setSettingsOpen] = useState(false);
+	const composer = useRef<ComposerBridge>(null);
+	const bridge = useMemo<ComposerBridge>(() => ({ reply: (reply) => composer.current?.reply(reply) }), []);
 	useEffect(() => {
-		setSearching(false);
 		setBrowsingHistory(false);
+		setSettingsOpen(false);
 	}, [pathname]);
 	const request = useMemo(() => {
 		if (path === null) return Atom.make(Effect.succeed(null));
@@ -89,6 +166,7 @@ function Board({ pathname }: { readonly pathname: string }) {
 		});
 	}, [client, path, showArchived, searching, browsingHistory, visible]);
 	const { value, error, loading, reload, update } = useLoad(request);
+	const { value: everyTopic } = useLoad(client.allTopics);
 	const root = value?.root;
 	const topic = value?.topic;
 	const onSent = (message: BoardMessage) => {
@@ -107,259 +185,314 @@ function Board({ pathname }: { readonly pathname: string }) {
 					},
 			);
 		reload();
+		requestAnimationFrame(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" }));
 	};
+	// A topic opens at its latest message, like any chat; a linked message or search keeps its own position.
+	const landed = useRef<string | null>(null);
+	const messageCount = topic?.messages.length ?? 0;
+	useLayoutEffect(() => {
+		if (path === null || path === "" || hash !== "" || searching || messageCount === 0 || landed.current === pathname)
+			return;
+		landed.current = pathname;
+		window.scrollTo(0, document.documentElement.scrollHeight);
+	}, [pathname, path, hash, searching, messageCount]);
+	// Stay pinned to the bottom when new messages arrive while reading the latest.
+	const lastSeq = topic?.messages.at(-1)?.seq ?? 0;
+	const pinned = useRef(true);
+	useEffect(() => {
+		const track = () => {
+			pinned.current = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 160;
+		};
+		track();
+		window.addEventListener("scroll", track, { passive: true });
+		return () => window.removeEventListener("scroll", track);
+	}, []);
+	useLayoutEffect(() => {
+		if (pinned.current && path !== "" && !searching && hash === "")
+			window.scrollTo(0, document.documentElement.scrollHeight);
+	}, [lastSeq, path, searching, hash]);
+
 	const authRequired = error?.status === 401;
 	const segments = path?.split("/") ?? [];
+	const description = path
+		? typeof topic?.meta?.description === "string"
+			? topic.meta.description
+			: undefined
+		: undefined;
+	const status = path && typeof topic?.meta?.status === "string" ? topic.meta.status : undefined;
+	// Alphabetical, so the sidebar never reshuffles under the pointer when a message arrives.
+	const sidebarTopics = useMemo(
+		() => [...(root?.subtopics ?? [])].sort((a, b) => a.name.localeCompare(b.name)),
+		[root],
+	);
+	const topicPaths = useMemo(() => (everyTopic?.subtopics ?? []).map((item) => item.path), [everyTopic]);
 	return (
 		<BoardLayout
-			navigation={
-				<>
-					<ProfileLink />
-					<NavLink href="/" active={path === ""}>
-						All topics
-					</NavLink>
-					<NavLink href="/agents">Agents</NavLink>
-					<NavLink href="/ext">Extensions</NavLink>
-					<div className="mx-2.5 mt-6 mb-1.5 hidden justify-between text-[12.5px] font-medium text-slate sm:flex">
-						Topics <span className="tabular-nums">{root?.subtopics.length ?? ""}</span>
-					</div>
-					{root?.subtopics.map((item) => (
-						<NavLink
-							href={topicHref(item.path)}
-							key={item.path}
-							active={path === item.path || (path !== null && path.startsWith(`${item.path}/`))}
-						>
-							<span className="text-slate">#</span>
-							<span className="min-w-0 wrap-anywhere">
-								{item.name}
-								{item.archived_at !== null ? " (archived)" : ""}
-							</span>
-							{item.unread > 0 && (
-								<Badge variant="count" className="ml-auto" title={`${item.unread} unread messages`}>
-									{item.unread}
-								</Badge>
-							)}
-						</NavLink>
-					))}
-					{root?.subtopics.length === 0 && (
-						<p className="hidden px-2.5 text-[13px] leading-relaxed text-slate sm:block">
-							Your first message starts a topic.
-						</p>
-					)}
-				</>
-			}
+			navigation={<TopicNav path={path} topics={sidebarTopics} />}
 			sidebar={
-				<label className="mx-2.5 mt-5 flex items-center gap-2 text-[13.5px] text-slate">
+				<label className="mx-2.5 mt-4 flex cursor-pointer items-center gap-2 text-[13px] text-slate hover:text-ink">
 					<input
 						type="checkbox"
-						className="size-4 accent-ink"
+						className="size-3.5 accent-ink"
 						checked={showArchived}
 						onChange={(event) => setShowArchived(event.target.checked)}
 					/>
-					Show archived topics
+					Show archived
 				</label>
 			}
 		>
 			{/* Keyed per path: drafts and panel state reset on navigation; layout and data do not. */}
-			<div key={pathname}>
-				<PageHeader
-					breadcrumb={
-						<>
-							<Link href="/">Board</Link>
-							{path &&
-								segments.map((segment, index) => (
-									<span key={index}>
-										{" "}
-										/ <Link href={topicHref(segments.slice(0, index + 1).join("/"))}>{segment}</Link>
-									</span>
-								))}
-						</>
-					}
-					title={path === null ? "Page not found" : path === "" ? "All topics" : segments.at(-1)}
-					description={
-						path
-							? typeof topic?.meta?.description === "string"
-								? topic.meta.description
-								: "The conversation, in one place."
-							: "Updates, questions, and context from across your board."
-					}
-					actions={
-						<Button variant="outline" size="sm" onClick={reload} disabled={loading || path === null}>
-							<RefreshCw className={cn(loading && "animate-spin")} />
-							Refresh
-						</Button>
-					}
-				/>
-				{path === null ? (
-					<EmptyState title="This page does not exist.">
-						<Link href="/">Back to the board</Link>
-					</EmptyState>
-				) : (
-					<>
-						{error && (
-							<Alert className="mb-5">
-								<h2>{authRequired ? "Sign in to your board" : "Could not refresh the board"}</h2>
-								<p>{authRequired ? "Use your passkey to read and write messages." : error.message}</p>
-								{authRequired ? (
-									<>
-										<a
-											className={cn(buttonVariants(), "mt-2")}
-											href="/auth/login"
-											target={topic ? "_blank" : undefined}
-											rel="noreferrer"
-										>
-											Sign in with a passkey
-										</a>
-										<p className="mt-3">
-											<a href="/onboarding">First visit? Set up this board</a>
-										</p>
-									</>
-								) : (
-									<Button variant="outline" size="sm" onClick={reload}>
-										Try again
-									</Button>
-								)}
-							</Alert>
-						)}
-						{loading && !topic && !error && <MessagesSkeleton />}
-						{topic && !authRequired && (
-							<>
-								{path !== "" && (
-									<TopicControls
-										path={path}
-										meta={topic.meta}
-										archived={topic.archived_at !== null}
-										parentArchived={topic.archived_root !== null && topic.archived_root !== path}
-										onSaved={(saved) => {
-											update(
-												(previous) =>
-													previous && {
-														...previous,
-														topic: {
-															...previous.topic,
-															meta: saved.meta,
-															archived_at: saved.archived_at,
-															archived_root: saved.archived_at !== null ? path : null,
-														},
-													},
-											);
-											reload();
-										}}
-									/>
-								)}
-								{topic.archived_root !== null && (
-									<Alert className="mb-5">
-										This topic is read-only because{" "}
-										<Link href={topicHref(topic.archived_root)}>{topic.archived_root}</Link> is archived.
-									</Alert>
-								)}
-								{topic.index !== null && (
-									<section
-										className="mb-8 rounded-[18px] bg-card px-5 py-5 shadow-raised sm:px-6"
-										aria-label="Topic README"
+			<ComposerBridgeContext.Provider value={bridge}>
+				<div key={pathname} className="flex flex-1 flex-col">
+					<PageHeader
+						breadcrumb={
+							path ? (
+								<>
+									<Link href="/">Board</Link>
+									{segments.slice(0, -1).map((segment, index) => (
+										<span key={index}>
+											{" / "}
+											<Link href={topicHref(segments.slice(0, index + 1).join("/"))}>{segment}</Link>
+										</span>
+									))}
+								</>
+							) : (
+								"Board"
+							)
+						}
+						title={
+							path === null ? (
+								"Page not found"
+							) : path === "" ? (
+								"All topics"
+							) : (
+								<span className="inline-flex items-baseline gap-1">
+									<span className="font-normal text-slate/70">#</span>
+									{segments.at(-1)}
+								</span>
+							)
+						}
+						description={
+							path === "" ? (
+								"Everything happening across your board."
+							) : description !== undefined || status !== undefined ? (
+								<>
+									{status !== undefined && (
+										<Badge className="mr-2 align-[1px]" variant="default">
+											{status}
+										</Badge>
+									)}
+									{description}
+								</>
+							) : undefined
+						}
+						actions={
+							<div className="flex shrink-0 items-center gap-1">
+								<span
+									className="mr-2 hidden items-center gap-1.5 text-[12.5px] text-slate sm:flex"
+									title="Updates appear as they happen"
+								>
+									<span className="size-1.5 rounded-full bg-leaf ring-[3px] ring-leaf/15" />
+									Live
+								</span>
+								<Tooltip content="Refresh">
+									<Button
+										variant="ghost"
+										size="icon"
+										className="size-9"
+										onClick={reload}
+										disabled={loading || path === null}
+										aria-label="Refresh"
 									>
-										<Markdown body={topic.index} base={`/p/${path ? path + "/" : ""}index.md`} />
-									</section>
+										<RefreshCw className={cn(loading && "animate-spin")} />
+									</Button>
+								</Tooltip>
+								{path && topic && (
+									<Tooltip content="Topic settings">
+										<Button
+											variant="ghost"
+											size="icon"
+											className="size-9"
+											onClick={() => setSettingsOpen(true)}
+											aria-label="Topic settings"
+										>
+											<Settings2 />
+										</Button>
+									</Tooltip>
 								)}
-								{topic.subtopics.length > 0 && (
-									<section className="pb-8">
-										<SectionHeading title="Subtopics">
-											<span>{topic.subtopics.length}</span>
-										</SectionHeading>
-										<div className="grid gap-2 lg:grid-cols-2 min-[1900px]:grid-cols-3">
-											{topic.subtopics.map((item) => (
-												<Link
-													key={item.path}
-													href={topicHref(item.path)}
-													className="flex items-center justify-between gap-3 rounded-xl bg-card px-4 py-3.5 text-[14.5px] font-medium shadow-raised transition-colors hover:bg-wash"
-												>
-													<span className="min-w-0 wrap-anywhere">
-														<span className="font-normal text-slate">#</span> {item.name}
-														{item.archived_at !== null ? " (archived)" : ""}
-														{typeof item.meta.description === "string" && (
-															<span className="mt-0.5 block text-[13px] font-normal text-slate">
-																{item.meta.description}
+							</div>
+						}
+					/>
+					{path === null ? (
+						<EmptyState title="This page does not exist.">
+							<Link href="/">Back to the board</Link>
+						</EmptyState>
+					) : (
+						<>
+							{error && (
+								<Alert className="mb-5">
+									<h2>{authRequired ? "Sign in to your board" : "Could not refresh the board"}</h2>
+									<p>{authRequired ? "Use your passkey to read and write messages." : error.message}</p>
+									{authRequired ? (
+										<>
+											<a
+												className={cn(buttonVariants(), "mt-2")}
+												href="/auth/login"
+												target={topic ? "_blank" : undefined}
+												rel="noreferrer"
+											>
+												Sign in with a passkey
+											</a>
+											<p className="mt-3">
+												<a href="/onboarding">First visit? Set up this board</a>
+											</p>
+										</>
+									) : (
+										<Button variant="outline" size="sm" onClick={reload}>
+											Try again
+										</Button>
+									)}
+								</Alert>
+							)}
+							{loading && !topic && !error && <MessagesSkeleton />}
+							{topic && !authRequired && (
+								<>
+									{path !== "" && (
+										<TopicSettings
+											open={settingsOpen}
+											onOpenChange={setSettingsOpen}
+											path={path}
+											meta={topic.meta}
+											archived={topic.archived_at !== null}
+											parentArchived={topic.archived_root !== null && topic.archived_root !== path}
+											onSaved={(saved) => {
+												update(
+													(previous) =>
+														previous && {
+															...previous,
+															topic: {
+																...previous.topic,
+																meta: saved.meta,
+																archived_at: saved.archived_at,
+																archived_root: saved.archived_at !== null ? path : null,
+															},
+														},
+												);
+												reload();
+											}}
+										/>
+									)}
+									{topic.archived_root !== null && (
+										<Alert className="mb-5">
+											This topic is read-only because{" "}
+											<Link href={topicHref(topic.archived_root)}>{topic.archived_root}</Link> is archived.
+										</Alert>
+									)}
+									{topic.index !== null && (
+										<section
+											className="mb-6 rounded-2xl bg-card px-5 py-5 shadow-raised sm:px-6"
+											aria-label="Topic README"
+										>
+											<Markdown body={topic.index} base={`/p/${path ? path + "/" : ""}index.md`} />
+										</section>
+									)}
+									{topic.subtopics.length > 0 && (
+										<section className="mb-6" aria-label={path ? "Subtopics" : "Topics"}>
+											<div className="grid gap-2 sm:grid-cols-2 min-[1900px]:grid-cols-3">
+												{topic.subtopics.map((item) => (
+													<Link
+														key={item.path}
+														href={topicHref(item.path)}
+														className="group flex items-start gap-3 rounded-xl bg-card px-4 py-3 shadow-raised transition-shadow hover:shadow-[0_0_0_1px_rgb(32_42_58/0.14),0_1px_3px_rgb(32_42_58/0.06),0_8px_20px_-8px_rgb(32_42_58/0.14)]"
+													>
+														<span className="min-w-0 flex-1">
+															<span className="flex items-center gap-1.5 text-[14.5px] font-medium text-ink">
+																<span className="font-normal text-slate">#</span>
+																<span className="truncate">{item.name}</span>
+																{item.archived_at !== null && (
+																	<span className="text-[12px] font-normal text-slate">archived</span>
+																)}
 															</span>
+															{(typeof item.meta.description === "string" || typeof item.meta.status === "string") && (
+																<span className="mt-0.5 block truncate text-[13px] text-slate">
+																	{typeof item.meta.status === "string" && (
+																		<span className="font-medium text-ink-soft">{item.meta.status} · </span>
+																	)}
+																	{typeof item.meta.description === "string" ? item.meta.description : ""}
+																</span>
+															)}
+														</span>
+														{item.unread > 0 && (
+															<Badge variant="count" className="mt-0.5" title={`${item.unread} unread`}>
+																{item.unread > 99 ? "99+" : item.unread}
+															</Badge>
 														)}
-														{typeof item.meta.status === "string" && (
-															<span className="mt-0.5 block text-[13px] font-normal text-slate">
-																{item.meta.status}
-															</span>
-														)}
-													</span>
-													<span className="shrink-0 text-[13px] font-normal whitespace-nowrap text-slate">
-														{item.unread
-															? `${item.unread} unread`
-															: item.last_seq > 0
-																? `Latest #${item.last_seq}`
-																: "Open →"}
-													</span>
-												</Link>
-											))}
-										</div>
-									</section>
-								)}
-								{(topic.index !== null || topic.pages.length > 0) && (
-									<section className="pb-8" aria-label="Pages">
-										<SectionHeading title="Pages" />
-										<div className="grid gap-2 lg:grid-cols-2 min-[1900px]:grid-cols-3">
+													</Link>
+												))}
+											</div>
+										</section>
+									)}
+									{topic.pages.length > 0 && (
+										<section className="mb-6 flex flex-wrap items-center gap-1.5" aria-label="Pages">
+											<span className="mr-1 text-[12.5px] font-medium text-slate">Pages</span>
 											{topic.pages.map((file) => (
 												<a
 													key={file}
 													href={`/p/${[...path.split("/").filter(Boolean), file].map(encodeURIComponent).join("/")}`}
-													className="flex items-center justify-between gap-3 rounded-xl bg-card px-4 py-3.5 text-[14.5px] font-medium shadow-raised transition-colors hover:bg-wash"
+													className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-card px-2.5 text-[13.5px] text-ink-soft shadow-raised transition-colors hover:text-ink [&_svg]:size-3.5 [&_svg]:text-slate"
 												>
-													<span className="min-w-0 wrap-anywhere">
-														{file === "index.md" && topic.index !== null ? "README" : file}
-													</span>
-													<span className="shrink-0 text-[13px] font-normal whitespace-nowrap text-slate">Open ↗</span>
+													<FileText />
+													{file === "index.md" && topic.index !== null ? "README" : file}
 												</a>
 											))}
-										</div>
-									</section>
-								)}
-								<Search path={path} onActive={setSearching} />
-								{!searching && browsingHistory && (
-									<MessageHistory path={path} onClose={() => setBrowsingHistory(false)} />
-								)}
-								{!searching && !browsingHistory && (
-									<>
-										<ReferencedMessage visible={topic.messages} />
-										<section className="mb-8" aria-label="Messages">
-											<SectionHeading title={path ? "Messages" : "Recent messages"}>
-												<span className="flex items-center gap-1.5">
-													<span className="size-2 rounded-full bg-leaf ring-4 ring-leaf/15" />
-													Live updates
-												</span>
-											</SectionHeading>
-											{topic.messages.length === 0 ? (
-												<EmptyState title="No messages yet">
-													Leave the first update below. Your agents can join from the <a href="/init">agent guide</a>.
-												</EmptyState>
-											) : (
-												topic.messages.map((message) => <Message key={message.id} message={message} />)
-											)}
-											{topic.messages.length >= 100 && (
-												<div className="flex items-center justify-between gap-4 pt-4 text-[13px] text-slate">
-													<p>Showing the latest 100 messages.</p>
-													{path !== "" && (
-														<Button variant="outline" size="sm" type="button" onClick={() => setBrowsingHistory(true)}>
-															Browse message history
-														</Button>
-													)}
-												</div>
-											)}
 										</section>
-									</>
-								)}
-							</>
-						)}
-						{topic && topic.archived_root === null && (
-							<Composer path={path} onSent={onSent} sessionExpired={authRequired} />
-						)}
-					</>
-				)}
-			</div>
+									)}
+									<Search path={path} onActive={setSearching} />
+									{!searching && browsingHistory && (
+										<MessageHistory path={path} onClose={() => setBrowsingHistory(false)} />
+									)}
+									{!searching && !browsingHistory && (
+										<>
+											<ReferencedMessage visible={topic.messages} />
+											<section className="flex-1 pb-2" aria-label="Messages">
+												{topic.messages.length >= 100 && (
+													<div className="flex items-center justify-between gap-4 pb-3 text-[13px] text-slate">
+														<p>Showing the latest 100 messages.</p>
+														{path !== "" && (
+															<Button variant="ghost" size="sm" type="button" onClick={() => setBrowsingHistory(true)}>
+																Browse older messages
+															</Button>
+														)}
+													</div>
+												)}
+												{topic.messages.length === 0 ? (
+													<EmptyState title="No messages yet">
+														Say hello below, or invite an agent from the <a href="/init">agent guide</a>.
+													</EmptyState>
+												) : (
+													<>
+														<h2 className="sr-only">{path ? "Messages" : "Recent messages"}</h2>
+														<MessageList messages={topic.messages} currentTopic={path || undefined} />
+													</>
+												)}
+											</section>
+										</>
+									)}
+								</>
+							)}
+							{topic && topic.archived_root === null && (
+								<Composer
+									path={path}
+									topics={topicPaths}
+									onSent={onSent}
+									sessionExpired={authRequired}
+									bridge={composer}
+								/>
+							)}
+						</>
+					)}
+				</div>
+			</ComposerBridgeContext.Provider>
 		</BoardLayout>
 	);
 }

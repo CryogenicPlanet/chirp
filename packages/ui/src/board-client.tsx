@@ -59,6 +59,11 @@ const makeClient = (registry: AtomRegistry.AtomRegistry) => {
 						query: { archived: archived ? "1" : "0", mark: mark ? "1" : "0" },
 						reactivityKeys: ["board"],
 					}),
+		/** Every topic, for the command palette and topic picker. Never marks reads. */
+		allTopics: Client.query("topics", "root", {
+			query: { depth: 8, mark: "0" },
+			reactivityKeys: ["board"],
+		}),
 		messages: (
 			query: {
 				readonly since: number;
@@ -66,6 +71,7 @@ const makeClient = (registry: AtomRegistry.AtomRegistry) => {
 				readonly topic?: string;
 				readonly recursive?: "1";
 				readonly mark?: "0";
+				readonly newest?: "1";
 				readonly q?: string;
 				readonly tag?: string;
 				readonly agent?: string;

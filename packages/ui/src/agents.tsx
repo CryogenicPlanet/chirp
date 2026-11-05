@@ -47,7 +47,7 @@ interface AgentRow {
 }
 
 // Each source fails on its own, so a missing extension or an expired session still leaves the other half visible.
-const getActivity = () =>
+export const getActivity = () =>
 	accountRequest(HttpClientRequest.get(new URL("/api/agents/activity", window.location.origin).href)).pipe(
 		Effect.flatMap(Schema.decodeUnknownEffect(Activity)),
 		Effect.catchTag("SchemaError", () => unreadable),
