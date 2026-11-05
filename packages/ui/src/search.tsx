@@ -34,10 +34,11 @@ export const parseQuery = (input: string): ParsedQuery => {
 				? part
 				: part
 						.replace(/(?:^|\s)(from|by|tag|in):([^\s"]+)/giu, (_match, key: string, value: string) => {
-							const clean = value.replace(/^[@#]/u, "").toLowerCase();
-							if (key.toLowerCase() === "tag") filters.tag = clean;
-							else if (key.toLowerCase() === "in") filters.topic = clean;
-							else filters.agent = clean;
+							// Tags match exactly as written; agent names and topic paths are lowercase, with an
+							// optional @ or # in front.
+							if (key.toLowerCase() === "tag") filters.tag = value;
+							else if (key.toLowerCase() === "in") filters.topic = value.replace(/^#/u, "").toLowerCase();
+							else filters.agent = value.replace(/^@/u, "").toLowerCase();
 							return " ";
 						})
 						// An operator still waiting for its value is not search text.

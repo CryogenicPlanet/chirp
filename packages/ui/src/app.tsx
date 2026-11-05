@@ -241,6 +241,12 @@ function Board({
 	const view = fresh ? topic : peeked !== null && peeked !== undefined && peeked.path === path ? peeked : undefined;
 	const retry = useAutoRetry(error, reload);
 	const landed = useRef<string | null>(null);
+	// Leaving a route (to another topic, the root or search) resets arrival, so coming back captures the unread
+	// position again before marking. Declared before the landing effect so it runs first.
+	useEffect(() => {
+		landed.current = null;
+		setArmedPath(null);
+	}, [pathname]);
 	const [firstUnread, setFirstUnread] = useState<{ readonly path: string; readonly seq: number } | null>(null);
 	const messageCount = view?.messages.length ?? 0;
 	useEffect(() => {

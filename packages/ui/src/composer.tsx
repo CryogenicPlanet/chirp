@@ -1,4 +1,4 @@
-import { Effect, Random } from "effect";
+import { Effect, Random, Schema } from "effect";
 import { ArrowUp, AtSign, ChevronDown, Hash, Plus } from "lucide-react";
 import {
 	useEffect,
@@ -26,17 +26,22 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover.tsx";
 
 const isMac = /Mac|iPhone|iPad/.test(navigator.userAgent);
-const readDraft = (key: string) => {
+// A draft keeps its destination: the picker can point it at another topic than the page it was written on.
+const StoredDraft = Schema.Struct({ topic: Schema.String, body: Schema.String });
+const readDraft = (key: string): typeof StoredDraft.Type | null => {
 	try {
-		return window.sessionStorage.getItem(key) ?? "";
+		const raw = window.sessionStorage.getItem(key);
+		if (raw === null) return null;
+		const decoded = Schema.decodeUnknownOption(StoredDraft)(JSON.parse(raw));
+		return decoded._tag === "Some" ? decoded.value : null;
 	} catch {
-		return "";
+		return null;
 	}
 };
-const writeDraft = (key: string, body: string) => {
+const writeDraft = (key: string, draft: typeof StoredDraft.Type) => {
 	try {
-		if (body.trim() === "") window.sessionStorage.removeItem(key);
-		else window.sessionStorage.setItem(key, body);
+		if (draft.body.trim() === "") window.sessionStorage.removeItem(key);
+		else window.sessionStorage.setItem(key, JSON.stringify(draft));
 	} catch {
 		// Storage can be unavailable; the draft then lives only while the page is open.
 	}
@@ -221,14 +226,18 @@ export function Composer({
 }) {
 	const { sendMessage } = useBoardClient();
 	const directory = useDirectory();
-	const [topic, setTopic] = useState(path);
-	// A draft is kept per topic for this tab, so navigating away and back does not lose it.
 	const draftKey = `chirp:draft:${path || "/"}`;
-	const [body, setBody] = useState(() => readDraft(draftKey));
+	const [stored] = useState(() => readDraft(draftKey));
+	const [topic, setTopic] = useState(stored?.topic ?? path);
+	// A draft is kept per topic for this tab, so navigating away and back does not lose it.
+	const [body, setBody] = useState(stored?.body ?? "");
 	const [pending, setPending] = useState<PendingMessage | null>(null);
 	// While a send is in flight its outcome decides the draft: never restore one that may already be posted.
 	// A definitive refusal clears pending and the kept draft is stored again.
-	useEffect(() => writeDraft(draftKey, pending === null ? body : ""), [draftKey, body, pending]);
+	useEffect(
+		() => writeDraft(draftKey, { topic, body: pending === null ? body : "" }),
+		[draftKey, topic, body, pending],
+	);
 	const [sending, setSending] = useState(false);
 	const [error, setError] = useState("");
 	const [authRequired, setAuthRequired] = useState(false);
