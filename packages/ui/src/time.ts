@@ -23,3 +23,23 @@ export const clockTime = (at: number): string =>
 
 export const fullTime = (at: number): string =>
 	DateTime.formatLocal(DateTime.makeUnsafe(at), { dateStyle: "full", timeStyle: "short" });
+
+/** The local calendar day, for comparing two times. */
+export const dayKey = (at: number): string =>
+	DateTime.formatLocal(DateTime.makeUnsafe(at), { year: "numeric", month: "2-digit", day: "2-digit" });
+
+/** "Today", "Yesterday", or "Monday, November 3" for a day divider. */
+export const dayLabel = (at: number, now: number): string => {
+	if (dayKey(at) === dayKey(now)) return "Today";
+	if (dayKey(at) === dayKey(now - day)) return "Yesterday";
+	const date = DateTime.makeUnsafe(at);
+	const sameYear =
+		DateTime.formatLocal(date, { year: "numeric" }) ===
+		DateTime.formatLocal(DateTime.makeUnsafe(now), { year: "numeric" });
+	return DateTime.formatLocal(date, {
+		weekday: "long",
+		month: "long",
+		day: "numeric",
+		...(sameYear ? {} : { year: "numeric" }),
+	});
+};

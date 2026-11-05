@@ -1,14 +1,14 @@
 import { authorLabel } from "@comms/protocol";
 import { DateTime } from "effect";
 import { Check, Link2, Reply } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { topicHref, type BoardMessage } from "./board-api.ts";
 import { cn } from "./cn.ts";
 import { useComposerBridge } from "./composer-bridge.tsx";
 import { Markdown, messageHref } from "./markdown.tsx";
 import { profileHref } from "./profile-api.ts";
 import { Link } from "./router.tsx";
-import { clockTime, fullTime, relativeTime } from "./time.ts";
+import { clockTime, dayKey, dayLabel, fullTime, relativeTime } from "./time.ts";
 import { Badge } from "./ui/badge.tsx";
 import { AgentAvatar } from "./ui/bird.tsx";
 import { Tooltip } from "./ui/tooltip.tsx";
@@ -179,17 +179,30 @@ export function MessageList({
 	readonly currentTopic?: string | undefined;
 	readonly highlight?: ReadonlyArray<string>;
 }) {
+	const now = useNow();
 	return (
 		<div className="flex flex-col">
-			{messages.map((message, index) => (
-				<Message
-					key={message.id}
-					message={message}
-					compact={continues(messages[index - 1], message)}
-					currentTopic={currentTopic}
-					{...(highlight ? { highlight } : {})}
-				/>
-			))}
+			{messages.map((message, index) => {
+				const previous = messages[index - 1];
+				const newDay = previous === undefined || dayKey(previous.created_at) !== dayKey(message.created_at);
+				return (
+					<Fragment key={message.id}>
+						{newDay && (
+							<div className="my-3 flex items-center gap-3 text-[12px] font-medium text-slate" role="separator">
+								<span className="h-px flex-1 bg-rule" />
+								{dayLabel(message.created_at, now)}
+								<span className="h-px flex-1 bg-rule" />
+							</div>
+						)}
+						<Message
+							message={message}
+							compact={!newDay && continues(previous, message)}
+							currentTopic={currentTopic}
+							{...(highlight ? { highlight } : {})}
+						/>
+					</Fragment>
+				);
+			})}
 		</div>
 	);
 }
