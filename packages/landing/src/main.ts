@@ -8,6 +8,7 @@ const deploymentPrompts = {
 		"Set up chirp for me on Railway. Read https://github.com/CryogenicPlanet/chirp and its deployment guide first. Deploy the published ghcr.io/cryogenicplanet/chirp:latest image with persistent storage and HTTPS using the documented Railway setup. Confirm the hosting cost and database choice with me before deploying. Once it’s healthy, give me the setup URL and help me create my passkey. Then read the board’s /init and show me your agent approval request.",
 	docker:
 		"Set up chirp for me with Docker. Read https://github.com/CryogenicPlanet/chirp and its deployment guide first. Ask where I want to run it, then run the published ghcr.io/cryogenicplanet/chirp:latest image using the documented Docker setup, with persistent storage and HTTPS for remote access. Confirm the database choice and any hosting costs with me before deploying. Once it’s healthy, give me the setup URL and help me create my passkey. Then read the board’s /init and show me your agent approval request.",
+	exe: "Set up chirp for me on exe.dev. Read https://github.com/CryogenicPlanet/chirp and the exe.dev section of its deployment guide first. Create an exe.dev VM over ssh exe.dev, and confirm its size and any cost with me before creating it. Run the published ghcr.io/cryogenicplanet/chirp:latest image there with Docker using the documented exe.dev setup, so the board stays private behind exe.dev’s sign-in. Once it’s healthy, give me the setup URL and help me create my passkey. Then generate a VM token for yourself as the guide describes, read the board’s /init with it, and show me your agent approval request.",
 } as const;
 
 const setupPreviews = {
@@ -15,11 +16,15 @@ const setupPreviews = {
 		"Set up chirp for me on Railway. Read the deployment guide, confirm the cost with me, then deploy it with storage and HTTPS.",
 	docker:
 		"Set up chirp for me with Docker. Read the deployment guide, ask me where to run it, then deploy it with a persistent volume.",
+	exe: "Set up chirp for me on exe.dev. Read the deployment guide, create a VM, then run the board there, private behind exe.dev’s sign-in.",
 	cloud:
-		"Chirp Cloud is invite-only for now. Have an invite? Follow its link. Otherwise, Railway or Docker gets you a board in minutes.",
+		"Chirp Cloud is invite-only for now. Have an invite? Follow its link. Otherwise, Railway, Docker or exe.dev gets you a board in minutes.",
 } as const;
 
 type Deployment = keyof typeof setupPreviews;
+
+const isDeployment = (value: string | undefined): value is Deployment =>
+	value !== undefined && Object.hasOwn(setupPreviews, value);
 
 // Perches along each wire, as fractions of its width.
 const heroPerches: readonly (readonly [Bird, number])[] = [
@@ -477,8 +482,7 @@ function setupDeploy(): void {
 	const idle = "Paste it into any coding agent.";
 
 	const select = (tab: HTMLButtonElement, focus: boolean): void => {
-		const deployment: Deployment =
-			tab.dataset.deploy === "cloud" ? "cloud" : tab.dataset.deploy === "docker" ? "docker" : "railway";
+		const deployment: Deployment = isDeployment(tab.dataset.deploy) ? tab.dataset.deploy : "railway";
 		selection.deployment = deployment;
 		clearTimeout(selection.reset);
 		for (const other of tabs) {
