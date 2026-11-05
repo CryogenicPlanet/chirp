@@ -1,5 +1,4 @@
 import { BookOpen, ChevronsUpDown, LogOut, Menu, SearchIcon, UserRound, X } from "lucide-react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
@@ -164,12 +163,14 @@ export function BoardLayout({
 	readonly wide?: boolean;
 }) {
 	const [open, setOpen] = useState(false);
-	const reduceMotion = useReducedMotion();
+	// Closing plays the drawer's exit animation, then unmounts it (reduced motion makes both instant).
+	const [closing, setClosing] = useState(false);
+	const close = () => setClosing(true);
 	const openPalette = useOpenPalette();
 	useEffect(() => {
 		if (!open) return;
 		const close = (event: KeyboardEvent) => {
-			if (event.key === "Escape") setOpen(false);
+			if (event.key === "Escape") setClosing(true);
 		};
 		document.addEventListener("keydown", close);
 		return () => document.removeEventListener("keydown", close);
@@ -205,47 +206,51 @@ export function BoardLayout({
 				<SidebarContent navigation={navigation} sidebar={sidebar} />
 			</aside>
 			{createPortal(
-				<AnimatePresence>
-					{open && (
-						<div className="fixed inset-0 z-50 sm:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
-							<motion.div
-								className="absolute inset-0 bg-ink/25 backdrop-blur-[2px]"
-								initial={{ opacity: 0 }}
-								animate={{ opacity: 1 }}
-								exit={{ opacity: 0 }}
-								transition={{ duration: 0.15 }}
-								onClick={() => setOpen(false)}
-							/>
-							<motion.div
-								className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col bg-wash px-3 pt-3 pb-3 shadow-float"
-								initial={reduceMotion ? { opacity: 0 } : { x: "-100%" }}
-								animate={reduceMotion ? { opacity: 1 } : { x: 0 }}
-								exit={reduceMotion ? { opacity: 0 } : { x: "-100%" }}
-								transition={{ type: "tween", duration: reduceMotion ? 0.1 : 0.2, ease: [0.32, 0.72, 0, 1] }}
-								onClick={(event) => {
-									// Following a link closes the drawer.
-									if (event.target instanceof Element && event.target.closest("a")) setOpen(false);
-								}}
-							>
-								<div className="mb-4 flex items-center justify-between">
-									<Link href="/" className="rounded-md px-1.5 text-ink">
-										<Wordmark />
-									</Link>
-									<Button
-										variant="ghost"
-										size="icon"
-										className="size-11 text-ink"
-										onClick={() => setOpen(false)}
-										aria-label="Close navigation"
-									>
-										<X />
-									</Button>
-								</div>
-								<SidebarContent navigation={navigation} sidebar={sidebar} />
-							</motion.div>
+				open && (
+					<div className="fixed inset-0 z-50 sm:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
+						<div
+							className={cn(
+								"absolute inset-0 bg-ink/25 backdrop-blur-[2px]",
+								closing ? "animate-[fade-out_160ms_ease-in_forwards]" : "animate-[fade-in_150ms_ease-out]",
+							)}
+							onClick={close}
+						/>
+						<div
+							className={cn(
+								"absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col bg-wash px-3 pt-3 pb-3 shadow-float",
+								closing
+									? "animate-[drawer-out_160ms_ease-in_forwards]"
+									: "animate-[drawer-in_200ms_cubic-bezier(0.32,0.72,0,1)]",
+							)}
+							onAnimationEnd={(event) => {
+								if (closing && event.target === event.currentTarget) {
+									setOpen(false);
+									setClosing(false);
+								}
+							}}
+							onClick={(event) => {
+								// Following a link closes the drawer.
+								if (event.target instanceof Element && event.target.closest("a")) close();
+							}}
+						>
+							<div className="mb-4 flex items-center justify-between">
+								<Link href="/" className="rounded-md px-1.5 text-ink">
+									<Wordmark />
+								</Link>
+								<Button
+									variant="ghost"
+									size="icon"
+									className="size-11 text-ink"
+									onClick={close}
+									aria-label="Close navigation"
+								>
+									<X />
+								</Button>
+							</div>
+							<SidebarContent navigation={navigation} sidebar={sidebar} />
 						</div>
-					)}
-				</AnimatePresence>,
+					</div>
+				),
 				document.body,
 			)}
 			<main

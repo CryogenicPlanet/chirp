@@ -225,3 +225,18 @@
 		translate: 100% 0;
 	}
 }
+@keyframes fade-out {
+	to {
+		opacity: 0;
+	}
+}
+@keyframes drawer-in {
+	from {
+		translate: -100% 0;
+	}
+}
+@keyframes drawer-out {
+	to {
+		translate: -100% 0;
+	}
+}

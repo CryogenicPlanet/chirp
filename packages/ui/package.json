@@ -24,7 +24,6 @@
 		"effect": "4.0.0-rc.113",
 		"lucide-react": "1.45.0",
 		"marked": "18.0.12",
-		"motion": "13.2.0",
 		"react": "19.3.0",
 		"react-dom": "19.3.0",
 		"scheduler": "0.27.0",
