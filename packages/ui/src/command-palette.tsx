@@ -1,4 +1,6 @@
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
+import { HttpClientRequest } from "effect/unstable/http";
+import { accountRequest } from "./account-api.ts";
 import {
 	BookOpen,
 	Bot,
@@ -13,7 +15,7 @@ import {
 	SearchIcon,
 	UserRound,
 } from "lucide-react";
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { topicHref, type BoardMessage } from "./board-api.ts";
 import { useBoardClient } from "./board-client.tsx";
@@ -35,6 +37,52 @@ import {
 	CommandSeparator,
 	Kbd,
 } from "./ui/command.tsx";
+
+const DirectoryListing = Schema.Struct({
+	items: Schema.Array(Schema.Struct({ name: Schema.String, type: Schema.String })),
+});
+const pageLimit = 3000;
+
+/**
+ * Every page path on the board, from boot's file listing (filesystem work, outside the database read budget).
+ * Walks folders breadth-first, a few at a time, and stops at a cap so a huge board stays responsive.
+ */
+const listPages = Effect.gen(function* () {
+	const found: Array<string> = [];
+	const listFolder = (folder: string) =>
+		accountRequest(
+			HttpClientRequest.get(
+				new URL(
+					`/api/fs/pages${folder ? `/${folder.split("/").map(encodeURIComponent).join("/")}` : ""}`,
+					window.location.origin,
+				).href,
+			),
+		).pipe(
+			Effect.flatMap(Schema.decodeUnknownEffect(DirectoryListing)),
+			Effect.map((listing) => listing.items),
+			Effect.orElseSucceed(() => []),
+		);
+	let level: ReadonlyArray<string> = [""];
+	while (level.length > 0 && found.length < pageLimit) {
+		const listings = yield* Effect.forEach(
+			level,
+			(folder) => listFolder(folder).pipe(Effect.map((items) => ({ folder, items }))),
+			{
+				concurrency: 6,
+			},
+		);
+		const next: Array<string> = [];
+		for (const { folder, items } of listings)
+			for (const item of items) {
+				if (item.name.startsWith(".")) continue;
+				const path = folder ? `${folder}/${item.name}` : item.name;
+				if (item.type === "directory") next.push(path);
+				else if (/\.(md|html?)$/i.test(item.name)) found.push(path);
+			}
+		level = next;
+	}
+	return found.slice(0, pageLimit).sort();
+});
 
 const PaletteContext = createContext<(() => void) | null>(null);
 /** Opens the command palette; null outside the board. */
@@ -96,7 +144,15 @@ function useMessageMatches(query: string) {
 	return state;
 }
 
-function PaletteBody({ close, go: open }: { readonly close: () => void; readonly go: (href: string) => void }) {
+function PaletteBody({
+	close,
+	go: open,
+	pages,
+}: {
+	readonly close: () => void;
+	readonly go: (href: string) => void;
+	readonly pages: ReadonlyArray<string> | null;
+}) {
 	const client = useBoardClient();
 	const directory = useDirectory();
 	const location = useLocation();
@@ -136,7 +192,7 @@ function PaletteBody({ close, go: open }: { readonly close: () => void; readonly
 	return (
 		<>
 			<CommandInput
-				placeholder="Search messages, jump to a topic or agent…"
+				placeholder="Search messages, topics, pages and agents…"
 				value={query}
 				onValueChange={setQuery}
 				autoFocus
@@ -206,6 +262,32 @@ function PaletteBody({ close, go: open }: { readonly close: () => void; readonly
 						))}
 					</CommandGroup>
 				)}
+				{trimmed !== "" && pages !== null && pages.length > 0 && (
+					<CommandGroup heading="Pages">
+						{pages.map((page) => (
+							<CommandItem
+								key={page}
+								value={`/p/${page}`}
+								keywords={[
+									page
+										.split("/")
+										.at(-1)
+										?.replace(/\.(md|html?)$/i, "") ?? page,
+								]}
+								onSelect={() => {
+									close();
+									window.location.assign(`/p/${page.split("/").map(encodeURIComponent).join("/")}`);
+								}}
+							>
+								<FileText />
+								<span className="min-w-0 truncate">
+									{page.includes("/") && <span className="text-slate">{page.slice(0, page.lastIndexOf("/") + 1)}</span>}
+									{page.slice(page.lastIndexOf("/") + 1)}
+								</span>
+							</CommandItem>
+						))}
+					</CommandGroup>
+				)}
 				{trimmed !== "" && (
 					<CommandGroup heading="Search" forceMount>
 						<CommandItem
@@ -263,19 +345,6 @@ function PaletteBody({ close, go: open }: { readonly close: () => void; readonly
 							Your account
 						</CommandItem>
 					)}
-					{(root?.pages ?? []).map((page) => (
-						<CommandItem
-							key={page}
-							value={`page ${page}`}
-							onSelect={() => {
-								close();
-								window.location.assign(`/p/${encodeURIComponent(page)}`);
-							}}
-						>
-							<FileText />
-							{page}
-						</CommandItem>
-					))}
 				</CommandGroup>
 				<CommandGroup heading="Actions">
 					<CommandItem
@@ -342,6 +411,13 @@ export function CommandPalette({
 	readonly container?: HTMLElement;
 }) {
 	const [open, setOpen] = useState(false);
+	const [pages, setPages] = useState<ReadonlyArray<string> | null>(null);
+	const indexing = useRef(false);
+	useEffect(() => {
+		if (!open || indexing.current) return;
+		indexing.current = true;
+		void Effect.runPromise(listPages).then(setPages, () => setPages([]));
+	}, [open]);
 	const location = useLocation();
 	useEffect(() => {
 		const show = () => setOpen(true);
@@ -369,7 +445,7 @@ export function CommandPalette({
 				label="Command palette"
 				{...(container === undefined ? {} : { container })}
 			>
-				{open && <PaletteBody close={() => setOpen(false)} go={go} />}
+				{open && <PaletteBody close={() => setOpen(false)} go={go} pages={pages} />}
 			</CommandDialog>
 		</PaletteContext.Provider>
 	);
