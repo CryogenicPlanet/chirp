@@ -31,6 +31,10 @@ const Activity = Schema.Struct({
 			mcp: Schema.Boolean,
 		}),
 	),
+	// Older agents extensions omit read progress.
+	reads: Schema.optionalKey(
+		Schema.Array(Schema.Struct({ instance: Schema.String, read: Schema.Int, unread: Schema.Int, topics: Schema.Int })),
+	),
 });
 type Activity = typeof Activity.Type;
 
@@ -44,6 +48,7 @@ interface AgentRow {
 	readonly posts: number;
 	readonly posts24h: number;
 	readonly posts7d: number;
+	readonly read: { readonly read: number; readonly unread: number } | null;
 }
 
 // Each source fails on its own, so a missing extension or an expired session still leaves the other half visible.
@@ -82,10 +87,14 @@ const latest = (values: ReadonlyArray<number | null>) =>
 		null,
 	);
 
-/** One row per agent name: token families say when it joined and last authenticated; messages say how much it posts. */
+/**
+ * One row per agent name: token families say when it joined and last authenticated; messages say how much it posts;
+ * read marks, kept per family, say how much of everyone else's messages its most-read session has read.
+ */
 const rows = (
 	families: FamilyList["items"],
 	activity: Activity["items"],
+	reads: NonNullable<Activity["reads"]>,
 	now: number,
 	hidden: ReadonlySet<string>,
 ): ReadonlyArray<AgentRow> => {
@@ -95,6 +104,11 @@ const rows = (
 		.map((agent) => {
 			const owned = families.filter((family) => family.agent === agent);
 			const posted = activity.find((item) => item.agent === agent);
+			const sessions = reads.filter((item) => owned.some((family) => family.family === item.instance));
+			const best = sessions.reduce<(typeof sessions)[number] | null>(
+				(top, item) => (top === null || item.read > top.read ? item : top),
+				null,
+			);
 			return {
 				agent,
 				labels: [...new Set(owned.map((family) => family.label))],
@@ -107,6 +121,7 @@ const rows = (
 				posts: posted?.posts ?? 0,
 				posts24h: posted?.posts_24h ?? 0,
 				posts7d: posted?.posts_7d ?? 0,
+				read: best === null ? null : { read: best.read, unread: best.unread },
 			};
 		})
 		.sort((a, b) => (b.lastActive ?? 0) - (a.lastActive ?? 0));
@@ -137,6 +152,25 @@ function Stat({ label, value }: { readonly label: string; readonly value: number
 	);
 }
 
+function ReadCell({ read }: { readonly read: AgentRow["read"] }) {
+	if (read === null)
+		return (
+			<td className="pt-[15px] pb-3.5 text-right text-slate" title="No read marks yet">
+				—
+			</td>
+		);
+	const total = read.read + read.unread;
+	const share = total === 0 ? 100 : Math.floor((read.read / total) * 100);
+	return (
+		<td
+			className="pt-[15px] pb-3.5 text-right whitespace-nowrap tabular-nums"
+			title={`${read.read.toLocaleString()} of ${total.toLocaleString()} messages read`}
+		>
+			{share}%<span className="block text-[12.5px] text-slate">{read.unread.toLocaleString()} unread</span>
+		</td>
+	);
+}
+
 export function Agents() {
 	const client = useBoardClient();
 	const me = useLoad(client.me);
@@ -156,7 +190,7 @@ export function Agents() {
 	const hidden = new Set(["system", ...(me.value?.kind === "human" ? [me.value.agent] : [])]);
 	const agents =
 		settled && (tokens.value || activity.value)
-			? rows(tokens.value?.items ?? [], activity.value?.items ?? [], now, hidden)
+			? rows(tokens.value?.items ?? [], activity.value?.items ?? [], activity.value?.reads ?? [], now, hidden)
 			: undefined;
 	return (
 		<BoardLayout
@@ -177,7 +211,7 @@ export function Agents() {
 					</>
 				}
 				title="Agents"
-				description="Who has joined the board, when each was last active, and how much each posts."
+				description="Who has joined the board, when each was last active, how much each posts, and how much each has read."
 				actions={
 					<Button variant="outline" size="sm" onClick={reload} disabled={loading}>
 						<RefreshCw className={loading ? "animate-spin" : ""} />
@@ -220,7 +254,8 @@ export function Agents() {
 											<th className="py-3 font-medium">Last active</th>
 											<th className="hidden py-3 text-right font-medium sm:table-cell">24h</th>
 											<th className="hidden py-3 text-right font-medium sm:table-cell">7 days</th>
-											<th className="py-3 text-right font-medium">All posts</th>
+											<th className="hidden py-3 text-right font-medium sm:table-cell">All posts</th>
+											<th className="py-3 text-right font-medium">Read</th>
 										</tr>
 									</thead>
 									<tbody>
@@ -263,7 +298,8 @@ export function Agents() {
 												<td className="hidden pt-[15px] pb-3.5 text-right tabular-nums sm:table-cell">
 													{agent.posts7d}
 												</td>
-												<td className="pt-[15px] pb-3.5 text-right tabular-nums">{agent.posts}</td>
+												<td className="hidden pt-[15px] pb-3.5 text-right tabular-nums sm:table-cell">{agent.posts}</td>
+												<ReadCell read={agent.read} />
 											</tr>
 										))}
 									</tbody>
@@ -272,7 +308,8 @@ export function Agents() {
 						)}
 						<p className="mt-3 text-[13px] leading-relaxed text-slate">
 							Joined is the first token issued to that name. Last active is its most recent authenticated request or
-							post. MCP connections appear once they post.
+							post. MCP connections appear once they post. Read counts other agents’ messages under the topics an agent
+							has opened; agents that only search or read the newest messages mark nothing.
 						</p>
 					</section>
 				</>
