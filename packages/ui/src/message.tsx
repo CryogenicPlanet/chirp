@@ -1,7 +1,7 @@
 import { authorLabel } from "@comms/protocol";
 import { DateTime } from "effect";
 import { Check, Link2, Reply } from "lucide-react";
-import { Fragment, memo, useEffect, useState } from "react";
+import { Fragment, memo, useEffect, useState, type ReactNode } from "react";
 import { topicHref, type BoardMessage } from "./board-api.ts";
 import { cn } from "./cn.ts";
 import { useComposerBridge } from "./composer-bridge.tsx";
@@ -212,41 +212,92 @@ export function MessageList({
 	readonly unreadFrom?: number | undefined;
 }) {
 	const now = useNow();
+	// Runs of three or more system events (same day, no unread marker inside) fold into one row.
+	const runEnd = new Map<number, number>();
+	for (let index = 0; index < messages.length;) {
+		let end = index;
+		while (
+			end < messages.length &&
+			messages[end]?.agent === "system" &&
+			(end === index || dayKey(messages[end - 1]?.created_at ?? 0) === dayKey(messages[end]?.created_at ?? 0)) &&
+			(end === index || messages[end]?.seq !== unreadFrom)
+		)
+			end++;
+		if (end - index >= 3) runEnd.set(index, end);
+		index = Math.max(end, index + 1);
+	}
+	const rows: Array<ReactNode> = [];
+	for (let index = 0; index < messages.length; index++) {
+		const message = messages[index];
+		if (message === undefined) continue;
+		const previous = messages[index - 1];
+		const newDay = previous === undefined || dayKey(previous.created_at) !== dayKey(message.created_at);
+		const end = runEnd.get(index);
+		rows.push(
+			<Fragment key={message.id}>
+				{message.seq === unreadFrom && (
+					<div
+						id="unread-divider"
+						className="my-2 flex scroll-mt-24 items-center gap-3 text-[12px] font-semibold text-danger"
+						role="separator"
+						aria-label="New messages"
+					>
+						<span className="h-px flex-1 bg-danger/40" />
+						<span>New</span>
+					</div>
+				)}
+				{newDay && (
+					<div className="my-3 flex items-center gap-3 text-[12px] font-medium text-slate" role="separator">
+						<span className="h-px flex-1 bg-rule" />
+						{dayLabel(message.created_at, now)}
+						<span className="h-px flex-1 bg-rule" />
+					</div>
+				)}
+				{end !== undefined ? (
+					<SystemRun messages={messages.slice(index, end)} now={now} />
+				) : (
+					<MemoMessage
+						message={message}
+						now={now}
+						compact={!newDay && message.seq !== unreadFrom && continues(previous, message)}
+						currentTopic={currentTopic}
+						{...(highlight ? { highlight } : {})}
+					/>
+				)}
+			</Fragment>,
+		);
+		if (end !== undefined) index = end - 1;
+	}
+	return <div className="flex flex-col">{rows}</div>;
+}
+
+/** Several system events in a row, folded to one line until opened. */
+function SystemRun({ messages, now }: { readonly messages: ReadonlyArray<BoardMessage>; readonly now: number }) {
+	const [open, setOpen] = useState(false);
+	const last = messages.at(-1);
+	if (open)
+		return (
+			<div className="flex flex-col">
+				{messages.map((message) => (
+					<MemoMessage key={message.id} message={message} now={now} />
+				))}
+				<button
+					type="button"
+					onClick={() => setOpen(false)}
+					className="cursor-pointer py-1 pl-12 text-left text-[12.5px] text-slate hover:text-ink"
+				>
+					Hide {messages.length} system events
+				</button>
+			</div>
+		);
 	return (
-		<div className="flex flex-col">
-			{messages.map((message, index) => {
-				const previous = messages[index - 1];
-				const newDay = previous === undefined || dayKey(previous.created_at) !== dayKey(message.created_at);
-				return (
-					<Fragment key={message.id}>
-						{message.seq === unreadFrom && (
-							<div
-								id="unread-divider"
-								className="my-2 flex scroll-mt-24 items-center gap-3 text-[12px] font-semibold text-danger"
-								role="separator"
-								aria-label="New messages"
-							>
-								<span className="h-px flex-1 bg-danger/40" />
-								<span>New</span>
-							</div>
-						)}
-						{newDay && (
-							<div className="my-3 flex items-center gap-3 text-[12px] font-medium text-slate" role="separator">
-								<span className="h-px flex-1 bg-rule" />
-								{dayLabel(message.created_at, now)}
-								<span className="h-px flex-1 bg-rule" />
-							</div>
-						)}
-						<MemoMessage
-							message={message}
-							now={now}
-							compact={!newDay && message.seq !== unreadFrom && continues(previous, message)}
-							currentTopic={currentTopic}
-							{...(highlight ? { highlight } : {})}
-						/>
-					</Fragment>
-				);
-			})}
-		</div>
+		<button
+			type="button"
+			onClick={() => setOpen(true)}
+			className="flex cursor-pointer items-baseline gap-2 py-1 pl-12 text-left text-[13px] text-slate hover:text-ink"
+		>
+			<span className="font-medium text-ink-soft">{messages.length} system events</span>
+			<span className="min-w-0 truncate">latest: {last?.body.replace(/\s+/g, " ")}</span>
+		</button>
 	);
 }

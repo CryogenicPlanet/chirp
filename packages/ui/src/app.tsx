@@ -22,6 +22,7 @@ import { Search } from "./search.tsx";
 import { TopicSettings } from "./topic-controls.tsx";
 import { useLoad } from "./use-load.ts";
 import { useIntent } from "./use-intent.ts";
+import { relativeTime } from "./time.ts";
 import { boardChanged } from "./live-events.ts";
 import { Composer } from "./composer.tsx";
 import { LoadProblem, useAutoRetry } from "./load-problem.tsx";
@@ -81,6 +82,22 @@ export function App() {
 				}}
 			/>
 		</TooltipProvider>
+	);
+}
+
+/** "claude: Got three quotes… · 2h" under a topic card. */
+function LatestLine({ message }: { readonly message: BoardMessage | undefined }) {
+	if (message === undefined) return null;
+	const text = message.body
+		.replace(/[`*_>#[\]()]/g, "")
+		.replace(/\s+/g, " ")
+		.trim();
+	return (
+		<span className="mt-0.5 flex min-w-0 gap-1 text-[13px] text-slate">
+			<span className="shrink-0 font-medium text-ink-soft">{message.agent}:</span>
+			<span className="min-w-0 truncate">{text}</span>
+			<span className="shrink-0">· {relativeTime(message.created_at, Date.now())}</span>
+		</span>
 	);
 }
 
@@ -282,6 +299,18 @@ function Board({
 		window.scrollBy(0, document.documentElement.scrollHeight - heightBefore.current);
 		heightBefore.current = null;
 	}, [history.older]);
+
+	// The newest message under each top-level topic, from the recent messages already loaded (root only).
+	const latestIn = useMemo(() => {
+		const latest = new Map<string, BoardMessage>();
+		if (path !== "" || view === undefined) return latest;
+		for (const message of view.messages) {
+			const top = message.topic.split("/")[0] ?? message.topic;
+			const current = latest.get(top);
+			if (current === undefined || current.seq < message.seq) latest.set(top, message);
+		}
+		return latest;
+	}, [path, view]);
 
 	const authRequired = error?.status === 401;
 	const segments = path?.split("/") ?? [];
@@ -499,14 +528,18 @@ function Board({
 																		<span className="text-[12px] font-normal text-slate">archived</span>
 																	)}
 																</span>
-																{(typeof item.meta.description === "string" ||
-																	typeof item.meta.status === "string") && (
-																	<span className="mt-0.5 block truncate text-[13px] text-slate">
-																		{typeof item.meta.status === "string" && (
-																			<span className="font-medium text-ink-soft">{item.meta.status} · </span>
-																		)}
-																		{typeof item.meta.description === "string" ? item.meta.description : ""}
-																	</span>
+																{latestIn.get(item.path) !== undefined ? (
+																	<LatestLine message={latestIn.get(item.path)} />
+																) : (
+																	(typeof item.meta.description === "string" ||
+																		typeof item.meta.status === "string") && (
+																		<span className="mt-0.5 block truncate text-[13px] text-slate">
+																			{typeof item.meta.status === "string" && (
+																				<span className="font-medium text-ink-soft">{item.meta.status} · </span>
+																			)}
+																			{typeof item.meta.description === "string" ? item.meta.description : ""}
+																		</span>
+																	)
 																)}
 															</span>
 															{item.unread > 0 && (
