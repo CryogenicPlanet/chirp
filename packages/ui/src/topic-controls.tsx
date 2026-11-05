@@ -111,6 +111,7 @@ function SettingsBody({ path, meta, archived, parentArchived = false, onSaved }:
 	const [description, setDescription] = useState(() => text(meta.description));
 	const [status, setStatus] = useState(() => text(meta.status));
 	const [draft, setDraft] = useState(() => JSON.stringify(meta, null, 2));
+	const [jsonEdited, setJsonEdited] = useState(false);
 	const [advanced, setAdvanced] = useState(false);
 	const [invalid, setInvalid] = useState(false);
 	const [busy, setBusy] = useState(false);
@@ -118,7 +119,12 @@ function SettingsBody({ path, meta, archived, parentArchived = false, onSaved }:
 	const [error, setError] = useState<BoardError | null>(null);
 	const disabled = busy || uncertain || parentArchived;
 	const locked = disabled || archived;
-	const mutate = (input: { readonly meta: Schema.JsonObject } | { readonly archived: boolean }, done: string) => {
+	// Which fields a save owns: only those are refreshed from the response, so drafts elsewhere survive.
+	const mutate = (
+		input: { readonly meta: Schema.JsonObject } | { readonly archived: boolean },
+		done: string,
+		owns: "details" | "json" | "other",
+	) => {
 		if (disabled) return;
 		setBusy(true);
 		setError(null);
@@ -130,9 +136,14 @@ function SettingsBody({ path, meta, archived, parentArchived = false, onSaved }:
 					setUncertain(result.failure.status === 0 || result.failure.status >= 500 || result.failure.status === 408);
 					return;
 				}
-				setDraft(JSON.stringify(result.success.meta, null, 2));
-				setDescription(text(result.success.meta.description));
-				setStatus(text(result.success.meta.status));
+				if (owns === "json" || !jsonEdited) {
+					setDraft(JSON.stringify(result.success.meta, null, 2));
+					setJsonEdited(false);
+				}
+				if (owns === "details") {
+					setDescription(text(result.success.meta.description));
+					setStatus(text(result.success.meta.status));
+				}
 				toast.success(done);
 				onSaved(result.success);
 			},
@@ -187,6 +198,7 @@ function SettingsBody({ path, meta, archived, parentArchived = false, onSaved }:
 								},
 							},
 							"Topic details saved",
+							"details",
 						);
 					}}
 				>
@@ -234,7 +246,11 @@ function SettingsBody({ path, meta, archived, parentArchived = false, onSaved }:
 							checked={isPublic}
 							disabled={locked}
 							onChange={(checked) =>
-								mutate({ meta: withField("public", checked) }, checked ? "Pages are public" : "Pages are private")
+								mutate(
+									{ meta: withField("public", checked) },
+									checked ? "Pages are public" : "Pages are private",
+									"other",
+								)
 							}
 						/>
 					</Row>
@@ -261,7 +277,7 @@ function SettingsBody({ path, meta, archived, parentArchived = false, onSaved }:
 									return;
 								}
 								setInvalid(false);
-								mutate({ meta: parsed.success }, "Metadata saved");
+								mutate({ meta: parsed.success }, "Metadata saved", "json");
 							}}
 						>
 							<p className="mb-2 text-[13px] leading-relaxed text-slate" id={`${id}-json-hint`}>
@@ -277,6 +293,7 @@ function SettingsBody({ path, meta, archived, parentArchived = false, onSaved }:
 								disabled={locked}
 								onChange={(event) => {
 									setDraft(event.target.value);
+									setJsonEdited(true);
 									setInvalid(false);
 								}}
 							/>
@@ -306,7 +323,7 @@ function SettingsBody({ path, meta, archived, parentArchived = false, onSaved }:
 							size="sm"
 							type="button"
 							disabled={disabled}
-							onClick={() => mutate({ archived: !archived }, archived ? "Topic unarchived" : "Topic archived")}
+							onClick={() => mutate({ archived: !archived }, archived ? "Topic unarchived" : "Topic archived", "other")}
 						>
 							{archived ? <ArchiveRestore /> : <Archive />}
 							{archived ? "Unarchive" : "Archive"}

@@ -199,6 +199,13 @@ export function Search({
 		const parsed = parseQuery(input);
 		const within = parsed.topic || (everywhere ? "" : path);
 		if (input.trim() === "") {
+			// Cleared from the keyboard too: the address stops carrying the old search.
+			if (new URLSearchParams(window.location.search).has("q")) {
+				const url = new URL(window.location.href);
+				url.searchParams.delete("q");
+				written.current = "";
+				window.history.replaceState(window.history.state, "", url.href);
+			}
 			setSearched(null);
 			setItems([]);
 			setError("");
