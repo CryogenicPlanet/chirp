@@ -312,6 +312,9 @@ export const body = <A>(schema: Schema.ConstraintDecoder<A>) =>
 		Effect.mapError(() => new AuthError({ code: "invalid_request" })),
 	);
 
+const carriesSessionCookie = (request: HttpServerRequest.HttpServerRequest) =>
+	(request.headers.cookie ?? "").split(";").some((part) => part.trim().startsWith(`${sessionCookie}=`));
+
 export const sessionToken = (request: HttpServerRequest.HttpServerRequest) => {
 	const values = (request.headers.cookie ?? "")
 		.split(";")
@@ -421,9 +424,7 @@ export const authRoute = (auth: Auth["Service"], requestId: string) =>
 		if (request.method === "GET" && path === "/_boot/auth/state")
 			return yield* authFailure(
 				Effect.gen(function* () {
-					const explicit =
-						request.headers.authorization !== undefined ||
-						(request.headers.cookie ?? "").split(";").some((part) => part.trim().startsWith(`${sessionCookie}=`));
+					const explicit = request.headers.authorization !== undefined || carriesSessionCookie(request);
 					const identity = explicit ? yield* authenticate(auth, request) : null;
 					return HttpServerResponse.jsonUnsafe(
 						{
@@ -468,8 +469,8 @@ export const authRoute = (auth: Auth["Service"], requestId: string) =>
 					// Sign-in offers GitHub or Google only once an identity from it is linked; a read, no issuer call.
 					return HttpServerResponse.text(
 						path === "/setup"
-							? authPage("setup", [], yield* auth.ownerRequired)
-							: authPage("login", yield* auth.linkedProviders),
+							? authPage("setup", [], { askName: yield* auth.ownerRequired })
+							: authPage("login", yield* auth.linkedProviders, { checkSession: !carriesSessionCookie(request) }),
 						{ contentType: "text/html", headers: pageHeaders },
 					);
 				}
