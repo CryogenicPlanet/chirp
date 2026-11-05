@@ -171,7 +171,7 @@ const policy = {
 	},
 	owner_name_invalid: {
 		status: 400,
-		hint: "Send name, what agents should call you: 1–64 lowercase letters, digits, dot, underscore or hyphen, starting with a letter or digit, other than boot, system or a name an agent already holds. Only first setup takes a name; open /setup if this page does not ask for one.",
+		hint: "Send name, what agents should call you: 1–64 lowercase letters, digits, dot, underscore or hyphen, starting with a letter or digit, other than boot, system, mcp, here or a name an agent already holds. Only first setup takes a name; open /setup if this page does not ask for one.",
 	},
 	passkey_exists: { status: 409, hint: "Use the registered passkey or choose a different authenticator." },
 	passkey_not_found: { status: 404, hint: "Inspect /_boot/auth/passkeys and select an existing passkey." },

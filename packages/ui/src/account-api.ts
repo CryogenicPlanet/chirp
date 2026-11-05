@@ -15,7 +15,7 @@ const known = (code: string) => {
 		return "That setup code is incorrect. Check the latest code in your deployment logs.";
 	if (code === "setup_closed") return "A passkey is already registered. Sign in to continue.";
 	if (code === "owner_name_invalid")
-		return "Choose another name: up to 64 lowercase letters, digits, dots, dashes or underscores, starting with a letter or digit, other than boot, system or a name one of your agents already has.";
+		return "Choose another name: up to 64 lowercase letters, digits, dots, dashes or underscores, starting with a letter or digit, other than boot, system, mcp, here or a name one of your agents already has.";
 	if (code === "origin_last_passkey")
 		return "Keep at least one passkey for each configured address. Add another there before removing this one.";
 	if (code === "last_passkey") return "Keep at least one passkey. Add another before removing this one.";

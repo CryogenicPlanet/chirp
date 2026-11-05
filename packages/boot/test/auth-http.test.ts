@@ -158,7 +158,7 @@ it("names the board's human at first setup, signs them in under that name and re
 	expect(page).toContain('id="name"');
 	// A name an agent has asked for is taken; so are the board's own voices and anything outside agent names.
 	expect((await app.post("/auth/enroll", { name: "codex", kind: "codex", host: "laptop" })).status).toBe(200);
-	for (const name of [undefined, "", "boot", "system", "Alice", "-alice", "codex", "a".repeat(65)])
+	for (const name of [undefined, "", "boot", "system", "mcp", "here", "Alice", "-alice", "codex", "a".repeat(65)])
 		expect(
 			await refusal(
 				await app.post("/_boot/auth/setup/options", { code: app.code(), ...(name === undefined ? {} : { name }) }),

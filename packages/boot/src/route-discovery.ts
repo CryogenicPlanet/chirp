@@ -179,7 +179,7 @@ const routes = [
 		"post",
 		["/_boot/auth/setup/options"],
 		"public",
-		"Start first-passkey registration with {code,name} from boot stdout or the operator command, and exact Origin. name is what agents call the human, required while no owner is recorded (see owner_required) and ignored afterwards, so a reopened setup never renames: an agent name other than boot, system or one an agent holds or has requested, else owner_name_invalid before any passkey is created. Returns {id,options,identities}: identities lists {provider,label} for each GitHub or Google identity the operator offered with that code, which finishing links; it is empty without an offer and for a reopened setup.",
+		"Start first-passkey registration with {code,name} from boot stdout or the operator command, and exact Origin. name is what agents call the human, required while no owner is recorded (see owner_required) and ignored afterwards, so a reopened setup never renames: an agent name other than boot, system, mcp, here or one an agent holds or has requested, else owner_name_invalid before any passkey is created. Returns {id,options,identities}: identities lists {provider,label} for each GitHub or Google identity the operator offered with that code, which finishing links; it is empty without an offer and for a reopened setup.",
 	],
 	[
 		"post",

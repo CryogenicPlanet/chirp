@@ -11,8 +11,11 @@ import { SqlClient } from "effect/unstable/sql";
 export const ownerKey = "owner_name";
 /** Every image before the owner was named called the human this, so boards set up then keep it with their history. */
 export const legacyOwner = "rahul";
-const reserved: ReadonlyArray<string> = ["boot", "system"];
-/** Agent names' grammar. Boot and system speak for the board itself. */
+const reserved: ReadonlyArray<string> = ["boot", "system", "mcp", "here"];
+/**
+ * Agent names' grammar. Boot and system speak for the board itself; `mcp` is the MCP extension's fallback posting name,
+ * and `here` would receive every `@here` mention.
+ */
 export const validOwnerName = (name: string) => /^[a-z0-9][a-z0-9._-]{0,63}$/.test(name) && !reserved.includes(name);
 
 const Row = Schema.Array(Schema.Struct({ value: Schema.String }));
