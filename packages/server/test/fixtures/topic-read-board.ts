@@ -64,7 +64,12 @@ export interface BoardShape {
 export const seedBoard = (sql: SqlClient, shape: BoardShape, pagesDirectory: string | undefined) =>
 	Effect.gen(function* () {
 		const next = random(shape.seed);
-		const pick = <A>(items: readonly A[]): A => items[Math.floor(next() * items.length)] as A;
+		const pick = <A>(items: readonly A[]): A => {
+			const item = items[Math.floor(next() * items.length)];
+			// Every call site picks from a list it has already filled; an empty one is a bug in this fixture.
+			if (item === undefined) throw new Error("pick from an empty list");
+			return item;
+		};
 		const ceiling = shape.messages - 25;
 		const paths: string[] = [];
 		const roots = Math.min(25, shape.topics);
