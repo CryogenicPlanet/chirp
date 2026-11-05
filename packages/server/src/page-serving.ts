@@ -5,6 +5,7 @@ import type { ExtensionCapabilities } from "./kernel/extension-capabilities.ts";
 import { escapeHtml, pageDocument, pageHref } from "./page-markdown.ts";
 import { htmlHeaders as pageHeaders } from "./html-headers.ts";
 import { pageFailure } from "./page-failure.ts";
+import { decorateHtmlPage, pageChrome } from "./page-comments.ts";
 
 export interface PageMount {
 	readonly root: string;
@@ -37,13 +38,17 @@ const pageContentType = (name: string, mime: string | null, sample: Option.Optio
 	return mime ?? "application/octet-stream";
 };
 
-/** Serve a page subtree through an explicitly chosen URL mount, preserving publication fencing. */
+/**
+ * Serve a page subtree through an explicitly chosen URL mount, preserving publication fencing. `viewer` names the
+ * signed-in human reading the board's own /p mount; only then do rendered pages carry the comment client.
+ */
 export const servePage = (
 	request: HttpServerRequest.HttpServerRequest,
 	options: PageMount,
 	pages: Pages["Service"],
 	read: ExtensionCapabilities["read"],
 	fs: FileSystem.FileSystem,
+	viewer?: string,
 ) =>
 	Effect.gen(function* () {
 		const requestScope = yield* Effect.scope;
@@ -85,14 +90,22 @@ export const servePage = (
 					selected = name ? `${name}/${index}` : index;
 					target = yield* pages.resolve(selected);
 				}
-				if (selected.toLowerCase().endsWith(".md") && url.searchParams.get("raw") !== "1")
+				const raw = url.searchParams.get("raw") === "1";
+				if (selected.toLowerCase().endsWith(".md") && !raw) {
+					const text = yield* pages.read(selected);
 					return HttpServerResponse.text(
-						pages.render(yield* pages.read(selected), display(selected), { mount: options.mount }),
-						{
-							contentType: "text/html; charset=utf-8",
-							headers: pageHeaders,
-						},
+						pages.render(text, display(selected), {
+							mount: options.mount,
+							...(viewer === undefined ? {} : { chrome: pageChrome(text, selected, viewer) }),
+						}),
+						{ contentType: "text/html; charset=utf-8", headers: pageHeaders },
 					);
+				}
+				if (viewer !== undefined && !raw && /\.html?$/i.test(selected))
+					return HttpServerResponse.text(decorateHtmlPage(yield* pages.read(selected), selected, viewer), {
+						contentType: "text/html; charset=utf-8",
+						headers: pageHeaders,
+					});
 				// Open while the path and publication visibility are protected. The request scope owns this descriptor, not the SQL snapshot.
 				const file = yield* fs.open(target.absolute).pipe(Effect.provideService(Scope.Scope, requestScope));
 				const info = yield* file.stat;

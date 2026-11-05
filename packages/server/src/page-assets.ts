@@ -1,5 +1,5 @@
 import { Effect, Layer, Path } from "effect";
-import { failure } from "./conversation-request.ts";
+import { failure, identity } from "./conversation-request.ts";
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
 
 // Only these package-owned files are public; never serve a node_modules directory.
@@ -15,6 +15,19 @@ const headers = Object.freeze({
 	"referrer-policy": "no-referrer",
 });
 export const routes = Layer.mergeAll(
+	// Unlike the assets above, which boot serves before sign-in, the comment client is only for signed-in readers.
+	HttpRouter.add(
+		"GET",
+		"/page-assets/comments.js",
+		Effect.gen(function* () {
+			yield* identity("read");
+			const path = yield* Path.Path;
+			return yield* HttpServerResponse.file(path.join(import.meta.dirname, "page-comments.js"), {
+				contentType: "text/javascript; charset=utf-8",
+				headers,
+			});
+		}).pipe(failure),
+	),
 	HttpRouter.add(
 		"GET",
 		"/page-assets/mermaid-init.js",

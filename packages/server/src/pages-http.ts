@@ -8,13 +8,15 @@ import { servePage } from "./page-serving.ts";
 import { pageFailure } from "./page-failure.ts";
 
 const page = Effect.gen(function* () {
-	yield* identity("read");
+	const who = yield* identity("read");
 	return yield* servePage(
 		yield* HttpServerRequest.HttpServerRequest,
 		{ root: "", mount: "/p" },
 		yield* Pages,
 		(yield* Messages).read,
 		yield* FileSystem.FileSystem,
+		// Page comments are for people in a browser; agents reading with a token get the page unchanged.
+		who.kind === "human" ? who.agent : undefined,
 	);
 }).pipe(pageFailure);
 export const routes = Layer.mergeAll(HttpRouter.add("GET", "/p/*", page), assetRoutes);
