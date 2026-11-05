@@ -118,7 +118,7 @@ await Effect.runPromise(
 		assert.deepEqual(JSON.parse(values[0]?.tags ?? "null"), ["雪", "quoted"]);
 		assert.deepEqual(JSON.parse(values[0]?.meta ?? "null"), JSON.parse(domainMeta));
 		assert.equal(values[0]?.previous, previous);
-		assert.equal((yield* sql`SELECT migration_id FROM core_migrations`).length, 14);
+		assert.equal((yield* sql`SELECT migration_id FROM core_migrations`).length, 15);
 		assert.deepEqual(yield* sql`SELECT updated_seq,mentions,previous_mentions,created_at FROM messages`, [
 			{ updated_seq: 0, mentions: '["@codex"]', previous_mentions: '["@prior"]', created_at: 1800000000000 },
 		]);
@@ -156,7 +156,7 @@ await Effect.runPromise(
 			"résumé ALPHA ~~@codex~~ https://host/@ignored " + "large ".repeat(15000),
 		);
 		assert.deepEqual(yield* sql`SELECT outcome FROM idempotency`, [{ outcome: "original" }]);
-		assert.equal((yield* sql`SELECT migration_id FROM core_migrations`).length, 14);
+		assert.equal((yield* sql`SELECT migration_id FROM core_migrations`).length, 15);
 		for (const [id, seq] of [
 			["Case", 2],
 			["case", 3],

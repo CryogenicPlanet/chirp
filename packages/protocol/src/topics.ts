@@ -1,4 +1,4 @@
-import { Message } from "./messages.ts";
+import { MessageView } from "./messages.ts";
 import { Schema } from "effect";
 export const TopicSummary = Schema.Struct({
 	path: Schema.String,
@@ -14,7 +14,7 @@ export const TopicResult = Schema.Struct({
 	archived_at: Schema.NullOr(Schema.Int),
 	archived_root: Schema.NullOr(Schema.String),
 	subtopics: Schema.Array(TopicSummary),
-	messages: Schema.Array(Message),
+	messages: Schema.Array(MessageView),
 	fence: Schema.Int,
 	unread: Schema.Int,
 	index: Schema.NullOr(Schema.String),

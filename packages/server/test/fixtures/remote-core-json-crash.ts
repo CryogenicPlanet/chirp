@@ -81,7 +81,7 @@ await Effect.runPromise(
 				]);
 		}
 		yield* initializeRemoteCore(sql, "json-crash");
-		assert.equal((yield* sql`SELECT migration_id FROM core_migrations`).length, 14);
+		assert.equal((yield* sql`SELECT migration_id FROM core_migrations`).length, 15);
 		assert.deepEqual(
 			yield* types(),
 			Array.from({ length: 3 }, () => ({ type: settings.engine === "pg" ? "jsonb" : "json" })),

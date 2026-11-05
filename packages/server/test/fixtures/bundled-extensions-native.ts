@@ -79,7 +79,7 @@ await Effect.runPromise(
 				changed: unavailable,
 			},
 			pages: { serve: unavailable },
-			messages: { query: unavailable, create: unavailable },
+			messages: { query: unavailable, create: unavailable, markSeen: unavailable },
 			topics: { read: unavailable, meta: unavailable, markRead: unavailable },
 			log: Object.assign(unavailable, { set: unavailable }),
 			kv: () => ({ get: unavailable, set: unavailable, delete: unavailable }),

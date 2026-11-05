@@ -144,11 +144,12 @@ it("reindexes both historical mention images on upgrade without changing message
 	// Restore the historical registry shape without removing its registrations.
 	await fixture.sql("ALTER TABLE protected_sql_tables DROP COLUMN extension");
 	await fixture.sql("ALTER TABLE protected_sql_tables DROP COLUMN migration");
+	await fixture.sql("DROP TABLE seen");
 	await fixture.sql("DROP TABLE IF EXISTS core_migrations");
 	await fixture.sql("PRAGMA user_version=9");
 	const resumed = await fixture.launch();
 	await resumed.ready(cookie);
-	expect(await fixture.sql("PRAGMA user_version")).toEqual([{ user_version: 14 }]);
+	expect(await fixture.sql("PRAGMA user_version")).toEqual([{ user_version: 15 }]);
 	expect(await fixture.sql("SELECT * FROM reads ORDER BY instance,topic")).toEqual(marks);
 	expect(
 		await fixture.sql("SELECT COUNT(*) AS count FROM messages WHERE topic='history-pages' AND mentions='[\"@alice\"]'"),

@@ -10,6 +10,7 @@ import { refusal } from "../../conversation-request.ts";
 import { KernelError } from "../../kernel/boot-channel.ts";
 
 import { markView } from "./read-view.ts";
+import { withSeenBy } from "./read-marks.ts";
 import { topicPathDetail, validTopic } from "./messages.ts";
 
 export const topicHandlers = (api: typeof Api, extension: ExtensionApi) => {
@@ -22,7 +23,9 @@ export const topicHandlers = (api: typeof Api, extension: ExtensionApi) => {
 					return yield* new KernelError({ code: "input_invalid", detail: topicPathDetail("path") });
 				const result = yield* ctx.topics.read(path, { depth, archived: query.archived === "1" });
 				yield* markView(ctx, result.messages, path, query.mark !== "0");
-				return result;
+				return query.receipts === "1"
+					? { ...result, messages: yield* withSeenBy(ctx.db, ctx, result.messages) }
+					: result;
 			}),
 		);
 	return HttpApiBuilder.group(api, "topics", (handlers) =>

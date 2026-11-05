@@ -24,6 +24,7 @@ export const initialize = Effect.gen(function* () {
 				yield* sql`SELECT id,seq,topic,agent,instance,body,tags,meta,created_at,edited_at,deleted_at,updated_seq,previous,mentions,previous_mentions FROM messages LIMIT 1`;
 				yield* sql`SELECT instance,${sql("key")},kind,input_hash,outcome,expires_at FROM idempotency LIMIT 1`;
 				yield* sql`SELECT instance,topic,seq FROM ${sql("reads")} LIMIT 1`;
+				yield* sql`SELECT seq,instance,label,agent,seen_at FROM seen LIMIT 1`;
 				yield* sql`SELECT ns,${sql("key")},value,updated_seq,previous FROM kv LIMIT 1`;
 				yield* sql`SELECT seq,from_path,to_path,marker,completed FROM topic_page_continuations LIMIT 1`;
 				yield* on(sql, {
@@ -137,6 +138,13 @@ export const initialize = Effect.gen(function* () {
 		{ id: 12, name: "search_diacritics", run: Effect.void },
 		{ id: 13, name: "mention_symbol_boundaries", run: reindexMentions(sql) },
 		{ id: 14, name: "protection_ownership", run: migrateProtectionOwnership(sql) },
+		{
+			id: 15,
+			name: "seen",
+			run: sql`CREATE TABLE seen(seq INTEGER NOT NULL,instance TEXT NOT NULL,label TEXT NOT NULL,agent TEXT NOT NULL,seen_at INTEGER NOT NULL,PRIMARY KEY(seq,instance,label))`.pipe(
+				Effect.asVoid,
+			),
+		},
 	];
 	const supported = steps(0).length;
 	yield* sql`PRAGMA busy_timeout = 2000`;
@@ -169,6 +177,7 @@ export const initialize = Effect.gen(function* () {
 			yield* sql`SELECT instance,key,kind,input_hash,outcome FROM idempotency LIMIT 1`;
 			yield* sql`SELECT archived_at FROM topics LIMIT 1`;
 			yield* sql`SELECT instance,topic,seq FROM reads LIMIT 1`;
+			yield* sql`SELECT seq,instance,label,agent,seen_at FROM seen LIMIT 1`;
 		}),
 	);
 });

@@ -98,7 +98,7 @@ try {
 			assert.equal(altered.failure, "undo_wrapper_probe");
 			phase = "restart";
 			yield* initializeRemoteCore(sql, "unaccent-probe");
-			assert.equal((yield* sql`SELECT migration_id FROM core_migrations`).length, 14);
+			assert.equal((yield* sql`SELECT migration_id FROM core_migrations`).length, 15);
 			assert.equal((yield* postgresSearchMode(sql)) === "folded", folding);
 		}).pipe(Effect.provide(layer), Effect.scoped),
 	);

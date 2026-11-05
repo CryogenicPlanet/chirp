@@ -49,6 +49,7 @@ await Effect.runPromise(
 			// Reconstruct the historical core12 fixture, including its pre-provenance registry shape.
 			yield* sql`ALTER TABLE protected_sql_tables DROP COLUMN extension`;
 			yield* sql`ALTER TABLE protected_sql_tables DROP COLUMN migration`;
+			yield* sql`DROP TABLE seen`;
 			yield* sql`DELETE FROM core_migrations WHERE migration_id>=13`;
 			if (engine === "sqlite") yield* sql`PRAGMA user_version=12`;
 			const prefix = yield* sql`SELECT * FROM core_migrations ORDER BY migration_id`;
@@ -103,6 +104,7 @@ await Effect.runPromise(
 			// Reconstruct the historical core12 fixture, including its pre-provenance registry shape.
 			yield* sql`ALTER TABLE protected_sql_tables DROP COLUMN extension`;
 			yield* sql`ALTER TABLE protected_sql_tables DROP COLUMN migration`;
+			yield* sql`DROP TABLE seen`;
 			yield* sql`DELETE FROM core_migrations WHERE migration_id>=13`;
 			if (engine === "sqlite") yield* sql`PRAGMA user_version=12`;
 			yield* initialize;

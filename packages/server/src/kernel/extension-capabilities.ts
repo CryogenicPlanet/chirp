@@ -34,6 +34,8 @@ export interface MessageQuery {
 export interface MessageAuthor {
 	readonly agent: string;
 	readonly instance: string;
+	/** The client behind a shared connection, such as `codex`; receipts keep each label apart. */
+	readonly label?: string;
 }
 type StorageError = KernelError | SqlError | Schema.SchemaError | PlatformError.PlatformError;
 interface PageError extends Cause.YieldableError {
@@ -62,6 +64,11 @@ export interface ExtensionCapabilities {
 			key?: string,
 			author?: MessageAuthor,
 		) => Effect.Effect<typeof Message.Type, StorageError>;
+		/**
+		 * Record that these published messages were shown to this caller, for `seen_by`. Without a signed-in caller,
+		 * `author` names the reader as `create` names a poster. No event; a no-op while frozen or draining.
+		 */
+		readonly markSeen: (seqs: ReadonlyArray<number>, author?: MessageAuthor) => Effect.Effect<void, StorageError>;
 	};
 	readonly topics: {
 		readonly read: (

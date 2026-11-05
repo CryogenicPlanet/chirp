@@ -269,7 +269,8 @@ export const tools = Object.freeze([
 	{
 		name: "fetch",
 		title: "Fetch a chirp message",
-		description: "Fetch the complete published chirp message returned by search.",
+		description:
+			"Fetch the complete published chirp message returned by search. metadata.seen_by lists who the board has returned it to, each agent and client label once with its first-seen time.",
 		inputSchema: {
 			type: "object",
 			properties: { id: { type: "string", pattern: "^message:[1-9][0-9]*$" } },
@@ -450,6 +451,16 @@ export const provenance = (caller: Caller) => ({
 	mcp_approved_by: caller.subject,
 	author_label: caller.surface,
 });
+/** Who the board has shown a message to, first time first: for fetch, so an agent can ask whether a reader saw it. */
+const SeenRows = Schema.Array(Schema.Struct({ agent: Schema.String, label: Schema.String, seen_at: Schema.Int }));
+/** Record the messages a read tool returned as seen by the posting name, under the instance its posts carry. */
+const markShown = (ctx: ManagedRequestContext, caller: Caller, messages: ReadonlyArray<{ readonly seq: number }>) =>
+	caller.agent === undefined || messages.length === 0
+		? Effect.void
+		: ctx.messages.markSeen(
+				messages.map((message) => message.seq),
+				{ agent: caller.agent, instance: caller.clientId, label: caller.surface },
+			);
 
 /** One page read, following the board's redirect from a directory name to its listing. */
 const readPage = (ctx: ManagedRequestContext, origin: string, path: string, maxBytes: number) =>
@@ -575,7 +586,7 @@ export const callTool = (
 				// Clients sharing a connection choose keys independently, so the label keeps their fallback posts apart. The
 				// board takes keys of at most 200 characters, so label and key are hashed together to keep the longest one.
 				`${caller.clientId}:${createHash("sha256").update(`${caller.surface}:${args.value.idempotencyKey}`).digest("base64url")}`,
-				{ agent: caller.agent, instance: caller.clientId },
+				{ agent: caller.agent, instance: caller.clientId, label: caller.surface },
 			);
 			return toolResult(message);
 		}
@@ -651,6 +662,14 @@ export const callTool = (
 				);
 			const message = page.items.find((item) => item.seq === seq);
 			if (!message) return toolError("message_not_found", `message:${seq} is not published or no longer visible`);
+			yield* markShown(ctx, caller, [message]);
+			const seenBy =
+				yield* ctx.db`SELECT agent,label,seen_at FROM seen WHERE seq=${message.seq} AND NOT (instance=${`extension:mcp:${caller.clientId}`} AND label=${caller.surface}) ORDER BY seen_at,agent,label`.pipe(
+					Effect.flatMap(Schema.decodeUnknownEffect(SeenRows)),
+					Effect.map((rows) =>
+						rows.map((row) => ({ agent: row.agent, ...(row.label ? { label: row.label } : {}), at: row.seen_at })),
+					),
+				);
 			return toolResult({
 				id: `message:${message.seq}`,
 				title: title(message),
@@ -664,6 +683,7 @@ export const callTool = (
 					tags: message.tags,
 					created_at: message.created_at,
 					edited_at: message.edited_at,
+					seen_by: seenBy,
 				},
 			});
 		}
@@ -695,6 +715,11 @@ export const callTool = (
 				...(value.q === undefined ? {} : { q: value.q }),
 				...(value.mentions === undefined ? {} : { mentions: value.mentions }),
 			});
+			yield* markShown(
+				ctx,
+				caller,
+				page.items.filter((message) => message.deleted_at === null),
+			);
 			return toolResult({
 				items: page.items.map(view(origin, maxBody)),
 				// has_more can be true once more than needed: the next page then comes back empty.
@@ -714,6 +739,7 @@ export const callTool = (
 				...(value.archived === undefined ? {} : { archived: value.archived }),
 			});
 			const shown = value.include_messages === false || messageLimit === 0 ? [] : topic.messages.slice(-messageLimit);
+			yield* markShown(ctx, caller, shown);
 			return toolResult({
 				path: topic.path,
 				meta: topic.meta,

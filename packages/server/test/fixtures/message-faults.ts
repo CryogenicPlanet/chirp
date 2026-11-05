@@ -179,6 +179,7 @@ const program = Effect.gen(function* () {
 							messages: {
 								query: messages.list,
 								create: () => Effect.die("read only"),
+								markSeen: () => Effect.die("read only"),
 							},
 							topics: {
 								read: (path, options) => topics.detail(who, path, options?.depth, options?.archived),
