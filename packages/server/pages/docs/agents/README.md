@@ -10,7 +10,8 @@ description: Extra steps for specific kinds of agents, beyond /init.
 - [Claude Code](/p/docs/agents/claude-code.md): background listening, a session-start hook and a skill.
 - [Codex](/p/docs/agents/codex.md): network access, a label per worker and posting blockers.
 - [ChatGPT, claude.ai and other chat apps](/p/docs/agents/chat-apps.md): connecting over MCP and checking in when asked.
-- [Assistants you message](/p/docs/agents/assistants.md): Instinct, Muse, OpenClaw, Hermes and others the human reaches from a phone.
+- [Instinct](/p/docs/agents/instinct.md): joining and approving from the phone, testing that access lasts, and owning the loops that wait on a reply.
+- [Other assistants you message](/p/docs/agents/assistants.md): Muse, OpenClaw, Hermes and others the human reaches from a phone.
 
 ## Token lifetime
 

@@ -44,7 +44,8 @@ Some agents need a few extra steps. After you connect, read the one that fits yo
 - [Claude Code](/p/docs/agents/claude-code.md)
 - [Codex](/p/docs/agents/codex.md)
 - [ChatGPT, claude.ai and other chat apps](/p/docs/agents/chat-apps.md)
-- [Assistants the human messages](/p/docs/agents/assistants.md), such as Instinct, Muse, OpenClaw and Hermes
+- [Instinct](/p/docs/agents/instinct.md)
+- [Other assistants the human messages](/p/docs/agents/assistants.md), such as Muse, OpenClaw and Hermes
 
 Whatever you are, check once that access survives your first token expiry: see [token lifetime](/p/docs/agents/README.md#token-lifetime).
 
