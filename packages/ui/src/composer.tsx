@@ -46,6 +46,18 @@ const writeDraft = (key: string, draft: typeof StoredDraft.Type) => {
 		// Storage can be unavailable; the draft then lives only while the page is open.
 	}
 };
+/** Starts a reply as a topic's stored draft, for opening that topic from a view without a composer. */
+export const stashReply = (reply: {
+	readonly agent: string;
+	readonly label: string | undefined;
+	readonly seq: number;
+	readonly topic: string;
+}) => {
+	const who = reply.label === undefined ? `@${reply.agent}` : `@${reply.agent}/${reply.label}`;
+	const key = `chirp:draft:${reply.topic}`;
+	const existing = readDraft(key);
+	writeDraft(key, { topic: reply.topic, body: `${who} re #${reply.seq} ${existing?.body ?? ""}` });
+};
 // The partial @mention immediately before the caret, using the server's boundary rule.
 const partialMention = /(?:^|[^\p{L}\p{N}\p{M}@/:])@([a-z0-9._/-]*)$/u;
 

@@ -24,12 +24,12 @@ import { useLoad } from "./use-load.ts";
 import { useIntent } from "./use-intent.ts";
 import { relativeTime } from "./time.ts";
 import { boardChanged } from "./live-events.ts";
-import { Composer } from "./composer.tsx";
+import { Composer, stashReply } from "./composer.tsx";
 import { LoadProblem, useAutoRetry } from "./load-problem.tsx";
 import { HistoryEdge } from "./history-edge.tsx";
 import { hasTopicContext, TopicContextBar, TopicRail } from "./topic-context.tsx";
 import { useOlderMessages } from "./older-messages.ts";
-import { Link, useLocation, useScrollOnNavigate } from "./router.tsx";
+import { Link, navigate, useLocation, useScrollOnNavigate } from "./router.tsx";
 import { Bot, FileText, Hash, Home, Puzzle, RefreshCw, Settings2 } from "lucide-react";
 import { Button, buttonVariants } from "./ui/button.tsx";
 import { Badge } from "./ui/badge.tsx";
@@ -179,7 +179,19 @@ function Board({
 	const [searching, setSearching] = useState(() => new URLSearchParams(search).has("q"));
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const composer = useRef<ComposerBridge>(null);
-	const bridge = useMemo<ComposerBridge>(() => ({ reply: (reply) => composer.current?.reply(reply) }), []);
+	const bridge = useMemo<ComposerBridge>(
+		() => ({
+			reply: (reply) => {
+				if (composer.current !== null) composer.current.reply(reply);
+				else {
+					// No composer here (the search page): start the reply as that topic's draft and open it.
+					stashReply(reply);
+					navigate(topicHref(reply.topic));
+				}
+			},
+		}),
+		[],
+	);
 	useEffect(() => {
 		setSettingsOpen(false);
 	}, [pathname]);
@@ -444,7 +456,7 @@ function Board({
 										<RefreshCw className={cn(loading && "animate-spin")} />
 									</Button>
 								</Tooltip>
-								{path && view && (
+								{path && fresh && view && (
 									<Tooltip content="Topic settings">
 										<Button
 											variant="ghost"
@@ -499,7 +511,7 @@ function Board({
 								{view === undefined && !error && <MessagesSkeleton />}
 								{view && !authRequired && (
 									<>
-										{path !== "" && (
+										{path !== "" && fresh && (
 											<TopicSettings
 												open={settingsOpen}
 												onOpenChange={setSettingsOpen}

@@ -95,7 +95,9 @@ export function Search({
 	const location = useLocation();
 	const fromUrl = new URLSearchParams(location.search).get("q") ?? "";
 	const [input, setInput] = useState(fromUrl);
-	const [everywhere, setEverywhere] = useState(path === "");
+	const [everywhere, setEverywhere] = useState(
+		() => path === "" || new URLSearchParams(window.location.search).get("scope") === "all",
+	);
 	const [items, setItems] = useState<ReadonlyArray<BoardMessage>>([]);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState("");
@@ -203,6 +205,7 @@ export function Search({
 			if (new URLSearchParams(window.location.search).has("q")) {
 				const url = new URL(window.location.href);
 				url.searchParams.delete("q");
+				url.searchParams.delete("scope");
 				written.current = "";
 				window.history.replaceState(window.history.state, "", url.href);
 			}
@@ -214,6 +217,8 @@ export function Search({
 		}
 		if (within && !validTopic(within)) {
 			setError("in: needs a topic path, like in:home/renovation.");
+			setItems([]);
+			setSearched(null);
 			setLoading(false);
 			return;
 		}
@@ -224,6 +229,9 @@ export function Search({
 		const timer = window.setTimeout(() => {
 			const url = new URL(window.location.href);
 			url.searchParams.set("q", input.trim());
+			// The scope travels with the query, so a refreshed or shared address shows the same results.
+			if (everywhere && path !== "") url.searchParams.set("scope", "all");
+			else url.searchParams.delete("scope");
 			written.current = input.trim();
 			window.history.replaceState(window.history.state, "", url.href);
 			void Effect.runPromise(
@@ -250,6 +258,8 @@ export function Search({
 							},
 							onFailure: (failure) => {
 								setError(failure.message);
+								setItems([]);
+								setSearched(null);
 								setLoading(false);
 							},
 						}),
@@ -267,6 +277,7 @@ export function Search({
 		setInput("");
 		const url = new URL(window.location.href);
 		url.searchParams.delete("q");
+		url.searchParams.delete("scope");
 		written.current = "";
 		window.history.replaceState(window.history.state, "", url.href);
 		field.current?.focus();

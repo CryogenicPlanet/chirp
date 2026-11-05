@@ -140,10 +140,10 @@ function SettingsBody({ path, meta, archived, parentArchived = false, onSaved }:
 					setDraft(JSON.stringify(result.success.meta, null, 2));
 					setJsonEdited(false);
 				}
-				if (owns === "details") {
+				// Details refresh after their own save, and after any save when they had no unsaved edits.
+				if (owns === "details" || description === text(meta.description))
 					setDescription(text(result.success.meta.description));
-					setStatus(text(result.success.meta.status));
-				}
+				if (owns === "details" || status === text(meta.status)) setStatus(text(result.success.meta.status));
 				toast.success(done);
 				onSaved(result.success);
 			},
