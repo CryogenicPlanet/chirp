@@ -1,7 +1,7 @@
 import { authorLabel } from "@comms/protocol";
 import { DateTime } from "effect";
 import { Check, Link2, Reply } from "lucide-react";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, memo, useEffect, useState } from "react";
 import { topicHref, type BoardMessage } from "./board-api.ts";
 import { cn } from "./cn.ts";
 import { useComposerBridge } from "./composer-bridge.tsx";
@@ -79,20 +79,22 @@ function Actions({ message }: { readonly message: BoardMessage }) {
 	);
 }
 
-export function Message({
+function MessageView({
 	message,
+	now,
 	compact = false,
 	currentTopic,
 	highlight,
 }: {
 	readonly message: BoardMessage;
+	/** The list's shared clock for relative times. */
+	readonly now: number;
 	/** Continues the previous author's block: no avatar or name. */
 	readonly compact?: boolean;
 	/** The topic being viewed; its name is not repeated on each message. */
 	readonly currentTopic?: string | undefined;
 	readonly highlight?: ReadonlyArray<string>;
 }) {
-	const now = useNow();
 	const label = authorLabel(message.meta);
 	const at = DateTime.formatIso(DateTime.makeUnsafe(message.created_at));
 	const showTopic = message.topic !== currentTopic;
@@ -169,6 +171,31 @@ export function Message({
 	);
 }
 
+/** Refreshes hand back new objects for unchanged messages; re-render only what changed. */
+const same = (a: BoardMessage, b: BoardMessage) =>
+	a === b ||
+	(a.id === b.id &&
+		a.body === b.body &&
+		a.edited_at === b.edited_at &&
+		a.topic === b.topic &&
+		a.tags.join("\u0000") === b.tags.join("\u0000") &&
+		JSON.stringify(a.meta) === JSON.stringify(b.meta));
+const MemoMessage = memo(
+	MessageView,
+	(a, b) =>
+		same(a.message, b.message) &&
+		a.now === b.now &&
+		a.compact === b.compact &&
+		a.currentTopic === b.currentTopic &&
+		a.highlight === b.highlight,
+);
+
+/** One message on its own (a referenced message): keeps its own clock. */
+export function Message({ message }: { readonly message: BoardMessage }) {
+	const now = useNow();
+	return <MemoMessage message={message} now={now} />;
+}
+
 /** A run of messages, grouped by author. */
 export function MessageList({
 	messages,
@@ -194,8 +221,9 @@ export function MessageList({
 								<span className="h-px flex-1 bg-rule" />
 							</div>
 						)}
-						<Message
+						<MemoMessage
 							message={message}
+							now={now}
 							compact={!newDay && continues(previous, message)}
 							currentTopic={currentTopic}
 							{...(highlight ? { highlight } : {})}

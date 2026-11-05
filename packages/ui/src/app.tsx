@@ -21,6 +21,7 @@ import { profileFromPath } from "./profile-api.ts";
 import { Search } from "./search.tsx";
 import { TopicSettings } from "./topic-controls.tsx";
 import { useLoad } from "./use-load.ts";
+import { boardChanged } from "./live-events.ts";
 import { Composer } from "./composer.tsx";
 import { LoadProblem, useAutoRetry } from "./load-problem.tsx";
 import { HistoryEdge } from "./history-edge.tsx";
@@ -171,6 +172,12 @@ function Board({
 		});
 	}, [client, path, showArchived, searching, visible]);
 	const { value, error, loading, reload, update } = useLoad(request);
+	// Live: re-read this view when the board changes (coalesced in live-events.ts), unless searching.
+	useEffect(() => {
+		if (searching) return;
+		window.addEventListener(boardChanged, reload);
+		return () => window.removeEventListener(boardChanged, reload);
+	}, [reload, searching]);
 	// A copy warmed on hover renders at once; the marking read replaces it when it lands.
 	const peekRequest = useMemo(
 		() => (path === null ? null : client.peekTopic(path)) ?? Atom.make(Effect.succeed(null)),

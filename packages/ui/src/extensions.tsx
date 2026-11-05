@@ -1,14 +1,13 @@
 import { RecoveryControls } from "./recovery-controls.tsx";
 import { BoardLayout, NavLink } from "./board-layout.tsx";
 import { DateTime } from "effect";
-import { RefreshCw } from "lucide-react";
 
 import { useLoad } from "./use-load.ts";
 import { useBoardClient } from "./board-client.tsx";
 import { Link } from "./router.tsx";
 import { Alert } from "./ui/alert.tsx";
 import { Badge } from "./ui/badge.tsx";
-import { Button } from "./ui/button.tsx";
+import { RefreshButton } from "./ui/refresh-button.tsx";
 import { EmptyState } from "./ui/empty-state.tsx";
 import { PageHeader } from "./ui/page-header.tsx";
 import { Skeleton } from "./ui/skeleton.tsx";
@@ -41,12 +40,7 @@ export function Extensions() {
 				}
 				title="Extensions"
 				description="What is loaded in the current generation. Updates with server events."
-				actions={
-					<Button variant="outline" size="sm" onClick={reload} disabled={loading}>
-						<RefreshCw className={loading ? "animate-spin" : ""} />
-						{loading ? "Refreshing…" : "Refresh"}
-					</Button>
-				}
+				actions={<RefreshButton loading={loading} onClick={reload} />}
 			/>
 			{error && (
 				<Alert className="mb-5">
