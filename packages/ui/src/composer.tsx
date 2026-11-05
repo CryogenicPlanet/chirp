@@ -216,6 +216,7 @@ export function Composer({
 	onSent,
 	sessionExpired,
 	bridge,
+	hidden = false,
 }: {
 	readonly path: string;
 	/** Known topic paths, for the picker. */
@@ -223,6 +224,8 @@ export function Composer({
 	readonly sessionExpired: boolean;
 	readonly onSent: (message: BoardMessage) => void;
 	readonly bridge?: Ref<ComposerBridge>;
+	/** Hidden but kept mounted (during search), so an uncertain send keeps its retry state. */
+	readonly hidden?: boolean;
 }) {
 	const { sendMessage } = useBoardClient();
 	const directory = useDirectory();
@@ -394,7 +397,12 @@ export function Composer({
 	};
 
 	return (
-		<div className="sticky bottom-0 z-20 -mx-2 bg-linear-to-t from-paper from-75% to-paper/0 px-2 pt-6 pb-3 sm:pb-5">
+		<div
+			className={cn(
+				"sticky bottom-0 z-20 -mx-2 bg-linear-to-t from-paper from-75% to-paper/0 px-2 pt-6 pb-3 sm:pb-5",
+				hidden && "hidden",
+			)}
+		>
 			<form onSubmit={submit} className="relative" aria-label="Write a message">
 				{menuOpen && (
 					<MentionMenu id={listId} options={matches} active={activeIndex} onPick={pick} onHover={setActive} />

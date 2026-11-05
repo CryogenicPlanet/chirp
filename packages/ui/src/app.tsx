@@ -303,7 +303,9 @@ function Board({
 		const latest = view?.messages ?? [];
 		const first = latest[0]?.seq ?? Number.MAX_SAFE_INTEGER;
 		const previous = retained.current.path === pathname ? retained.current.messages : [];
-		const evicted = previous.filter((message) => message.seq < first);
+		// Only a full snapshot can have pushed messages out; a shorter one holds everything, so anything missing
+		// from it was deleted, not displaced.
+		const evicted = latest.length >= 100 ? previous.filter((message) => message.seq < first) : [];
 		retained.current = { path: pathname, messages: [...evicted, ...latest] };
 		const kept = new Set(evicted.map((message) => message.seq));
 		return [
@@ -626,13 +628,15 @@ function Board({
 										)}
 									</>
 								)}
-								{!searching && !searchPage && ((view && view.archived_root === null) || error?.status === 404) && (
+								{/* Hidden, not unmounted, during search: an uncertain send keeps its retry state. */}
+								{!searchPage && ((view && view.archived_root === null) || error?.status === 404) && (
 									<Composer
 										path={path}
 										topics={topicPaths}
 										onSent={onSent}
 										sessionExpired={authRequired}
 										bridge={composer}
+										hidden={searching}
 									/>
 								)}
 							</div>
