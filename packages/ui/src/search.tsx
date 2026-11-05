@@ -61,7 +61,15 @@ const typingInField = (target: EventTarget | null) =>
  * One field searches as you type. Results replace the conversation until cleared; the query lives in ?q= so
  * it can be shared and the command palette can open it.
  */
-export function Search({ path, onActive }: { readonly path: string; readonly onActive: (active: boolean) => void }) {
+export function Search({
+	path,
+	onActive,
+	autoFocus = false,
+}: {
+	readonly path: string;
+	readonly onActive: (active: boolean) => void;
+	readonly autoFocus?: boolean;
+}) {
 	const client = useBoardClient();
 	const location = useLocation();
 	const fromUrl = new URLSearchParams(location.search).get("q") ?? "";
@@ -151,6 +159,14 @@ export function Search({ path, onActive }: { readonly path: string; readonly onA
 
 	const query = parseQuery(input);
 	const searching = input.trim() !== "";
+	// Starting a search brings the field to the top, so results read like a search page.
+	const section = useRef<HTMLElement>(null);
+	useEffect(() => {
+		if (searching) section.current?.scrollIntoView({ block: "start" });
+	}, [searching]);
+	useEffect(() => {
+		if (autoFocus) field.current?.focus();
+	}, [autoFocus]);
 	useEffect(() => onActive(searching), [searching, onActive]);
 	useEffect(() => () => onActive(false), [onActive]);
 
@@ -235,7 +251,7 @@ export function Search({ path, onActive }: { readonly path: string; readonly onA
 	];
 
 	return (
-		<section className="mb-6" aria-label="Search messages">
+		<section ref={section} className="mb-6 scroll-mt-20 sm:scroll-mt-6" aria-label="Search messages">
 			<div className="flex flex-wrap items-center gap-2">
 				<div className="group relative min-w-0 flex-1 basis-72">
 					<SearchIcon className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-slate" />
@@ -431,7 +447,7 @@ export function Search({ path, onActive }: { readonly path: string; readonly onA
 										: `${items.length === limit ? `Latest ${limit}` : items.length} ${items.length === 1 ? "match" : "matches"}${scope ? ` in #${scope}` : ""}, newest first`}
 						</p>
 						<Button variant="ghost" size="sm" type="button" onClick={clear}>
-							Back to conversation
+							{autoFocus ? "Clear" : "Back to conversation"}
 						</Button>
 					</div>
 					{error && <Alert className="mt-3">{error}</Alert>}

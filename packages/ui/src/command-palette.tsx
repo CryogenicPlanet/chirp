@@ -290,7 +290,7 @@ function PaletteBody({
 						<CommandItem
 							value={`search all messages ${trimmed}`}
 							forceMount
-							onSelect={() => go(`/?q=${encodeURIComponent(trimmed)}`)}
+							onSelect={() => go(`/search?q=${encodeURIComponent(trimmed)}`)}
 						>
 							<SearchIcon />
 							<span className="min-w-0 truncate">

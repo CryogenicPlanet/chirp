@@ -155,10 +155,13 @@ export function BoardLayout({
 	navigation,
 	sidebar,
 	children,
+	wide = false,
 }: {
 	readonly navigation: ReactNode;
 	readonly sidebar?: ReactNode;
 	readonly children: ReactNode;
+	/** Room for a topic's context rail beside the stream on wide screens. */
+	readonly wide?: boolean;
 }) {
 	const [open, setOpen] = useState(false);
 	const reduceMotion = useReducedMotion();
@@ -245,7 +248,12 @@ export function BoardLayout({
 				</AnimatePresence>,
 				document.body,
 			)}
-			<main className="mx-auto flex w-full min-w-0 max-w-[920px] flex-col px-4 pt-6 sm:px-8 sm:pt-9 lg:px-12 min-[1900px]:max-w-[1080px]">
+			<main
+				className={cn(
+					"mx-auto flex w-full min-w-0 max-w-[920px] flex-col px-4 pt-6 sm:px-8 sm:pt-9 lg:px-12 min-[1900px]:max-w-[1080px]",
+					wide && "xl:max-w-[1280px] min-[1900px]:max-w-[1400px]",
+				)}
+			>
 				{children}
 			</main>
 		</div>

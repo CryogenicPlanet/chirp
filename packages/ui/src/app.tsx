@@ -24,6 +24,7 @@ import { useLoad } from "./use-load.ts";
 import { Composer } from "./composer.tsx";
 import { LoadProblem, useAutoRetry } from "./load-problem.tsx";
 import { HistoryEdge } from "./history-edge.tsx";
+import { TopicContextBar, TopicRail } from "./topic-context.tsx";
 import { useOlderMessages } from "./older-messages.ts";
 import { Link, useLocation, useScrollOnNavigate } from "./router.tsx";
 import { Bot, FileText, Hash, Home, Puzzle, RefreshCw, Settings2 } from "lucide-react";
@@ -143,7 +144,9 @@ function Board({
 }) {
 	const client = useBoardClient();
 	const visible = useVisible();
-	const path = currentPath(pathname);
+	// /search is the board-wide search page: the board's data for the sidebar, only search in the page.
+	const searchPage = pathname === "/search";
+	const path = searchPage ? "" : currentPath(pathname);
 	const [showArchived, setShowArchived] = useState(false);
 	const [searching, setSearching] = useState(() => new URLSearchParams(search).has("q"));
 	const [settingsOpen, setSettingsOpen] = useState(false);
@@ -277,7 +280,8 @@ function Board({
 	);
 	return (
 		<BoardLayout
-			navigation={<TopicNav path={path} topics={sidebarTopics} />}
+			wide={path !== null && path !== ""}
+			navigation={<TopicNav path={searchPage ? null : path} topics={sidebarTopics} />}
 			sidebar={
 				<label className="mx-2.5 mt-4 flex cursor-pointer items-center gap-2 text-[13px] text-slate hover:text-ink">
 					<input
@@ -310,7 +314,9 @@ function Board({
 							)
 						}
 						title={
-							path === null ? (
+							searchPage ? (
+								"Search"
+							) : path === null ? (
 								"Page not found"
 							) : path === "" ? (
 								"All topics"
@@ -322,7 +328,9 @@ function Board({
 							)
 						}
 						description={
-							path === "" ? (
+							searchPage ? (
+								"Messages across the board. Filter with from:, in: and tag:."
+							) : path === "" ? (
 								"Everything happening across your board."
 							) : description !== undefined || status !== undefined ? (
 								<>
@@ -377,156 +385,169 @@ function Board({
 							<Link href="/">Back to the board</Link>
 						</EmptyState>
 					) : (
-						<>
-							{authRequired ? (
-								<Alert className="mb-5">
-									<h2>Sign in to your board</h2>
-									<p>Use your passkey to read and write messages.</p>
-									<a className={cn(buttonVariants(), "mt-2")} href={`/auth/login?next=${encodeURIComponent(pathname)}`}>
-										Sign in with a passkey
-									</a>
-									<p className="mt-3">
-										<a href="/onboarding">First visit? Set up this board</a>
-									</p>
-								</Alert>
-							) : error && error.status === 404 && view === undefined ? (
-								<EmptyState title="This view has no messages yet">
-									Write the first message below and the view starts with it.
-								</EmptyState>
-							) : error ? (
-								<LoadProblem error={error} stale={view !== undefined} retrying={retry.waiting} onRetry={reload} />
-							) : null}
-							{view === undefined && !error && <MessagesSkeleton />}
-							{view && !authRequired && (
-								<>
-									{path !== "" && (
-										<TopicSettings
-											open={settingsOpen}
-											onOpenChange={setSettingsOpen}
-											path={path}
-											meta={view.meta}
-											archived={view.archived_at !== null}
-											parentArchived={view.archived_root !== null && view.archived_root !== path}
-											onSaved={(saved) => {
-												update(
-													(previous) =>
-														previous && {
-															...previous,
-															topic: {
-																...previous.topic,
-																meta: saved.meta,
-																archived_at: saved.archived_at,
-																archived_root: saved.archived_at !== null ? path : null,
-															},
-														},
-												);
-												reload();
-											}}
-										/>
-									)}
-									{view.archived_root !== null && (
-										<Alert className="mb-5">
-											This view is read-only because{" "}
-											<Link href={topicHref(view.archived_root)}>{view.archived_root}</Link> is archived.
-										</Alert>
-									)}
-									{view.index !== null && (
-										<section
-											className="mb-6 rounded-2xl bg-card px-5 py-5 shadow-raised sm:px-6"
-											aria-label="Topic README"
+						<div
+							className={cn(
+								"flex flex-1 flex-col",
+								path !== "" && "xl:grid xl:grid-cols-[minmax(0,1fr)_300px] xl:items-start xl:gap-10",
+							)}
+						>
+							<div className="flex min-h-full min-w-0 flex-1 flex-col">
+								{authRequired ? (
+									<Alert className="mb-5">
+										<h2>Sign in to your board</h2>
+										<p>Use your passkey to read and write messages.</p>
+										<a
+											className={cn(buttonVariants(), "mt-2")}
+											href={`/auth/login?next=${encodeURIComponent(pathname)}`}
 										>
-											<Markdown body={view.index} base={`/p/${path ? path + "/" : ""}index.md`} />
-										</section>
-									)}
-									{view.subtopics.length > 0 && (
-										<section className="mb-6" aria-label={path ? "Subtopics" : "Topics"}>
-											<div className="grid grid-cols-1 gap-2 sm:grid-cols-2 min-[1900px]:grid-cols-3">
-												{view.subtopics.map((item) => (
-													<Link
-														key={item.path}
-														href={topicHref(item.path)}
-														className="group flex items-start gap-3 rounded-xl bg-card px-4 py-3 shadow-raised transition-shadow hover:shadow-[0_0_0_1px_rgb(32_42_58/0.14),0_1px_3px_rgb(32_42_58/0.06),0_8px_20px_-8px_rgb(32_42_58/0.14)]"
-													>
-														<span className="min-w-0 flex-1">
-															<span className="flex items-center gap-1.5 text-[14.5px] font-medium text-ink">
-																<span className="font-normal text-slate">#</span>
-																<span className="truncate">{item.name}</span>
-																{item.archived_at !== null && (
-																	<span className="text-[12px] font-normal text-slate">archived</span>
+											Sign in with a passkey
+										</a>
+										<p className="mt-3">
+											<a href="/onboarding">First visit? Set up this board</a>
+										</p>
+									</Alert>
+								) : error && error.status === 404 && view === undefined ? (
+									<EmptyState title="This view has no messages yet">
+										Write the first message below and the view starts with it.
+									</EmptyState>
+								) : error ? (
+									<LoadProblem error={error} stale={view !== undefined} retrying={retry.waiting} onRetry={reload} />
+								) : null}
+								{view === undefined && !error && <MessagesSkeleton />}
+								{view && !authRequired && (
+									<>
+										{path !== "" && (
+											<TopicSettings
+												open={settingsOpen}
+												onOpenChange={setSettingsOpen}
+												path={path}
+												meta={view.meta}
+												archived={view.archived_at !== null}
+												parentArchived={view.archived_root !== null && view.archived_root !== path}
+												onSaved={(saved) => {
+													update(
+														(previous) =>
+															previous && {
+																...previous,
+																topic: {
+																	...previous.topic,
+																	meta: saved.meta,
+																	archived_at: saved.archived_at,
+																	archived_root: saved.archived_at !== null ? path : null,
+																},
+															},
+													);
+													reload();
+												}}
+											/>
+										)}
+										{view.archived_root !== null && (
+											<Alert className="mb-5">
+												This view is read-only because{" "}
+												<Link href={topicHref(view.archived_root)}>{view.archived_root}</Link> is archived.
+											</Alert>
+										)}
+										{path !== "" && !searching && <TopicContextBar key={path} path={path} view={view} />}
+										{path === "" && !searching && !searchPage && view.index !== null && (
+											<section
+												className="mb-6 rounded-2xl bg-card px-5 py-5 shadow-raised sm:px-6"
+												aria-label="Topic README"
+											>
+												<Markdown body={view.index} base={`/p/${path ? path + "/" : ""}index.md`} />
+											</section>
+										)}
+										{path === "" && !searching && !searchPage && view.subtopics.length > 0 && (
+											<section className="mb-6" aria-label="Topics">
+												<div className="grid grid-cols-1 gap-2 sm:grid-cols-2 min-[1900px]:grid-cols-3">
+													{view.subtopics.map((item) => (
+														<Link
+															key={item.path}
+															href={topicHref(item.path)}
+															className="group flex items-start gap-3 rounded-xl bg-card px-4 py-3 shadow-raised transition-shadow hover:shadow-[0_0_0_1px_rgb(32_42_58/0.14),0_1px_3px_rgb(32_42_58/0.06),0_8px_20px_-8px_rgb(32_42_58/0.14)]"
+														>
+															<span className="min-w-0 flex-1">
+																<span className="flex items-center gap-1.5 text-[14.5px] font-medium text-ink">
+																	<span className="font-normal text-slate">#</span>
+																	<span className="truncate">{item.name}</span>
+																	{item.archived_at !== null && (
+																		<span className="text-[12px] font-normal text-slate">archived</span>
+																	)}
+																</span>
+																{(typeof item.meta.description === "string" ||
+																	typeof item.meta.status === "string") && (
+																	<span className="mt-0.5 block truncate text-[13px] text-slate">
+																		{typeof item.meta.status === "string" && (
+																			<span className="font-medium text-ink-soft">{item.meta.status} · </span>
+																		)}
+																		{typeof item.meta.description === "string" ? item.meta.description : ""}
+																	</span>
 																)}
 															</span>
-															{(typeof item.meta.description === "string" || typeof item.meta.status === "string") && (
-																<span className="mt-0.5 block truncate text-[13px] text-slate">
-																	{typeof item.meta.status === "string" && (
-																		<span className="font-medium text-ink-soft">{item.meta.status} · </span>
-																	)}
-																	{typeof item.meta.description === "string" ? item.meta.description : ""}
-																</span>
+															{item.unread > 0 && (
+																<Badge variant="count" className="mt-0.5" title={`${item.unread} unread`}>
+																	{item.unread > 99 ? "99+" : item.unread}
+																</Badge>
 															)}
-														</span>
-														{item.unread > 0 && (
-															<Badge variant="count" className="mt-0.5" title={`${item.unread} unread`}>
-																{item.unread > 99 ? "99+" : item.unread}
-															</Badge>
-														)}
-													</Link>
-												))}
-											</div>
-										</section>
-									)}
-									{view.pages.length > 0 && (
-										<section className="mb-6 flex flex-wrap items-center gap-1.5" aria-label="Pages">
-											<span className="mr-1 text-[12.5px] font-medium text-slate">Pages</span>
-											{view.pages.map((file) => (
-												<a
-													key={file}
-													href={`/p/${[...path.split("/").filter(Boolean), file].map(encodeURIComponent).join("/")}`}
-													className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-card px-2.5 text-[13.5px] text-ink-soft shadow-raised transition-colors hover:text-ink [&_svg]:size-3.5 [&_svg]:text-slate"
-												>
-													<FileText />
-													{file === "index.md" && view.index !== null ? "README" : file}
-												</a>
-											))}
-										</section>
-									)}
-									<Search path={path} onActive={setSearching} />
-									{!searching && (
-										<>
-											<ReferencedMessage visible={view.messages} />
-											<section className="flex-1 pb-2" aria-label="Messages">
-												{path !== "" && armedPath === pathname && view.messages.length >= 100 && (
-													<HistoryEdge
-														done={history.done}
-														loading={history.loading}
-														failed={history.failed}
-														onReach={loadOlder}
-													/>
-												)}
-												{view.messages.length === 0 ? (
-													<EmptyState title="No messages yet">
-														Say hello below, or invite an agent from the <a href="/init">agent guide</a>.
-													</EmptyState>
-												) : (
-													<>
-														<h2 className="sr-only">{path ? "Messages" : "Recent messages"}</h2>
-														<MessageList messages={shownMessages} currentTopic={path || undefined} />
-													</>
-												)}
+														</Link>
+													))}
+												</div>
 											</section>
-										</>
-									)}
-								</>
-							)}
-							{((view && view.archived_root === null) || error?.status === 404) && (
-								<Composer
-									path={path}
-									topics={topicPaths}
-									onSent={onSent}
-									sessionExpired={authRequired}
-									bridge={composer}
-								/>
-							)}
-						</>
+										)}
+										{path === "" && !searching && !searchPage && view.pages.length > 0 && (
+											<section className="mb-6 flex flex-wrap items-center gap-1.5" aria-label="Pages">
+												<span className="mr-1 text-[12.5px] font-medium text-slate">Pages</span>
+												{view.pages.map((file) => (
+													<a
+														key={file}
+														href={`/p/${[...path.split("/").filter(Boolean), file].map(encodeURIComponent).join("/")}`}
+														className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-card px-2.5 text-[13.5px] text-ink-soft shadow-raised transition-colors hover:text-ink [&_svg]:size-3.5 [&_svg]:text-slate"
+													>
+														<FileText />
+														{file === "index.md" && view.index !== null ? "README" : file}
+													</a>
+												))}
+											</section>
+										)}
+										<Search path={path} onActive={setSearching} autoFocus={searchPage} />
+										{!searching && !searchPage && (
+											<>
+												<ReferencedMessage visible={view.messages} />
+												<section className="flex-1 pb-2" aria-label="Messages">
+													{path !== "" && armedPath === pathname && view.messages.length >= 100 && (
+														<HistoryEdge
+															done={history.done}
+															loading={history.loading}
+															failed={history.failed}
+															onReach={loadOlder}
+														/>
+													)}
+													{view.messages.length === 0 ? (
+														<EmptyState title="No messages yet">
+															Say hello below, or invite an agent from the <a href="/init">agent guide</a>.
+														</EmptyState>
+													) : (
+														<>
+															<h2 className="sr-only">{path ? "Messages" : "Recent messages"}</h2>
+															<MessageList messages={shownMessages} currentTopic={path || undefined} />
+														</>
+													)}
+												</section>
+											</>
+										)}
+									</>
+								)}
+								{!searching && !searchPage && ((view && view.archived_root === null) || error?.status === 404) && (
+									<Composer
+										path={path}
+										topics={topicPaths}
+										onSent={onSent}
+										sessionExpired={authRequired}
+										bridge={composer}
+									/>
+								)}
+							</div>
+							{path !== "" && view !== undefined && <TopicRail path={path} view={view} />}
+						</div>
 					)}
 				</div>
 			</ComposerBridgeContext.Provider>
