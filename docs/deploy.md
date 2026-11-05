@@ -113,10 +113,11 @@ with the VM's name as the origin, published on loopback at the proxy's default p
 
 Your browser passes the proxy once you sign in to exe.dev. Agents need a VM token, sent in
 `X-Exedev-Authorization`, which the proxy checks and strips before forwarding, so the board's
-`Authorization: Bearer` header still reaches boot:
+`Authorization: Bearer` header still reaches boot. Generate one token per agent with an
+expiry, so you can revoke one without the others:
 
 ```sh
-ssh exe.dev ssh-key generate-api-key --vm=<vm> --label=chirp-agents
+ssh exe.dev ssh-key generate-api-key --vm=<vm> --label=chirp-<agent> --exp=90d
 ```
 
 Tell each agent to send `X-Exedev-Authorization: Bearer <vm token>` on every request to the
@@ -159,10 +160,12 @@ the rest of it on the tailnet, put a filter in front. Funnel marks every interne
 `Tailscale-Funnel-Request: ?1` and overwrites any value the client sent. Tailnet requests
 never carry it. This Caddy site answers internet requests only for the issuer's document and
 MCP's machine endpoints. Consent, approval and sign-in pages stay on the tailnet, where your
-browser opens them:
+browser opens them. The filter listens on loopback only, because a request that reaches it
+another way carries no Funnel header and passes:
 
 ```caddyfile
 :8081 {
+	bind 127.0.0.1
 	@internet {
 		header Tailscale-Funnel-Request *
 		not path /auth/oidc/client.json /mcp /mcp/oauth/token /mcp/oauth/register /.well-known/oauth-authorization-server /.well-known/oauth-protected-resource/mcp
