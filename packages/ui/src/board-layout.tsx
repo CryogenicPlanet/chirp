@@ -133,23 +133,20 @@ function AccountMenu() {
 	);
 }
 
-function SidebarFooter() {
-	return (
-		<div className="mt-auto flex flex-col gap-2 pt-8">
-			<CopyPromptButton />
-			<AccountMenu />
-		</div>
-	);
-}
-
+/** Only the topic list scrolls; the account and invite stay put at the bottom. */
 function SidebarContent({ navigation, sidebar }: { readonly navigation: ReactNode; readonly sidebar?: ReactNode }) {
 	return (
 		<>
-			<nav aria-label="Board" className="flex flex-col gap-0.5">
-				{navigation}
-			</nav>
-			{sidebar}
-			<SidebarFooter />
+			<div className="-mx-3 min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-6 [scrollbar-color:var(--color-rule)_transparent] [scrollbar-width:thin] lg:-mx-4 lg:px-4">
+				<nav aria-label="Board" className="flex flex-col gap-0.5">
+					{navigation}
+				</nav>
+				{sidebar}
+			</div>
+			<div className="-mx-3 flex shrink-0 flex-col gap-2 border-t border-rule px-3 pt-3 lg:-mx-4 lg:px-4">
+				<CopyPromptButton />
+				<AccountMenu />
+			</div>
 		</>
 	);
 }
@@ -197,7 +194,7 @@ export function BoardLayout({
 					)}
 				</div>
 			</header>
-			<aside className="sticky top-0 hidden h-svh w-60 shrink-0 flex-col overflow-y-auto border-r border-rule bg-wash px-3 pt-6 pb-3 sm:flex lg:w-64 lg:px-4">
+			<aside className="sticky top-0 hidden h-svh w-60 shrink-0 flex-col border-r border-rule bg-wash px-3 pt-6 pb-3 sm:flex lg:w-64 lg:px-4">
 				<Link href="/" className="mb-5 w-fit rounded-md px-1.5 text-ink">
 					<Wordmark />
 				</Link>
@@ -217,7 +214,7 @@ export function BoardLayout({
 								onClick={() => setOpen(false)}
 							/>
 							<motion.div
-								className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col overflow-y-auto bg-wash px-3 pt-3 pb-3 shadow-float"
+								className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col bg-wash px-3 pt-3 pb-3 shadow-float"
 								initial={reduceMotion ? { opacity: 0 } : { x: "-100%" }}
 								animate={reduceMotion ? { opacity: 1 } : { x: 0 }}
 								exit={reduceMotion ? { opacity: 0 } : { x: "-100%" }}
