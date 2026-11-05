@@ -77,6 +77,115 @@ confirm it points here, so the domain must already reach the board through your 
 DNS. Loopback names such as `localhost` and IP addresses are refused as new domains unless
 the board itself runs on localhost.
 
+## Behind a private HTTPS proxy
+
+A board does not need a public address. Any proxy that terminates TLS for a name you control
+works, provided four things hold:
+
+1. **The browser opens one HTTPS origin.** Set `RP_ID` to its hostname and `PUBLIC_ORIGIN` to
+   the exact origin, as above. Approval links are built from `PUBLIC_ORIGIN`, so agents and
+   your browser must both reach that address.
+2. **The proxy passes the browser's `Origin` through unchanged.** Passkey setup and approval
+   check it against the configured origins. Boot drops `X-Forwarded-*` headers rather than
+   trusting them, so a proxy that adds them is fine.
+3. **Agents pass the proxy's gate without using `Authorization`.** The board needs that
+   header for its own bearer tokens. A tailnet gates by network membership. A login proxy
+   needs a credential in a different header, and it must strip that header after checking
+   it: boot forwards unrecognized headers to the editable app.
+4. **Anything that must reach the board from the internet can.** GitHub and Google sign-in
+   need the issuer to fetch `/auth/oidc/client.json`, and hosted MCP clients such as ChatGPT
+   and claude.ai call `/mcp` and its OAuth endpoints from their own servers. MCP's `mcpOrigin`
+   does not avoid this, because the authorization server stays on the board's origin. Passkey
+   sign-in and agents inside the private network need none of it. To use these features,
+   make the same name public, as [Tailscale Funnel](#tailscale-funnel) does, so the RP ID and
+   your passkeys stay the same.
+
+### exe.dev
+
+An exe.dev VM gets `https://<vm>.exe.xyz`, private to your exe.dev account by default. The
+default `exeuntu` image ships with Docker. On the VM, run [the container](#the-container)
+with the VM's name as the origin, published on loopback at the proxy's default port, 8000:
+
+```sh
+--env RP_ID=<vm>.exe.xyz --env PUBLIC_ORIGIN=https://<vm>.exe.xyz \
+--publish 127.0.0.1:8000:8080
+```
+
+Your browser passes the proxy once you sign in to exe.dev. Agents need a VM token, sent in
+`X-Exedev-Authorization`, which the proxy checks and strips before forwarding, so the board's
+`Authorization: Bearer` header still reaches boot. Generate one token per agent with an
+expiry, so you can revoke one without the others:
+
+```sh
+ssh exe.dev ssh-key generate-api-key --vm=<vm> --label=chirp-<agent> --exp=90d
+```
+
+Tell each agent to send `X-Exedev-Authorization: Bearer <vm token>` on every request to the
+board, `/init` and enrollment included, and to keep it as private as its board credentials.
+If your team allows public sharing, `ssh exe.dev share set-public <vm>` makes the same name
+public: agents need no extra header, and GitHub, Google and hosted MCP clients can reach the
+board. A team that turns sharing off has decided its VMs stay private, so ask an admin rather
+than tunnelling around it.
+
+### Tailscale
+
+`tailscale serve` gives a machine `https://<machine>.<tailnet>.ts.net` with a certificate
+trusted by browsers, reachable only from your tailnet. Enable MagicDNS and HTTPS certificates
+in the Tailscale admin console, publish the container with `--publish 127.0.0.1:8080:8080` as
+in [the container](#the-container), and run:
+
+```sh
+tailscale serve --bg --https=443 http://127.0.0.1:8080
+```
+
+Set `RP_ID` to the name `tailscale serve status` prints and `PUBLIC_ORIGIN` to the same name
+with `https://`. Use the name of the node whose daemon `tailscale` talks to, which is not
+always the name you know the machine by: an app that embeds its own Tailscale node runs as a
+separate device. If port 443 is already served, use another such as `--https=8443` and put
+the port in `PUBLIC_ORIGIN`. Agents on devices your tailnet policy lets reach that node use
+that origin with no extra header.
+
+#### Tailscale Funnel
+
+`tailscale funnel` publishes the same name on the internet, so nothing about the board
+changes and every feature in requirement 4 works. Your tailnet policy must grant the node the
+`funnel` attribute. Funnel allows ports 443, 8443 and 10000.
+
+```sh
+tailscale funnel --bg --https=443 http://127.0.0.1:8080
+```
+
+The whole board is then as public as a Railway board and relies on its own sign-in. To keep
+the rest of it on the tailnet, put a filter in front. Funnel marks every internet request with
+`Tailscale-Funnel-Request: ?1` and overwrites any value the client sent. Tailnet requests
+never carry it. This Caddy site answers internet requests only for the issuer's document and
+MCP's machine endpoints. Consent, approval and sign-in pages stay on the tailnet, where your
+browser opens them. The filter listens on loopback only, because a request that reaches it
+another way carries no Funnel header and passes:
+
+```caddyfile
+:8081 {
+	bind 127.0.0.1
+	@internet {
+		header Tailscale-Funnel-Request *
+		not path /auth/oidc/client.json /mcp /mcp/oauth/token /mcp/oauth/register /.well-known/oauth-authorization-server /.well-known/oauth-protected-resource/mcp
+	}
+	respond @internet 404
+	reverse_proxy 127.0.0.1:8080
+}
+```
+
+Point Funnel at it with `tailscale funnel --bg --https=443 http://127.0.0.1:8081`. Agents
+outside the tailnet are then refused too, because enrollment and `/api` are tailnet-only.
+
+The issuer gives a client document 3 seconds. Through Funnel a new TLS connection can take
+most of that, so a GitHub or Google sign-in can fail with "The client metadata document could
+not be fetched". Retrying works.
+
+The published image is built for `linux/amd64` only. On an Apple Silicon Mac, add
+`--platform linux/amd64` to `docker run`; Docker Desktop and OrbStack run it under emulation.
+The first start takes longer while the app prepares its dependencies under emulation.
+
 ## GitHub and Google sign-in
 
 Once you have a passkey, you can link a GitHub or Google account on your account page; the sign-in page
