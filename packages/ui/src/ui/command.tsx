@@ -13,8 +13,11 @@ export function Command({ className, ...props }: ComponentProps<typeof CommandPr
 
 const overlayClass =
 	"fixed inset-0 z-50 bg-ink/25 backdrop-blur-[2px] data-[state=open]:animate-[fade-in_120ms_ease-out]";
+// A centred dialog from sm up; on phones, the whole screen under the input, like a search page.
 const contentClass =
-	"fixed top-[12vh] left-1/2 z-50 flex max-h-[min(560px,76vh)] w-[min(640px,calc(100vw-24px))] -translate-x-1/2 flex-col overflow-hidden rounded-2xl bg-card shadow-float data-[state=open]:animate-[pop-in_140ms_cubic-bezier(0.32,0.72,0,1)]";
+	"fixed inset-0 z-50 flex flex-col overflow-hidden bg-card sm:inset-auto sm:top-[12vh] sm:left-1/2 sm:max-h-[min(560px,76vh)] sm:w-[min(640px,calc(100vw-24px))] sm:-translate-x-1/2 sm:rounded-2xl sm:shadow-float sm:data-[state=open]:animate-[pop-in_140ms_cubic-bezier(0.32,0.72,0,1)]";
+// The command root must be bounded for its list to scroll.
+const rootClass = "flex min-h-0 flex-1 flex-col overflow-hidden";
 
 /**
  * Inside a shadow root (board pages), Radix's focus trap and outside-click detection see the shadow host instead of
@@ -59,7 +62,7 @@ function ShadowDialog({
 				<CommandPrimitive
 					label={label}
 					loop
-					className="flex min-h-0 flex-1 flex-col overflow-hidden"
+					className={rootClass}
 					{...(shouldFilter === undefined ? {} : { shouldFilter })}
 				>
 					{children}
@@ -106,15 +109,20 @@ export function CommandDialog({
 			{...(shouldFilter === undefined ? {} : { shouldFilter })}
 			overlayClassName={overlayClass}
 			contentClassName={contentClass}
+			className={rootClass}
 		>
 			{children}
 		</CommandPrimitive.Dialog>
 	);
 }
 
-export function CommandInput({ className, ...props }: ComponentProps<typeof CommandPrimitive.Input>) {
+export function CommandInput({
+	className,
+	trailing,
+	...props
+}: ComponentProps<typeof CommandPrimitive.Input> & { readonly trailing?: ReactNode }) {
 	return (
-		<div className="flex items-center gap-2.5 border-b border-rule px-4">
+		<div className="flex shrink-0 items-center gap-2.5 border-b border-rule px-4 pt-[env(safe-area-inset-top)] sm:pt-0">
 			<SearchIcon className="size-4 shrink-0 text-slate" aria-hidden="true" />
 			<CommandPrimitive.Input
 				className={cn(
@@ -123,6 +131,7 @@ export function CommandInput({ className, ...props }: ComponentProps<typeof Comm
 				)}
 				{...props}
 			/>
+			{trailing}
 		</div>
 	);
 }

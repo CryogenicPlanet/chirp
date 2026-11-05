@@ -194,7 +194,21 @@ function PaletteBody({
 	};
 	return (
 		<>
-			<CommandInput placeholder="Search topics, pages and messages…" value={query} onValueChange={setQuery} autoFocus />
+			<CommandInput
+				placeholder="Search topics, pages and messages…"
+				value={query}
+				onValueChange={setQuery}
+				autoFocus
+				trailing={
+					<button
+						type="button"
+						onClick={close}
+						className="shrink-0 cursor-pointer py-2 text-[14.5px] font-medium text-ink-soft hover:text-ink sm:hidden"
+					>
+						Cancel
+					</button>
+				}
+			/>
 			<CommandList>
 				{filterValues.length > 0 && (
 					<CommandGroup heading={kind === "in" ? "In topic" : kind === "tag" ? "Tagged" : "From"} forceMount>
@@ -368,7 +382,7 @@ function PaletteBody({
 					</CommandItem>
 				</CommandGroup>
 			</CommandList>
-			<div className="flex items-center gap-4 border-t border-rule px-4 py-2 text-[12px] text-slate">
+			<div className="hidden shrink-0 items-center gap-4 border-t border-rule px-4 py-2 text-[12px] text-slate sm:flex">
 				<span className="flex items-center gap-1">
 					<Kbd>↑</Kbd>
 					<Kbd>↓</Kbd> move
