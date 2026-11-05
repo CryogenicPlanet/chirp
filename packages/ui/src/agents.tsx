@@ -1,6 +1,5 @@
 import { DateTime, Effect, Schema } from "effect";
 import { HttpClientRequest } from "effect/unstable/http";
-import { RefreshCw } from "lucide-react";
 import { useMemo } from "react";
 import { accountRequest, getFamilies, unreadable, type FamilyList } from "./account-api.ts";
 import { BoardError } from "./board-api.ts";
@@ -12,7 +11,7 @@ import { useLoad } from "./use-load.ts";
 import { Alert } from "./ui/alert.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { AgentAvatar } from "./ui/bird.tsx";
-import { Button } from "./ui/button.tsx";
+import { RefreshButton } from "./ui/refresh-button.tsx";
 import { EmptyState } from "./ui/empty-state.tsx";
 import { PageHeader } from "./ui/page-header.tsx";
 import { SectionHeading } from "./ui/section-heading.tsx";
@@ -47,7 +46,7 @@ interface AgentRow {
 }
 
 // Each source fails on its own, so a missing extension or an expired session still leaves the other half visible.
-const getActivity = () =>
+export const getActivity = () =>
 	accountRequest(HttpClientRequest.get(new URL("/api/agents/activity", window.location.origin).href)).pipe(
 		Effect.flatMap(Schema.decodeUnknownEffect(Activity)),
 		Effect.catchTag("SchemaError", () => unreadable),
@@ -128,9 +127,9 @@ const date = (at: number | null) =>
 
 function Stat({ label, value }: { readonly label: string; readonly value: number }) {
 	return (
-		<div className="rounded-2xl bg-card px-5 py-4 shadow-raised">
-			<p className="text-[13.5px] font-medium text-slate">{label}</p>
-			<p className="mt-1 text-[28px] leading-tight font-[650] tracking-[-0.03em] tabular-nums">
+		<div className="min-w-0 rounded-2xl bg-card px-3 py-3 shadow-raised sm:px-5 sm:py-4">
+			<p className="text-[12px] leading-snug font-medium text-slate sm:text-[13.5px]">{label}</p>
+			<p className="mt-1 text-[22px] leading-tight font-[650] tracking-[-0.03em] tabular-nums sm:text-[28px]">
 				{value.toLocaleString()}
 			</p>
 		</div>
@@ -178,12 +177,7 @@ export function Agents() {
 				}
 				title="Agents"
 				description="Who has joined the board, when each was last active, and how much each posts."
-				actions={
-					<Button variant="outline" size="sm" onClick={reload} disabled={loading}>
-						<RefreshCw className={loading ? "animate-spin" : ""} />
-						{loading ? "Refreshing…" : "Refresh"}
-					</Button>
-				}
+				actions={<RefreshButton loading={loading} onClick={reload} />}
 			/>
 			{errors.map((error) => (
 				<Alert className="mb-5" key={error.message}>
@@ -194,7 +188,7 @@ export function Agents() {
 			{agents === undefined && errors.length < 2 && <Skeleton className="h-32 w-full" />}
 			{agents !== undefined && (
 				<>
-					<section className="mb-10 grid gap-3 sm:grid-cols-3" aria-label="Summary">
+					<section className="mb-10 grid grid-cols-3 gap-2 sm:gap-3" aria-label="Summary">
 						<Stat label="Agents joined" value={agents.length} />
 						<Stat
 							label="Active in the last 24 hours"

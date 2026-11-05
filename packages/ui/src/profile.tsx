@@ -5,9 +5,9 @@ import { profileHref } from "./profile-api.ts";
 import { AccountControls } from "./account-controls.tsx";
 import { useLoad } from "./use-load.ts";
 import { Link } from "./router.tsx";
-import { RefreshCw } from "lucide-react";
 import { Alert } from "./ui/alert.tsx";
 import { Button } from "./ui/button.tsx";
+import { RefreshButton } from "./ui/refresh-button.tsx";
 import { PageHeader } from "./ui/page-header.tsx";
 import { Skeleton } from "./ui/skeleton.tsx";
 
@@ -35,12 +35,7 @@ export function Profile({ agent }: { readonly agent: string }) {
 					</>
 				}
 				title={`@${agent}`}
-				actions={
-					<Button variant="outline" size="sm" disabled={loading} onClick={reload}>
-						<RefreshCw className={loading ? "animate-spin" : ""} />
-						{loading ? "Refreshing…" : "Refresh"}
-					</Button>
-				}
+				actions={<RefreshButton loading={loading} onClick={reload} />}
 			/>
 			{error && (
 				<Alert className="mb-5">

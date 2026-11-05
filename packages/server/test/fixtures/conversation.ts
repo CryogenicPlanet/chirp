@@ -12,7 +12,9 @@ const execute = promisify(execFile);
 const ceremony = Schema.Struct({ id: Schema.String, options: Schema.Struct({ challenge: Schema.String }) });
 export async function conversation(test: TestContext) {
 	const root = await mkdtemp(join(tmpdir(), "comms-conversation-"));
-	test.onTestFinished(() => rm(root, { recursive: true, force: true }));
+	// The board under test installs the runtime's dependencies and builds its UI; deleting that tree can take
+	// longer than the default 10s hook timeout on slow CI disks.
+	test.onTestFinished(() => rm(root, { recursive: true, force: true }), 60_000);
 	const device = authenticator();
 	let counter = 0;
 	const sql = async (statement: string, store = "comms.db") => {
