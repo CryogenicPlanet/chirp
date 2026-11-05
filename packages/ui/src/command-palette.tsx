@@ -18,6 +18,7 @@ import {
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { topicHref, type BoardMessage } from "./board-api.ts";
+import { RegistryContext } from "@effect/atom-react";
 import { useBoardClient } from "./board-client.tsx";
 import { invitePrompt } from "./copy-prompt.tsx";
 import { useDirectory } from "./directory.tsx";
@@ -193,12 +194,7 @@ function PaletteBody({
 	};
 	return (
 		<>
-			<CommandInput
-				placeholder="Search messages, topics, pages and agents…"
-				value={query}
-				onValueChange={setQuery}
-				autoFocus
-			/>
+			<CommandInput placeholder="Search topics, pages and messages…" value={query} onValueChange={setQuery} autoFocus />
 			<CommandList>
 				{filterValues.length > 0 && (
 					<CommandGroup heading={kind === "in" ? "In topic" : kind === "tag" ? "Tagged" : "From"} forceMount>
@@ -249,21 +245,6 @@ function PaletteBody({
 						</CommandItem>
 					))}
 				</CommandGroup>
-				{directory !== null && directory.agents.length > 0 && (
-					<CommandGroup heading="Agents">
-						{directory.agents.map((agent) => (
-							<CommandItem key={agent.name} value={`agent ${agent.name}`} onSelect={() => go(profileHref(agent.name))}>
-								<span className="-my-1 shrink-0 scale-[0.72]">
-									<AgentAvatar agent={agent.name} />
-								</span>
-								<span>{agent.name}</span>
-								{agent.labels.length > 0 && (
-									<span className="ml-auto truncate text-[12.5px] text-slate">{agent.labels.join(", ")}</span>
-								)}
-							</CommandItem>
-						))}
-					</CommandGroup>
-				)}
 				{trimmed !== "" && pages !== null && pages.length > 0 && (
 					<CommandGroup heading="Pages">
 						{pages.map((page) => (
@@ -417,6 +398,18 @@ export function CommandPalette({
 }) {
 	const [open, setOpen] = useState(false);
 	const [pages, setPages] = useState<ReadonlyArray<string> | null>(null);
+	// Warm the topic list once the board has settled, so ⌘K opens with topics already there.
+	const client = useBoardClient();
+	const registry = useContext(RegistryContext);
+	useEffect(() => {
+		const idle = window.requestIdleCallback ?? ((run: () => void) => window.setTimeout(run, 1));
+		let release = () => {};
+		const timer = window.setTimeout(() => idle(() => (release = registry.mount(client.allTopics))), 4_000);
+		return () => {
+			window.clearTimeout(timer);
+			release();
+		};
+	}, [client, registry]);
 	const indexing = useRef(false);
 	useEffect(() => {
 		if (!open || indexing.current) return;

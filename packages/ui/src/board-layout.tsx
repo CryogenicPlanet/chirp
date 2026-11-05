@@ -9,6 +9,7 @@ import { paletteShortcut, useOpenPalette } from "./command-palette.tsx";
 import { CopyPromptButton } from "./copy-prompt.tsx";
 import { profileHref } from "./profile-api.ts";
 import { Link } from "./router.tsx";
+import { useIntent } from "./use-intent.ts";
 import { useLoad } from "./use-load.ts";
 import { AgentAvatar, Wordmark } from "./ui/bird.tsx";
 import { Button, buttonVariants } from "./ui/button.tsx";
@@ -20,14 +21,19 @@ export function NavLink({
 	active = false,
 	children,
 	className,
+	onIntent,
 }: {
 	readonly href: string;
 	readonly active?: boolean;
 	readonly children: ReactNode;
 	readonly className?: string;
+	/** Runs when a click looks likely, to prefetch what the link opens. */
+	readonly onIntent?: () => void;
 }) {
+	const intent = useIntent(onIntent ?? (() => {}));
 	return (
 		<Link
+			{...(onIntent === undefined ? {} : intent)}
 			href={href}
 			aria-current={active ? "page" : undefined}
 			className={cn(
@@ -48,11 +54,11 @@ function SearchTrigger() {
 		<button
 			type="button"
 			onClick={open}
-			className="mb-5 flex h-10 w-full cursor-pointer items-center gap-2 rounded-xl bg-card px-3 text-[14px] text-slate shadow-raised transition-colors hover:text-ink"
+			className="group mb-5 flex h-9 w-full cursor-pointer items-center gap-2 rounded-[10px] bg-card pr-1.5 pl-2.5 text-[14px] text-slate ring-1 ring-rule transition-[color,box-shadow] hover:text-ink hover:ring-edge/50"
 		>
-			<SearchIcon className="size-4" />
-			Search or jump to…
-			<Kbd className="ml-auto">{paletteShortcut}</Kbd>
+			<SearchIcon className="size-4 shrink-0" />
+			<span>Search</span>
+			<Kbd className="ml-auto h-6 rounded-md bg-wash px-1.5 text-[12px] tracking-wide ring-0">{paletteShortcut}</Kbd>
 		</button>
 	);
 }

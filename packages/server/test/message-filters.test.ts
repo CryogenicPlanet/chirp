@@ -106,3 +106,33 @@ it("matches plural and hyphen variants and searches history when no cursor is gi
 	expect(await search(`topic=home&${q("reading list")}&since=${spaced}`)).toEqual([hyphened, plural]);
 	expect(await marks()).toEqual(before);
 }, 30000);
+
+it("pages backwards through a topic with newest and before", async (test) => {
+	const fixture = await conversation(test),
+		app = await fixture.launch();
+	await app.setup();
+	const cookie = await app.login();
+	await app.ready(cookie);
+	const seqs: number[] = [];
+	for (const body of ["one", "two", "three", "four", "five"]) {
+		const response = await app.post("/api/messages", { topic: "history", body }, cookie);
+		expect(response.status).toBe(200);
+		seqs.push((await response.json()).seq);
+	}
+	await app.post("/api/messages", { topic: "elsewhere", body: "noise" }, cookie);
+	const page = async (query: string) => {
+		const response = await fetch(`${app.url}/api/messages?topic=history&newest=1&mark=0&${query}`, {
+			headers: { cookie },
+		});
+		expect(response.status).toBe(200);
+		return ((await response.json()) as { items: { body: string }[] }).items.map((item) => item.body);
+	};
+	expect(await page("limit=2")).toEqual(["four", "five"]);
+	expect(await page(`limit=2&before=${seqs[3]}`)).toEqual(["two", "three"]);
+	expect(await page(`limit=2&before=${seqs[1]}`)).toEqual(["one"]);
+	expect(await page(`limit=2&before=${seqs[0]}`)).toEqual([]);
+	const forward = await fetch(`${app.url}/api/messages?topic=history&since=0&before=${seqs[2]}`, {
+		headers: { cookie },
+	});
+	expect(forward.status).toBe(400);
+});

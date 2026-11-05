@@ -4,7 +4,7 @@ import { useVisible } from "./use-visible.ts";
 import { Atom } from "effect/unstable/reactivity";
 import { BoardClientProvider, useBoardClient } from "./board-client.tsx";
 import { Effect } from "effect";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Toaster } from "sonner";
 import { topicHref, validTopic, type BoardMessage, type BoardTopic } from "./board-api.ts";
 import { MessageList } from "./message.tsx";
@@ -20,10 +20,11 @@ import { Profile } from "./profile.tsx";
 import { profileFromPath } from "./profile-api.ts";
 import { Search } from "./search.tsx";
 import { TopicSettings } from "./topic-controls.tsx";
-import { MessageHistory } from "./message-history.tsx";
 import { useLoad } from "./use-load.ts";
 import { Composer } from "./composer.tsx";
 import { LoadProblem, useAutoRetry } from "./load-problem.tsx";
+import { HistoryEdge } from "./history-edge.tsx";
+import { useOlderMessages } from "./older-messages.ts";
 import { Link, useLocation, useScrollOnNavigate } from "./router.tsx";
 import { Bot, FileText, Hash, Home, Puzzle, RefreshCw, Settings2 } from "lucide-react";
 import { Button, buttonVariants } from "./ui/button.tsx";
@@ -87,6 +88,7 @@ function TopicNav({
 	readonly path: string | null;
 	readonly topics: ReadonlyArray<BoardTopic["subtopics"][number]>;
 }) {
+	const { prefetchTopic: prefetch } = useBoardClient();
 	return (
 		<>
 			<NavLink href="/" active={path === ""}>
@@ -109,6 +111,7 @@ function TopicNav({
 						href={topicHref(item.path)}
 						key={item.path}
 						active={active}
+						onIntent={() => prefetch(item.path)}
 						className={cn(item.unread > 0 && !active && "font-semibold text-ink")}
 					>
 						<Hash />
@@ -142,19 +145,17 @@ function Board({
 	const visible = useVisible();
 	const path = currentPath(pathname);
 	const [showArchived, setShowArchived] = useState(false);
-	const [browsingHistory, setBrowsingHistory] = useState(false);
 	const [searching, setSearching] = useState(() => new URLSearchParams(search).has("q"));
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const composer = useRef<ComposerBridge>(null);
 	const bridge = useMemo<ComposerBridge>(() => ({ reply: (reply) => composer.current?.reply(reply) }), []);
 	useEffect(() => {
-		setBrowsingHistory(false);
 		setSettingsOpen(false);
 	}, [pathname]);
 	const request = useMemo(() => {
 		if (path === null) return Atom.make(Effect.succeed(null));
-		const root = client.topic("", showArchived, visible && path === "" && !searching && !browsingHistory);
-		const topic = path === "" ? root : client.topic(path, showArchived, visible && !searching && !browsingHistory);
+		const root = client.topic("", showArchived, visible && path === "" && !searching);
+		const topic = path === "" ? root : client.topic(path, showArchived, visible && !searching);
 		const read = Atom.make((get) =>
 			Effect.all(
 				{ root: get.result(root, { suspendOnWaiting: true }), topic: get.result(topic, { suspendOnWaiting: true }) },
@@ -165,12 +166,17 @@ function Board({
 			refresh(root);
 			if (topic !== root) refresh(topic);
 		});
-	}, [client, path, showArchived, searching, browsingHistory, visible]);
+	}, [client, path, showArchived, searching, visible]);
 	const { value, error, loading, reload, update } = useLoad(request);
+	// A copy warmed on hover renders at once; the marking read replaces it when it lands.
+	const peekRequest = useMemo(
+		() => (path === null ? null : client.peekTopic(path)) ?? Atom.make(Effect.succeed(null)),
+		[client, path],
+	);
+	const { value: peeked } = useLoad(peekRequest);
 	const root = value?.root;
 	const topic = value?.topic;
 	const onSent = (message: BoardMessage) => {
-		setBrowsingHistory(false);
 		if (path === "" || path === message.topic)
 			update(
 				(previous) =>
@@ -192,21 +198,35 @@ function Board({
 	// router's own scroll-to-top, which runs in the parent's effect.
 	const fresh = topic !== undefined && path !== null && topic.path === path;
 	// What this route shows: its own data only, never the previous route's while the new one loads.
-	const view = fresh ? topic : undefined;
+	const view = fresh ? topic : peeked !== null && peeked !== undefined && peeked.path === path ? peeked : undefined;
 	const retry = useAutoRetry(error, reload);
 	const landed = useRef<string | null>(null);
-	const messageCount = fresh ? topic.messages.length : 0;
+	// Older history loads only after the topic has opened at its latest message (or at a linked one).
+	const [armedPath, setArmedPath] = useState<string | null>(null);
 	useEffect(() => {
-		if (!fresh || path === "" || hash !== "" || searching || messageCount === 0 || landed.current === pathname) return;
+		if (hash !== "" && view !== undefined) setArmedPath(pathname);
+	}, [hash, view, pathname]);
+	const messageCount = view?.messages.length ?? 0;
+	useEffect(() => {
+		if (
+			view === undefined ||
+			path === "" ||
+			hash !== "" ||
+			searching ||
+			messageCount === 0 ||
+			landed.current === pathname
+		)
+			return;
 		landed.current = pathname;
 		const frame = requestAnimationFrame(() => {
 			window.scrollTo(0, document.documentElement.scrollHeight);
 			pinned.current = true;
+			setArmedPath(pathname);
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [fresh, pathname, path, hash, searching, messageCount]);
+	}, [view, pathname, path, hash, searching, messageCount]);
 	// Stay pinned to the bottom when new messages arrive while reading the latest.
-	const lastSeq = fresh ? (topic.messages.at(-1)?.seq ?? 0) : 0;
+	const lastSeq = view?.messages.at(-1)?.seq ?? 0;
 	const pinned = useRef(true);
 	useEffect(() => {
 		const track = () => {
@@ -219,6 +239,24 @@ function Board({
 		if (lastSeq !== 0 && pinned.current && landed.current === pathname && path !== "" && !searching && hash === "")
 			window.scrollTo(0, document.documentElement.scrollHeight);
 	}, [lastSeq, pathname, path, searching, hash]);
+
+	// Older pages load as the top of the list scrolls into view, keeping the reader's place.
+	const history = useOlderMessages(path, view?.messages[0]?.seq);
+	const shownMessages = useMemo(() => {
+		const latest = view?.messages ?? [];
+		const first = latest[0]?.seq ?? Number.MAX_SAFE_INTEGER;
+		return [...history.older.filter((message) => message.seq < first), ...latest];
+	}, [history.older, view]);
+	const heightBefore = useRef<number | null>(null);
+	const loadOlder = useCallback(() => {
+		heightBefore.current = document.documentElement.scrollHeight;
+		history.loadOlder();
+	}, [history]);
+	useLayoutEffect(() => {
+		if (heightBefore.current === null) return;
+		window.scrollBy(0, document.documentElement.scrollHeight - heightBefore.current);
+		heightBefore.current = null;
+	}, [history.older]);
 
 	const authRequired = error?.status === 401;
 	const segments = path?.split("/") ?? [];
@@ -452,22 +490,17 @@ function Board({
 										</section>
 									)}
 									<Search path={path} onActive={setSearching} />
-									{!searching && browsingHistory && (
-										<MessageHistory path={path} onClose={() => setBrowsingHistory(false)} />
-									)}
-									{!searching && !browsingHistory && (
+									{!searching && (
 										<>
 											<ReferencedMessage visible={view.messages} />
 											<section className="flex-1 pb-2" aria-label="Messages">
-												{view.messages.length >= 100 && (
-													<div className="flex items-center justify-between gap-4 pb-3 text-[13px] text-slate">
-														<p>Showing the latest 100 messages.</p>
-														{path !== "" && (
-															<Button variant="ghost" size="sm" type="button" onClick={() => setBrowsingHistory(true)}>
-																Browse older messages
-															</Button>
-														)}
-													</div>
+												{path !== "" && armedPath === pathname && view.messages.length >= 100 && (
+													<HistoryEdge
+														done={history.done}
+														loading={history.loading}
+														failed={history.failed}
+														onReach={loadOlder}
+													/>
 												)}
 												{view.messages.length === 0 ? (
 													<EmptyState title="No messages yet">
@@ -476,7 +509,7 @@ function Board({
 												) : (
 													<>
 														<h2 className="sr-only">{path ? "Messages" : "Recent messages"}</h2>
-														<MessageList messages={view.messages} currentTopic={path || undefined} />
+														<MessageList messages={shownMessages} currentTopic={path || undefined} />
 													</>
 												)}
 											</section>

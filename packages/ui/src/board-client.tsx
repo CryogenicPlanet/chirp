@@ -19,6 +19,21 @@ const makeClient = (registry: AtomRegistry.AtomRegistry) => {
 	}) {}
 	const create = Client.mutation("conversation", "create", { responseMode: "decoded-only" });
 	const meta = Client.mutation("topicManagement", "meta", { responseMode: "decoded-only" });
+	// Per provider: which topics were warmed, and when.
+	const prefetched = new Map<string, number>();
+	const peek = (path: string) =>
+		path
+			? Client.query("topics", "detail", {
+					params: { path },
+					query: { archived: "0", mark: "0" },
+					reactivityKeys: ["board"],
+					timeToLive: "2 minutes",
+				})
+			: Client.query("topics", "root", {
+					query: { archived: "0", mark: "0" },
+					reactivityKeys: ["board"],
+					timeToLive: "2 minutes",
+				});
 	const run = <Input, A, E>(atom: Atom.AtomResultFn<Input, A, E>, input: NoInfer<Input>) =>
 		Effect.gen(function* () {
 			yield* Effect.sync(() => registry.set(atom, input));
@@ -51,21 +66,25 @@ const makeClient = (registry: AtomRegistry.AtomRegistry) => {
 			Client.query("profiles", "me", { query: {}, reactivityKeys: ["identity"] }),
 			(response) => response.body,
 		),
+		// Kept two minutes after the last view, so going back to a topic shows it at once while it refreshes.
 		topic: (path: string, archived: boolean, mark: boolean) =>
 			path
 				? Client.query("topics", "detail", {
 						params: { path },
 						query: { archived: archived ? "1" : "0", mark: mark ? "1" : "0" },
 						reactivityKeys: ["board"],
+						timeToLive: "2 minutes",
 					})
 				: Client.query("topics", "root", {
 						query: { archived: archived ? "1" : "0", mark: mark ? "1" : "0" },
 						reactivityKeys: ["board"],
+						timeToLive: "2 minutes",
 					}),
 		/** Topics three levels deep, for the palette and pickers; loaded on demand. Never marks reads. */
 		allTopics: Client.query("topics", "root", {
 			query: { depth: 3, mark: "0" },
 			reactivityKeys: ["board"],
+			timeToLive: "5 minutes",
 		}),
 		messages: (
 			query: {
@@ -75,6 +94,7 @@ const makeClient = (registry: AtomRegistry.AtomRegistry) => {
 				readonly recursive?: "1";
 				readonly mark?: "0";
 				readonly newest?: "1";
+				readonly before?: number;
 				readonly q?: string;
 				readonly tag?: string;
 				readonly agent?: string;
@@ -96,6 +116,19 @@ const makeClient = (registry: AtomRegistry.AtomRegistry) => {
 			AtomRegistry.getResult(registry, atom, { suspendOnWaiting: true }).pipe(
 				Effect.catchCause((cause) => Effect.fail(boardFailure(cause))),
 			),
+		/**
+		 * Warms a topic without marking it read, on hover intent. The view shows this copy until its own read (which
+		 * marks) arrives. At most once a minute per topic: prefetching must not add load to a busy board.
+		 */
+		prefetchTopic: (path: string) => {
+			const now = Date.now();
+			if ((prefetched.get(path) ?? 0) > now - 60_000) return;
+			prefetched.set(path, now);
+			const release = registry.mount(peek(path));
+			window.setTimeout(release, 5_000);
+		},
+		/** The prefetched copy of a topic, if one was warmed in the last two minutes. */
+		peekTopic: (path: string) => ((prefetched.get(path) ?? 0) > Date.now() - 120_000 ? peek(path) : null),
 	};
 };
 const ClientContext = createContext<ReturnType<typeof makeClient> | null>(null);
