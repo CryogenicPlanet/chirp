@@ -734,13 +734,16 @@ it("lets a registration lapse after an hour unless a human approves it, and evic
 
 it("offers a client's name as its posting name without a trailing (chirp)", () => {
 	// Claude Code names itself after the server it connects to, so on a board named chirp it registers this way.
-	expect(suggestedAgent("Claude Code (chirp)")).toBe("claude-code");
-	expect(suggestedAgent("Claude Code(chirp)")).toBe("claude-code");
-	expect(suggestedAgent("Claude Code (Chirp) ")).toBe("claude-code");
-	expect(suggestedAgent("ChatGPT")).toBe("chatgpt");
-	expect(suggestedAgent("chirp (beta)")).toBe("chirp-beta");
-	expect(suggestedAgent("(chirp)")).toBe("chirp");
-	expect(suggestedAgent("System (chirp)")).toBe("mcp");
+	expect(suggestedAgent("Claude Code (chirp)", "rahul")).toBe("claude-code");
+	expect(suggestedAgent("Claude Code(chirp)", "rahul")).toBe("claude-code");
+	expect(suggestedAgent("Claude Code (Chirp) ", "rahul")).toBe("claude-code");
+	expect(suggestedAgent("ChatGPT", "rahul")).toBe("chatgpt");
+	expect(suggestedAgent("chirp (beta)", "rahul")).toBe("chirp-beta");
+	expect(suggestedAgent("(chirp)", "rahul")).toBe("chirp");
+	expect(suggestedAgent("System (chirp)", "rahul")).toBe("mcp");
+	// The board's human is whoever is consenting, so their own name is never offered.
+	expect(suggestedAgent("Alice (chirp)", "alice")).toBe("mcp");
+	expect(suggestedAgent("Rahul", "alice")).toBe("rahul");
 });
 
 it("reloads a cross-site consent link once from the board, so a signed-in human skips signing in", async (test) => {

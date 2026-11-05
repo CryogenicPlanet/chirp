@@ -37,7 +37,7 @@ button{display:flex;align-items:center;justify-content:center;width:100%;min-hei
 .check{display:flex;align-items:flex-start;gap:10px;margin:14px 0 0;font-size:15.5px;font-weight:400;text-wrap:pretty}.check input{flex:none;width:18px;height:18px;margin:3px 0 0;accent-color:#202a3a}
 .note{margin:6px 0 0 28px;font-size:14.5px}.muted{margin-top:20px;color:#5c6577;font-size:14.5px}.code code{font-size:28px;font-weight:500;line-height:1.2;letter-spacing:.16em;color:#202a3a}
 .actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px}.actions button{flex:1 1 180px;margin:0}
-#status{min-height:1.55em;margin:12px 0 0;color:#5c6577;font-size:14.5px}
+.hint{margin:6px 0 0;color:#5c6577;font-size:14px}#status{min-height:1.55em;margin:12px 0 0;color:#5c6577;font-size:14.5px}
 .aside{display:flex;flex-wrap:wrap;gap:4px 16px;width:min(464px,calc(100% - 32px));margin:20px auto 0;padding:0 4px;font-size:14px}.aside a{color:#5c6577;text-decoration-color:rgb(92 101 119/.35)}.aside a:hover{color:#202a3a}
 @media(max-width:600px){.sky,.bar{padding-top:16px}.sky{padding-bottom:104px}.sky+.auth-shell{margin-top:-72px}.auth-shell{padding:24px 20px}h1{font-size:26px}}
 `;

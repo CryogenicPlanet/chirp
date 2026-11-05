@@ -1,5 +1,5 @@
 import { lockBootWrite } from "./boot-write-lock.ts";
-import { humanAgent } from "./human-agent.ts";
+import { readOwner, requireOwner } from "./owner.ts";
 import { authSecrets, refuse, committed, captureRefusal } from "./auth-primitives.ts";
 import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
 import { Clock, Crypto, Effect, Schema, Struct, type Semaphore } from "effect";
@@ -50,7 +50,9 @@ const enrollmentRow = Schema.Struct({
 	refresh_seconds: Schema.NullOr(Schema.Int),
 });
 const tokenRow = Token.mapFields(Struct.pick(["id", "family", "agent", "label", "scopes", "expires_at", "revoked_at"]));
-const agentName = (name: string) => /^[a-z0-9][a-z0-9._-]{0,63}$/.test(name) && name !== humanAgent && name !== "boot";
+/** Boot and the board's human are reserved; before setup names the human, only boot is. */
+const agentName = (name: string, owner: string | null) =>
+	/^[a-z0-9][a-z0-9._-]{0,63}$/.test(name) && name !== owner && name !== "boot";
 const hostName = (host: string) => /^[a-z0-9][a-z0-9._-]{0,63}$/.test(host);
 /** What a held collection reports. It never carries a secret: boot keeps the only access row's preimage-free hash. */
 export type HeldCollection =
@@ -106,7 +108,11 @@ export const makeEnrollment = <E, R>(
 			});
 		const createEnrollment = (input: { readonly name: string; readonly kind: string; readonly host: string }) =>
 			Effect.gen(function* () {
-				if (!agentName(input.name) || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(input.kind) || !hostName(input.host))
+				if (
+					!agentName(input.name, yield* readOwner(sql)) ||
+					!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(input.kind) ||
+					!hostName(input.host)
+				)
 					return yield* refuse("invalid_request");
 				const id = `e_${yield* random}`,
 					secret = yield* random,
@@ -132,7 +138,7 @@ export const makeEnrollment = <E, R>(
 			Effect.gen(function* () {
 				if (
 					!validExtensionName(input.extension) ||
-					!agentName(input.agent) ||
+					!agentName(input.agent, yield* readOwner(sql)) ||
 					!hostName(input.label) ||
 					!input.scopes.includes("read") ||
 					new Set(input.scopes).size !== input.scopes.length ||
@@ -168,6 +174,9 @@ export const makeEnrollment = <E, R>(
 								now = yield* Clock.currentTimeMillis;
 							if (row.expires_at <= now) return yield* refuse("enrollment_expired");
 							if (row.status !== "pending") return yield* refuse("enrollment_decided");
+							const owner = yield* requireOwner(sql);
+							// A request created while setup was naming the owner may carry that name; it can be denied, never approved.
+							if (params.decision === "approve" && row.agent_name === owner) return yield* refuse("invalid_request");
 							const held = heldExtension(row.kind);
 							if (held !== null) {
 								// A grant's lifetime is fixed, and the human may only narrow what the extension asked for.
@@ -194,7 +203,7 @@ export const makeEnrollment = <E, R>(
 								at: now,
 								type: params.decision === "approve" ? "enrollment.approved" : "enrollment.denied",
 								level: "info",
-								actor: humanAgent,
+								actor: owner,
 								instance: null,
 								generation: 0,
 								request_id: null,

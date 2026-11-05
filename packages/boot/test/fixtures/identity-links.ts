@@ -68,7 +68,7 @@ const run = Effect.gen(function* () {
 		Effect.gen(function* () {
 			const code = output.at(-1)?.split("code ")[1];
 			assert.ok(code);
-			const started = yield* auth.startSetup(code);
+			const started = yield* auth.startSetup(code, "rahul");
 			yield* auth.finishSetup(started.id, device.registration(started.options.challenge));
 		});
 	const passkeySession = (auth: Boot) =>
@@ -654,7 +654,7 @@ const run = Effect.gen(function* () {
 		assert.equal(first.identities, 1);
 		yield* refused(auth.startOidc({ intent: "login", provider: "github" }, primary, null), "identity_not_linked");
 		assert.equal(yield* linkedRows, 0);
-		const stale = yield* auth.startSetup(first.code);
+		const stale = yield* auth.startSetup(first.code, "rahul");
 		assert.deepEqual(stale.identities, [{ provider: "github", label: "Octo" }]);
 		// A second mint replaces the code and its offer; the first challenge then registers and links nothing.
 		const second = yield* auth.mintSetupCode([offer(rahul, "Rahul"), offer(human, "Human")]);
@@ -662,7 +662,7 @@ const run = Effect.gen(function* () {
 		yield* refused(auth.finishSetup(stale.id, device.registration(stale.options.challenge)), "challenge_invalid");
 		assert.equal(yield* passkeys, 0);
 		assert.equal(yield* linkedRows, 0);
-		const started = yield* auth.startSetup(second.code);
+		const started = yield* auth.startSetup(second.code, "rahul");
 		assert.deepEqual(started.identities, [
 			{ provider: "github", label: "Rahul" },
 			{ provider: "google", label: "Human" },
@@ -704,10 +704,10 @@ const run = Effect.gen(function* () {
 		// Expiry drops the offer with the code: the startup code that replaces it links nothing.
 		const expiring = yield* auth.mintSetupCode([offer(rahul, "Rahul")]);
 		yield* refused(
-			auth.startSetup(expiring.code).pipe(Effect.provideService(Clock.Clock, later)),
+			auth.startSetup(expiring.code, "rahul").pipe(Effect.provideService(Clock.Clock, later)),
 			"setup_code_invalid",
 		);
-		const afterExpiry = yield* auth.startSetup(stdoutCode());
+		const afterExpiry = yield* auth.startSetup(stdoutCode(), "rahul");
 		assert.deepEqual(afterExpiry.identities, []);
 		yield* auth.finishSetup(afterExpiry.id, device.registration(afterExpiry.options.challenge));
 		assert.equal(yield* passkeys, 1);
@@ -716,13 +716,14 @@ const run = Effect.gen(function* () {
 
 		// Three wrong codes rotate to a code nobody holds; it expires into a startup code that links nothing.
 		const guessed = yield* auth.mintSetupCode([offer(rahul, "Rahul")]);
-		for (let attempt = 0; attempt < 3; attempt++) yield* refused(auth.startSetup("0".repeat(16)), "setup_code_invalid");
-		yield* refused(auth.startSetup(guessed.code), "setup_code_invalid");
+		for (let attempt = 0; attempt < 3; attempt++)
+			yield* refused(auth.startSetup("0".repeat(16), "rahul"), "setup_code_invalid");
+		yield* refused(auth.startSetup(guessed.code, "rahul"), "setup_code_invalid");
 		yield* refused(
-			auth.startSetup("0".repeat(16)).pipe(Effect.provideService(Clock.Clock, later)),
+			auth.startSetup("0".repeat(16), "rahul").pipe(Effect.provideService(Clock.Clock, later)),
 			"setup_code_invalid",
 		);
-		const afterGuesses = yield* auth.startSetup(stdoutCode());
+		const afterGuesses = yield* auth.startSetup(stdoutCode(), "rahul");
 		assert.deepEqual(afterGuesses.identities, []);
 		yield* auth.finishSetup(afterGuesses.id, device.registration(afterGuesses.options.challenge));
 		assert.equal(yield* linkedRows, 0);
@@ -731,8 +732,8 @@ const run = Effect.gen(function* () {
 		// A restart drops it: the new process's startup code links nothing, and the minted code is gone.
 		const beforeRestart = yield* auth.mintSetupCode([offer(rahul, "Rahul")]);
 		const restarted = yield* build();
-		yield* refused(restarted.startSetup(beforeRestart.code), "setup_code_invalid");
-		const afterRestart = yield* restarted.startSetup(stdoutCode());
+		yield* refused(restarted.startSetup(beforeRestart.code, "rahul"), "setup_code_invalid");
+		const afterRestart = yield* restarted.startSetup(stdoutCode(), "rahul");
 		assert.deepEqual(afterRestart.identities, []);
 		yield* restarted.finishSetup(afterRestart.id, device.registration(afterRestart.options.challenge));
 		assert.equal(yield* linkedRows, 0);
@@ -742,7 +743,7 @@ const run = Effect.gen(function* () {
 		const off = yield* build(null);
 		const unoffered = yield* off.mintSetupCode([offer(rahul, "Rahul")]);
 		assert.equal(unoffered.identities, 0);
-		const offStarted = yield* off.startSetup(unoffered.code);
+		const offStarted = yield* off.startSetup(unoffered.code, "rahul");
 		assert.deepEqual(offStarted.identities, []);
 		yield* off.finishSetup(offStarted.id, device.registration(offStarted.options.challenge));
 		assert.equal(yield* linkedRows, 0);
@@ -751,11 +752,11 @@ const run = Effect.gen(function* () {
 		// A reopened setup never links an offer, even one minted before a passkey appeared.
 		const reopening = yield* build({ issuer: issuer.issuer }, true);
 		const minted = yield* reopening.mintSetupCode([offer(rahul, "Rahul")]);
-		const beforePasskey = yield* reopening.startSetup(minted.code);
+		const beforePasskey = yield* reopening.startSetup(minted.code, "rahul");
 		assert.equal(beforePasskey.identities.length, 1);
 		yield* sql`INSERT INTO passkeys (id, public_key, counter, transports, label, created_at, rp_id)
 			VALUES ('another-device', 'unused', 0, '[]', 'Other passkey', 0, 'comms.test')`;
-		assert.deepEqual((yield* reopening.startSetup(minted.code)).identities, []);
+		assert.deepEqual((yield* reopening.startSetup(minted.code, "rahul")).identities, []);
 		const recovery = yield* reopening.finishSetup(
 			beforePasskey.id,
 			device.registration(beforePasskey.options.challenge),
@@ -767,7 +768,7 @@ const run = Effect.gen(function* () {
 
 		// A failure at the transaction's last write leaves neither a passkey nor a link, and drops the offer.
 		const failing = yield* auth.mintSetupCode([offer(rahul, "Rahul")]);
-		const doomed = yield* auth.startSetup(failing.code);
+		const doomed = yield* auth.startSetup(failing.code, "rahul");
 		const eventsBefore = (yield* linkedEvents).length;
 		yield* sql`CREATE TRIGGER refuse_session BEFORE INSERT ON sessions BEGIN SELECT RAISE(ABORT, 'session disk failure'); END`;
 		const failed = yield* Effect.result(auth.finishSetup(doomed.id, device.registration(doomed.options.challenge)));
@@ -776,8 +777,8 @@ const run = Effect.gen(function* () {
 		assert.equal(yield* passkeys, 0);
 		assert.equal(yield* linkedRows, 0);
 		assert.equal((yield* linkedEvents).length, eventsBefore);
-		yield* refused(auth.startSetup(failing.code), "setup_code_invalid");
-		assert.deepEqual((yield* auth.startSetup(stdoutCode())).identities, []);
+		yield* refused(auth.startSetup(failing.code, "rahul"), "setup_code_invalid");
+		assert.deepEqual((yield* auth.startSetup(stdoutCode(), "rahul")).identities, []);
 
 		// A mint racing a finish, through one Auth instance or two (the one SQL connection still orders them): a
 		// passkey comes only with its own code's offer, and rows only with a passkey.
@@ -785,7 +786,7 @@ const run = Effect.gen(function* () {
 		for (const [index, minter] of [auth, other, auth, other].entries()) {
 			yield* reset;
 			const racing = yield* auth.mintSetupCode([offer(rahul, "Rahul")]);
-			const challenge = yield* auth.startSetup(racing.code);
+			const challenge = yield* auth.startSetup(racing.code, "rahul");
 			const finish = Effect.result(auth.finishSetup(challenge.id, device.registration(challenge.options.challenge)));
 			const mint = Effect.result(minter.mintSetupCode([offer(human, "Human")]));
 			// Alternate which one forks first.

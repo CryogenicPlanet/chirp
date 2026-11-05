@@ -4,7 +4,7 @@ import { SqlClient } from "effect/unstable/sql";
 import { AuthError, type AuthConfig } from "./auth.ts";
 import type { AssertionProof } from "./enrollment.ts";
 import { Events } from "./events.ts";
-import { humanAgent } from "./human-agent.ts";
+import { requireOwner } from "./owner.ts";
 import { canonicalOriginRemove, type RemoveOrigin } from "./passkey-code-schema.ts";
 
 /** One browser origin and the WebAuthn relying party ID its passkeys are bound to. */
@@ -194,7 +194,7 @@ export const makeOriginManagement = <E, R>(
 							at: now,
 							type: "auth.origin_removed",
 							level: "info",
-							actor: humanAgent,
+							actor: yield* requireOwner(sql),
 							instance: null,
 							generation: 0,
 							request_id: null,

@@ -66,7 +66,9 @@ it("manages passkeys with the child down and refuses bearer, forged identity, re
 			headers: { "content-type": "application/json", origin, ...headers },
 			body: JSON.stringify(input),
 		});
-	const setup = Schema.decodeUnknownSync(ceremony)(await (await send("/_boot/auth/setup/options", { code })).json());
+	const setup = Schema.decodeUnknownSync(ceremony)(
+		await (await send("/_boot/auth/setup/options", { code, name: "rahul" })).json(),
+	);
 	expect(
 		(await send("/_boot/auth/setup/verify", { id: setup.id, response: first.registration(setup.options.challenge) }))
 			.status,

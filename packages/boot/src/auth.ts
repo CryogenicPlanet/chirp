@@ -35,7 +35,7 @@ import { makeIdentityLinks } from "./identity-links.ts";
 import { identityId, identityPrefix, LinkedIdentity, type OfferedIdentity } from "./oidc-schema.ts";
 import type { OidcConfig } from "./oidc-client.ts";
 import { Events } from "./events.ts";
-import { humanAgent } from "./human-agent.ts";
+import { agentNameTaken, readOwner, recordLegacyOwner, recordOwner, requireOwner, validOwnerName } from "./owner.ts";
 import type { RemoveOrigin } from "./passkey-code-schema.ts";
 
 /** The top-level origin is the primary one; boot generates absolute URLs from it. */
@@ -87,6 +87,7 @@ export class AuthError extends Schema.TaggedError<AuthError>()("AuthError", {
 		"origin_not_found",
 		"origin_protected",
 		"origin_unproven",
+		"owner_name_invalid",
 		"passkey_code_invalid",
 		"passkey_code_locked",
 		"passkey_exists",
@@ -149,6 +150,8 @@ const makeAuth = (config: AuthConfig) =>
 			readonly failures: number;
 			readonly expiresAt: number | null;
 			readonly identities: ReadonlyArray<OfferedIdentity>;
+			// The owner name each first-setup challenge was started with, so the passkey commits under what was checked.
+			readonly names: ReadonlyMap<string, string>;
 		} | null>(null);
 		const { hash, random } = authSecrets(crypto);
 		// REOPEN_SETUP=1 lets one setup add a passkey while passkeys exist, once per boot process.
@@ -163,7 +166,7 @@ const makeAuth = (config: AuthConfig) =>
 				const code = Buffer.from(bytes).toString("hex").toUpperCase();
 				const generation = yield* random;
 				yield* sql`DELETE FROM auth_challenges WHERE ceremony = 'setup'`;
-				const state = { code, generation, failures: 0, expiresAt, identities };
+				const state = { code, generation, failures: 0, expiresAt, identities, names: new Map<string, string>() };
 				yield* Ref.set(setup, state);
 				if (expiresAt === null) yield* Effect.sync(() => bootConsole.log(`chirp: /setup is open, code ${code}`));
 				return state;
@@ -180,6 +183,7 @@ const makeAuth = (config: AuthConfig) =>
 		});
 		// Every boot invalidates setup ceremonies created under an earlier stdout code.
 		yield* sql`DELETE FROM auth_challenges WHERE ceremony = 'setup'`;
+		yield* recordLegacyOwner(sql);
 		/** Whether stored passkeys can still sign in through an allowed origin. Read fresh each time, because passkeys
 		 * and runtime origins change while boot runs. A mismatch warns; it never refuses startup. */
 		const passkeyOriginState = Effect.gen(function* () {
@@ -258,7 +262,19 @@ const makeAuth = (config: AuthConfig) =>
 				yield* sql`INSERT INTO sessions (id, hash, created_at, expires_at, last_seen_at, origin) VALUES (${id}, ${digest}, ${now}, ${expiresAt}, ${now}, ${origin})`;
 				return { token, id, expiresAt };
 			});
-		const startSetup = (party: RelyingParty) => (code: string) =>
+		/** Setup names the owner only while none is recorded; afterwards, a reopened or repeated setup keeps the name. */
+		const ownerChoice = (name: string | undefined) =>
+			Effect.gen(function* () {
+				if ((yield* readOwner(sql)) !== null) return null;
+				if (
+					name === undefined ||
+					!validOwnerName(name) ||
+					(yield* agentNameTaken(sql, name, yield* Clock.currentTimeMillis))
+				)
+					return yield* refuse("owner_name_invalid");
+				return name;
+			});
+		const startSetup = (party: RelyingParty) => (code: string, name?: string) =>
 			mutex.withPermit(
 				Effect.gen(function* () {
 					const state = yield* setupState;
@@ -273,6 +289,8 @@ const makeAuth = (config: AuthConfig) =>
 						else yield* Ref.set(setup, { ...state, failures: state.failures + 1 });
 						return yield* refuse("setup_code_invalid");
 					}
+					// Checked before the browser creates a passkey, which a refusal at verify would leave orphaned.
+					const owner = yield* ownerChoice(name);
 					const options = yield* Effect.tryPromise({
 						try: () =>
 							generateRegistrationOptions({
@@ -285,8 +303,10 @@ const makeAuth = (config: AuthConfig) =>
 							}),
 						catch: () => new AuthError({ code: "registration_failed" }),
 					});
+					const id = yield* saveChallenge(options.challenge, "setup", state.generation, state.expiresAt);
+					if (owner !== null) yield* Ref.set(setup, { ...state, names: new Map([...state.names, [id, owner]]) });
 					return {
-						id: yield* saveChallenge(options.challenge, "setup", state.generation, state.expiresAt),
+						id,
 						options,
 						// What finishing links, so the page can say so before the browser creates the passkey.
 						identities: reopened ? [] : state.identities.map(({ provider, label }) => ({ provider, label })),
@@ -326,6 +346,10 @@ const makeAuth = (config: AuthConfig) =>
 							});
 							if (!verified.verified) return yield* refuse("registration_invalid");
 							if (challenge.expires_at <= (yield* Clock.currentTimeMillis)) return yield* refuse("challenge_invalid");
+							// Rechecked in this transaction: an agent may have been granted the name since the challenge started.
+							const named = yield* ownerChoice(state.names.get(id));
+							if (named !== null) yield* recordOwner(sql, named);
+							const owner = named ?? (yield* requireOwner(sql));
 							const credential = verified.registrationInfo.credential;
 							const publicKey = Buffer.from(credential.publicKey).toString("base64url");
 							const transports = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)))(
@@ -343,7 +367,7 @@ const makeAuth = (config: AuthConfig) =>
 									at: now,
 									type: "auth.setup_reopened",
 									level: "warn",
-									actor: humanAgent,
+									actor: owner,
 									instance: null,
 									generation: 0,
 									request_id: null,
@@ -373,7 +397,7 @@ const makeAuth = (config: AuthConfig) =>
 										at: now,
 										type: "auth.identity_linked",
 										level: "info",
-										actor: humanAgent,
+										actor: owner,
 										instance: null,
 										generation: 0,
 										request_id: null,
@@ -627,6 +651,10 @@ const makeAuth = (config: AuthConfig) =>
 			at,
 			setupOpen: mutex.withPermit(Effect.map(setupState, (state) => state !== null)),
 			setupRequired: noPasskeys,
+			/** Whether first setup must name the owner. */
+			ownerRequired: Effect.map(readOwner(sql), (owner) => owner === null),
+			/** The human every session signs in as. */
+			owner: requireOwner(sql),
 			mintSetupCode,
 			passkeyOriginState,
 			authenticateSession,

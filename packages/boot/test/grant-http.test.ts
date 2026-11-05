@@ -100,7 +100,10 @@ async function launch(test: TestContext) {
 	await expect.poll(() => /\/setup is open, code ([A-F0-9]+)/.exec(app.output())?.[1]).toBeTruthy();
 	const setup = Schema.decodeUnknownSync(ceremony)(
 		await (
-			await post("/_boot/auth/setup/options", { code: /\/setup is open, code ([A-F0-9]+)/.exec(app.output())?.[1] })
+			await post("/_boot/auth/setup/options", {
+				code: /\/setup is open, code ([A-F0-9]+)/.exec(app.output())?.[1],
+				name: "rahul",
+			})
 		).json(),
 	);
 	expect(

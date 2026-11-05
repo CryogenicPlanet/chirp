@@ -5,7 +5,6 @@ import {
 	requestIdHeader,
 	tokenExpiresHeader,
 } from "@comms/protocol/headers";
-import { humanAgent } from "./human-agent.ts";
 import { bootRoute } from "./boot-route.ts";
 import { requestBytes } from "./request-bytes.ts";
 import { childErrorPolicy } from "./child-error-policy.ts";
@@ -169,6 +168,10 @@ const policy = {
 	passkey_code_invalid: {
 		status: 401,
 		hint: "Ask the signed-in human for a new add-passkey code; codes look like 12 hex characters, a dash and 16 more, expire, are single-use, and redeem only on their bound address. Three wrong secrets for a code lock its redemption briefly.",
+	},
+	owner_name_invalid: {
+		status: 400,
+		hint: "Send name, what agents should call you: 1–64 lowercase letters, digits, dot, underscore or hyphen, starting with a letter or digit, other than boot, system, mcp, here or a name an agent already holds. Only first setup takes a name; open /setup if this page does not ask for one.",
 	},
 	passkey_exists: { status: 409, hint: "Use the registered passkey or choose a different authenticator." },
 	passkey_not_found: { status: 404, hint: "Inspect /_boot/auth/passkeys and select an existing passkey." },
@@ -373,7 +376,7 @@ export const authenticate = (auth: Auth["Service"], request: HttpServerRequest.H
 		const human: VerifiedIdentity = {
 			...session,
 			kind: "human",
-			agent: humanAgent,
+			agent: yield* auth.owner,
 			label: "human",
 			scopes: ["read", "write", "fs"],
 		};
@@ -423,7 +426,12 @@ export const authRoute = (auth: Auth["Service"], requestId: string) =>
 						(request.headers.cookie ?? "").split(";").some((part) => part.trim().startsWith(`${sessionCookie}=`));
 					const identity = explicit ? yield* authenticate(auth, request) : null;
 					return HttpServerResponse.jsonUnsafe(
-						{ setup_required: yield* auth.setupRequired, authenticated: identity?.kind === "human" },
+						{
+							setup_required: yield* auth.setupRequired,
+							// Whether first setup must also name the owner; a reopened setup keeps the recorded name.
+							owner_required: yield* auth.ownerRequired,
+							authenticated: identity?.kind === "human",
+						},
 						{ headers: { "cache-control": "no-store", vary: "Cookie, Authorization" } },
 					);
 				}),
@@ -459,15 +467,17 @@ export const authRoute = (auth: Auth["Service"], requestId: string) =>
 						return HttpServerResponse.empty({ status: 404, headers: { "cache-control": "no-store" } });
 					// Sign-in offers GitHub or Google only once an identity from it is linked; a read, no issuer call.
 					return HttpServerResponse.text(
-						path === "/setup" ? authPage("setup") : authPage("login", yield* auth.linkedProviders),
+						path === "/setup"
+							? authPage("setup", [], yield* auth.ownerRequired)
+							: authPage("login", yield* auth.linkedProviders),
 						{ contentType: "text/html", headers: pageHeaders },
 					);
 				}
 				const party = yield* auth.relyingParty(request.headers.origin);
 				const ceremonies = auth.at(party);
 				if (path === "/_boot/auth/setup/options") {
-					const input = yield* body(Schema.Struct({ code: Schema.String }));
-					return HttpServerResponse.jsonUnsafe(yield* ceremonies.startSetup(input.code));
+					const input = yield* body(Schema.Struct({ code: Schema.String, name: Schema.optionalKey(Schema.String) }));
+					return HttpServerResponse.jsonUnsafe(yield* ceremonies.startSetup(input.code, input.name));
 				}
 				if (path === "/_boot/auth/setup/verify") {
 					const input = yield* body(registration);

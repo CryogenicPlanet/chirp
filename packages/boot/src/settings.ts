@@ -1,6 +1,6 @@
 import { on } from "@comms/storage/dialect";
 import { lockBootWrite } from "./boot-write-lock.ts";
-import { humanAgent } from "./human-agent.ts";
+import { requireOwner } from "./owner.ts";
 import { AuthError } from "./auth.ts";
 import { Clock, Crypto, Effect, Option, Schema, type Semaphore } from "effect";
 import { SqlClient } from "effect/unstable/sql";
@@ -144,7 +144,7 @@ export const makeSettings = <E, R>(
 								at: yield* Clock.currentTimeMillis,
 								type: "settings.changed",
 								level: "info",
-								actor: humanAgent,
+								actor: yield* requireOwner(sql),
 								instance: session,
 								generation: 0,
 								request_id: null,

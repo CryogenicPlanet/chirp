@@ -86,7 +86,7 @@ export async function conversation(test: TestContext) {
 			await expect.poll(() => /\/setup is open, code ([A-F0-9]+)/.exec(output)?.[1]).toBeTruthy();
 			const code = /\/setup is open, code ([A-F0-9]+)/.exec(output)?.[1];
 			const options = Schema.decodeUnknownSync(ceremony)(
-				await (await post("/_boot/auth/setup/options", { code })).json(),
+				await (await post("/_boot/auth/setup/options", { code, name: "rahul" })).json(),
 			);
 			expect(
 				(

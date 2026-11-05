@@ -227,7 +227,7 @@ async function run() {
 	assert.equal((await stat(setupFile)).mode & 0o077, 0, "Private setup file permissions");
 	const code = (await readFile(setupFile, "utf8")).trim();
 	const setup = Schema.decodeUnknownSync(ceremony)(
-		await (await ok(await request("/_boot/auth/setup/options", { code }), "Setup options")).json(),
+		await (await ok(await request("/_boot/auth/setup/options", { code, name: "owner" }), "Setup options")).json(),
 	);
 	await ok(
 		await request("/_boot/auth/setup/verify", {
