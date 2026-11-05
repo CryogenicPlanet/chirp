@@ -245,8 +245,8 @@ function Board({
 	const messageCount = view?.messages.length ?? 0;
 	useEffect(() => {
 		if (view === undefined || path === "" || landed.current === pathname) return;
-		landed.current = pathname;
 		if (hash !== "" || searching || messageCount === 0) {
+			landed.current = pathname;
 			setFirstUnread(null);
 			setArmedPath(pathname);
 			return;
@@ -258,7 +258,10 @@ function Board({
 				? (view.messages[view.messages.length - view.unread]?.seq ?? null)
 				: null;
 		setFirstUnread(unreadFrom === null ? null : { path: pathname, seq: unreadFrom });
+		// Recorded inside the frame: a refresh that re-runs this effect first cancels the frame, and the rerun
+		// must still land.
 		const frame = requestAnimationFrame(() => {
+			landed.current = pathname;
 			const divider = unreadFrom === null ? null : document.getElementById("unread-divider");
 			if (divider !== null) divider.scrollIntoView({ block: "start" });
 			else window.scrollTo(0, document.documentElement.scrollHeight);
@@ -284,11 +287,25 @@ function Board({
 
 	// Older pages load as the top of the list scrolls into view, keeping the reader's place.
 	const history = useOlderMessages(path, view?.messages[0]?.seq);
+	// The view's snapshot is the latest 100. Messages that scroll out of it while the topic is open are kept,
+	// so a busy topic never opens a gap between loaded history and the snapshot.
+	const retained = useRef<{ readonly path: string; readonly messages: ReadonlyArray<BoardMessage> }>({
+		path: "",
+		messages: [],
+	});
 	const shownMessages = useMemo(() => {
 		const latest = view?.messages ?? [];
 		const first = latest[0]?.seq ?? Number.MAX_SAFE_INTEGER;
-		return [...history.older.filter((message) => message.seq < first), ...latest];
-	}, [history.older, view]);
+		const previous = retained.current.path === pathname ? retained.current.messages : [];
+		const evicted = previous.filter((message) => message.seq < first);
+		retained.current = { path: pathname, messages: [...evicted, ...latest] };
+		const kept = new Set(evicted.map((message) => message.seq));
+		return [
+			...history.older.filter((message) => message.seq < first && !kept.has(message.seq)),
+			...evicted,
+			...latest,
+		].sort((a, b) => a.seq - b.seq);
+	}, [history.older, view, pathname]);
 	const heightBefore = useRef<number | null>(null);
 	const loadOlder = useCallback(() => {
 		heightBefore.current = document.documentElement.scrollHeight;
@@ -299,6 +316,10 @@ function Board({
 		window.scrollBy(0, document.documentElement.scrollHeight - heightBefore.current);
 		heightBefore.current = null;
 	}, [history.older]);
+	// A failed or empty request, or a new topic, leaves no correction to apply.
+	useEffect(() => {
+		if (!history.loading) heightBefore.current = null;
+	}, [history.loading, history.failed, pathname]);
 
 	// The newest message under each top-level topic, from the recent messages already loaded (root only).
 	const latestIn = useMemo(() => {

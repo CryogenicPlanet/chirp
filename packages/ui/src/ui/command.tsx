@@ -54,6 +54,26 @@ function ShadowDialog({
 				if (event.key === "Escape") {
 					event.preventDefault();
 					onOpenChange(false);
+					return;
+				}
+				// aria-modal: keep Tab inside the dialog.
+				if (event.key !== "Tab" || content.current === null) return;
+				const focusable = Array.from(
+					content.current.querySelectorAll<HTMLElement>(
+						"input, button, [href], textarea, select, [tabindex]:not([tabindex='-1'])",
+					),
+				).filter((element) => !element.hasAttribute("disabled") && element.offsetParent !== null);
+				const first = focusable[0];
+				const last = focusable.at(-1);
+				if (first === undefined || last === undefined) return;
+				const root = content.current.getRootNode();
+				const active = root instanceof ShadowRoot ? root.activeElement : document.activeElement;
+				if (event.shiftKey && active === first) {
+					event.preventDefault();
+					last.focus();
+				} else if (!event.shiftKey && active === last) {
+					event.preventDefault();
+					first.focus();
 				}
 			}}
 		>

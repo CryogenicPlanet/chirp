@@ -4,7 +4,7 @@ import { Effect, Schema } from "effect";
 import { Archive, ArchiveRestore, ChevronRight, X } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import type { BoardError } from "./board-api.ts";
+import { BoardError } from "./board-api.ts";
 import { useBoardClient } from "./board-client.tsx";
 import { cn } from "./cn.ts";
 import { Alert } from "./ui/alert.tsx";
@@ -122,19 +122,27 @@ function SettingsBody({ path, meta, archived, parentArchived = false, onSaved }:
 		if (disabled) return;
 		setBusy(true);
 		setError(null);
-		void Effect.runPromise(saveTopic(path, input).pipe(Effect.result)).then((result) => {
-			setBusy(false);
-			if (result._tag === "Failure") {
-				setError(result.failure);
-				setUncertain(result.failure.status === 0 || result.failure.status >= 500 || result.failure.status === 408);
-				return;
-			}
-			setDraft(JSON.stringify(result.success.meta, null, 2));
-			setDescription(text(result.success.meta.description));
-			setStatus(text(result.success.meta.status));
-			toast.success(done);
-			onSaved(result.success);
-		});
+		void Effect.runPromise(saveTopic(path, input).pipe(Effect.result)).then(
+			(result) => {
+				setBusy(false);
+				if (result._tag === "Failure") {
+					setError(result.failure);
+					setUncertain(result.failure.status === 0 || result.failure.status >= 500 || result.failure.status === 408);
+					return;
+				}
+				setDraft(JSON.stringify(result.success.meta, null, 2));
+				setDescription(text(result.success.meta.description));
+				setStatus(text(result.success.meta.status));
+				toast.success(done);
+				onSaved(result.success);
+			},
+			() => {
+				// A defect or interruption: the change may or may not have saved.
+				setBusy(false);
+				setError(new BoardError({ status: 0, message: "The save did not finish." }));
+				setUncertain(true);
+			},
+		);
 	};
 	// Metadata replaces the whole object: keep keys these fields do not own.
 	const withField = (key: string, value: string | boolean): Schema.JsonObject => {

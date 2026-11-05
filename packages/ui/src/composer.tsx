@@ -225,12 +225,10 @@ export function Composer({
 	// A draft is kept per topic for this tab, so navigating away and back does not lose it.
 	const draftKey = `chirp:draft:${path || "/"}`;
 	const [body, setBody] = useState(() => readDraft(draftKey));
-	useEffect(() => writeDraft(draftKey, body), [draftKey, body]);
 	const [pending, setPending] = useState<PendingMessage | null>(null);
-	// Once a send starts its outcome decides the draft; never restore one that may already be posted.
-	useEffect(() => {
-		if (pending !== null) writeDraft(draftKey, "");
-	}, [draftKey, pending]);
+	// While a send is in flight its outcome decides the draft: never restore one that may already be posted.
+	// A definitive refusal clears pending and the kept draft is stored again.
+	useEffect(() => writeDraft(draftKey, pending === null ? body : ""), [draftKey, body, pending]);
 	const [sending, setSending] = useState(false);
 	const [error, setError] = useState("");
 	const [authRequired, setAuthRequired] = useState(false);

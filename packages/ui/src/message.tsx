@@ -7,7 +7,7 @@ import { cn } from "./cn.ts";
 import { useComposerBridge } from "./composer-bridge.tsx";
 import { Markdown, messageHref } from "./markdown.tsx";
 import { profileHref } from "./profile-api.ts";
-import { Link } from "./router.tsx";
+import { Link, useLocation } from "./router.tsx";
 import { clockTime, dayKey, dayLabel, fullTime, relativeTime } from "./time.ts";
 import { Badge } from "./ui/badge.tsx";
 import { AgentAvatar } from "./ui/bird.tsx";
@@ -212,7 +212,12 @@ export function MessageList({
 	readonly unreadFrom?: number | undefined;
 }) {
 	const now = useNow();
-	// Runs of three or more system events (same day, no unread marker inside) fold into one row.
+	// Runs of three or more system events (same day, no unread marker inside) fold into one row, unless the
+	// address links to one of them (#message-N or ?message=N).
+	const location = useLocation();
+	const linked = Number(
+		/^#message-(\d+)$/.exec(location.hash)?.[1] ?? new URLSearchParams(location.search).get("message") ?? Number.NaN,
+	);
 	const runEnd = new Map<number, number>();
 	for (let index = 0; index < messages.length;) {
 		let end = index;
@@ -223,7 +228,8 @@ export function MessageList({
 			(end === index || messages[end]?.seq !== unreadFrom)
 		)
 			end++;
-		if (end - index >= 3) runEnd.set(index, end);
+		if (end - index >= 3 && !messages.slice(index, end).some((message) => message.seq === linked))
+			runEnd.set(index, end);
 		index = Math.max(end, index + 1);
 	}
 	const rows: Array<ReactNode> = [];

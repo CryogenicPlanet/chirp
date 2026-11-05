@@ -94,7 +94,7 @@ const cachedPages = (): ReadonlyArray<string> | null => {
 		const raw = window.sessionStorage.getItem(pageCacheKey);
 		if (raw === null) return null;
 		const decoded = Schema.decodeUnknownOption(
-			Schema.Struct({ at: Schema.Number, pages: Schema.Array(Schema.String) }),
+			Schema.Struct({ at: Schema.Finite, pages: Schema.Array(Schema.String) }),
 		)(JSON.parse(raw));
 		return decoded._tag === "Some" && Date.now() - decoded.value.at < pageCacheAge ? decoded.value.pages : null;
 	} catch {
@@ -196,6 +196,24 @@ function PaletteBody({
 	};
 	const topics = root?.subtopics ?? [];
 	const trimmed = query.trim();
+	// Pages are filtered and capped here rather than by cmdk, which would score every indexed page per keystroke.
+	const pageMatches = useMemo(() => {
+		const words = parseQuery(trimmed).text.toLowerCase().split(/\s+/u).filter(Boolean);
+		if (pages === null || words.length === 0) return [];
+		const scored = pages
+			.map((page) => {
+				const lower = page.toLowerCase();
+				const file = lower.slice(lower.lastIndexOf("/") + 1);
+				return words.every((word) => lower.includes(word))
+					? { page, score: words.filter((word) => file.includes(word)).length * 10 - page.length / 100 }
+					: null;
+			})
+			.filter((match) => match !== null);
+		return scored
+			.sort((a, b) => b.score - a.score)
+			.slice(0, 8)
+			.map((match) => match.page);
+	}, [pages, trimmed]);
 	// A from:/in:/tag: operator at the end of the query offers its values, like the search field does.
 	const operator = /(?:^|\s)(from|by|in|tag):(\S*)$/iu.exec(query);
 	const kind = operator?.[1]?.toLowerCase();
@@ -286,10 +304,11 @@ function PaletteBody({
 					))}
 				</CommandGroup>
 				{trimmed !== "" && !pagesDone && <CommandLoading>Finding pages…</CommandLoading>}
-				{trimmed !== "" && pages !== null && pages.length > 0 && (
-					<CommandGroup heading="Pages">
-						{pages.map((page) => (
+				{pageMatches.length > 0 && (
+					<CommandGroup heading="Pages" forceMount>
+						{pageMatches.map((page) => (
 							<CommandItem
+								forceMount
 								key={page}
 								value={`/p/${page}`}
 								keywords={[

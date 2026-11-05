@@ -26,16 +26,24 @@ export interface ParsedQuery {
 
 export const parseQuery = (input: string): ParsedQuery => {
 	const filters = { agent: "", tag: "", topic: "" };
+	// Quoted phrases are search text verbatim, even when they contain "in:" or "from:".
 	const text = input
-		.replace(/(?:^|\s)(from|by|tag|in):(\S+)/giu, (_match, key: string, value: string) => {
-			const clean = value.replace(/^[@#]/u, "").toLowerCase();
-			if (key.toLowerCase() === "tag") filters.tag = clean;
-			else if (key.toLowerCase() === "in") filters.topic = clean;
-			else filters.agent = clean;
-			return " ";
-		})
-		// An operator still waiting for its value is not search text.
-		.replace(/(?:^|\s)(?:from|by|tag|in):(?=\s|$)/giu, " ")
+		.split(/("[^"]*"?)/u)
+		.map((part, index) =>
+			index % 2 === 1
+				? part
+				: part
+						.replace(/(?:^|\s)(from|by|tag|in):([^\s"]+)/giu, (_match, key: string, value: string) => {
+							const clean = value.replace(/^[@#]/u, "").toLowerCase();
+							if (key.toLowerCase() === "tag") filters.tag = clean;
+							else if (key.toLowerCase() === "in") filters.topic = clean;
+							else filters.agent = clean;
+							return " ";
+						})
+						// An operator still waiting for its value is not search text.
+						.replace(/(?:^|\s)(?:from|by|tag|in):(?=\s|$)/giu, " "),
+		)
+		.join("")
 		.replace(/\s+/gu, " ")
 		.trim();
 	return { text, ...filters };
@@ -435,7 +443,7 @@ export function Search({
 				</div>
 			)}
 			{searching && (
-				<div className="mt-5" aria-label="Search results" aria-live="polite">
+				<div className="mt-5">
 					<div className="mb-2 flex min-h-8 items-center justify-between gap-4 border-b border-rule pb-2 text-[13px] text-slate">
 						<p role="status">
 							{error
