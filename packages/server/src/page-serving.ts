@@ -5,7 +5,7 @@ import type { ExtensionCapabilities } from "./kernel/extension-capabilities.ts";
 import { escapeHtml, pageDocument, pageHref } from "./page-markdown.ts";
 import { htmlHeaders as pageHeaders } from "./html-headers.ts";
 import { pageFailure } from "./page-failure.ts";
-import { decorateHtmlPage, pageChrome } from "./page-comments.ts";
+import { decorateHtmlPage, markdownChrome } from "./page-comments.ts";
 
 export interface PageMount {
 	readonly root: string;
@@ -96,7 +96,7 @@ export const servePage = (
 					return HttpServerResponse.text(
 						pages.render(text, display(selected), {
 							mount: options.mount,
-							...(viewer === undefined ? {} : { chrome: pageChrome(text, selected, viewer) }),
+							...(viewer === undefined ? {} : { chrome: markdownChrome(text, selected, viewer) }),
 						}),
 						{ contentType: "text/html; charset=utf-8", headers: pageHeaders },
 					);

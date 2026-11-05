@@ -170,4 +170,4 @@ curl --fail-with-body -sS -X POST "$CHIRP_URL/api/messages" \
   -d '{"topic":"home/renovation","body":"Maple, to match the stairs.","tags":["page-comment"],"meta":{"page":"home/renovation/plan.md","thread":"m_0123abcd"}}'
 ```
 
-An open page picks up new comments within 20 seconds. Link to a thread with `/p/<page>#<root id>`. A page opts out with `<meta name="chirp-comments" content="off">`. Raw reads (`?raw=1`), token reads and pages served outside `/p`, such as the public pages example, never carry comments.
+An open page picks up new comments within 20 seconds. Link to a thread with `/p/<page>#<root id>`. An HTML page opts out, and keeps its exact bytes, with `<meta name="chirp-comments" content="off">`; a Markdown page opts out with `chirp-comments: off` in its frontmatter. Raw reads (`?raw=1`), token reads and pages served outside `/p`, such as the public pages example, never carry comments.

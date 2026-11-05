@@ -212,28 +212,74 @@
 		return data;
 	}
 
-	/** Every page-comment message in the topic, oldest first. Edits never change a sequence, so read from zero. */
-	async function readAll() {
-		const items = [];
-		let since = 0;
-		for (let page = 0; page < 50; page++) {
-			const query = new URLSearchParams({ topic: TOPIC, tag: TAG, since: String(since), limit: "200", mark: "0" });
-			const res = await fetch("/api/messages?" + query, { credentials: "same-origin", cache: "no-store" });
-			if (!res.ok) throw new Error(res.status === 401 ? "sign in again to see comments" : "HTTP " + res.status);
-			const data = await res.json();
-			items.push(...data.items);
-			if (data.items.length < 200 || data.cursor <= since) break;
-			since = data.cursor;
+	async function getJson(path, params) {
+		const res = await fetch(path + "?" + new URLSearchParams(params), {
+			credentials: "same-origin",
+			cache: "no-store",
+		});
+		if (!res.ok) throw new Error(res.status === 401 ? "sign in again to see comments" : "HTTP " + res.status);
+		return res.json();
+	}
+
+	// The page's view of the topic's page comments, by id. Loaded newest first, then kept current from message events,
+	// whose payload is the whole message, so creates, edits (resolve, reopen) and deletes cost one small read per poll.
+	const PAGE_SIZE = 200;
+	const MAX_PAGES = 10;
+	const messages = new Map();
+	let cursor = null;
+	let restoreCursor = 0;
+	const isMessage = (m) => isRecord(m) && typeof m.id === "string" && isRecord(m.meta) && Array.isArray(m.tags);
+
+	/** Newest first, paging back with before= for at most 2,000 page comments; returns the fence to follow from. */
+	async function snapshot() {
+		messages.clear();
+		let fence = 0;
+		let before = null;
+		for (let page = 0; page < MAX_PAGES; page++) {
+			const params = { topic: TOPIC, tag: TAG, newest: "1", limit: String(PAGE_SIZE), mark: "0" };
+			const data = await getJson("/api/messages", before === null ? params : { ...params, before: String(before) });
+			if (before === null) fence = data.cursor;
+			for (const m of data.items) if (isMessage(m)) messages.set(m.id, m);
+			if (data.items.length < PAGE_SIZE) break;
+			before = data.items[0].seq;
 		}
-		return items;
+		return fence;
+	}
+
+	async function rebuild(floor) {
+		const fence = await snapshot();
+		cursor = fence;
+		restoreCursor = Math.max(fence, floor);
+	}
+
+	/** Apply message events after the cursor. A database restore can undo anything, so it rebuilds instead. */
+	async function follow() {
+		const restored = await getJson("/api/events", { types: "db.restored", since: String(restoreCursor), limit: "1" });
+		if (restored.items.length) return rebuild(restored.cursor);
+		restoreCursor = restored.cursor;
+		for (let page = 0; page < MAX_PAGES; page++) {
+			const since = cursor;
+			const data = await getJson("/api/events", {
+				topic: TOPIC,
+				types: "message.*",
+				since: String(since),
+				limit: String(PAGE_SIZE),
+			});
+			for (const { payload: m } of data.items)
+				if (isMessage(m) && (m.tags.includes(TAG) || messages.has(m.id))) messages.set(m.id, m);
+			cursor = data.cursor;
+			if (data.items.length < PAGE_SIZE || cursor <= since) return;
+		}
 	}
 
 	function validAnchor(a) {
 		return isRecord(a) && typeof a.quote === "string" && a.quote.trim() !== "";
 	}
 
-	function toThreads(items) {
-		const live = items.filter((m) => m.deleted_at === null && isRecord(m.meta));
+	function toThreads() {
+		const live = Array.from(messages.values())
+			.filter((m) => m.deleted_at === null && m.tags.includes(TAG))
+			.sort((a, b) => a.seq - b.seq);
 		const roots = live.filter(
 			(m) => m.meta.page === PAGE && typeof m.meta.thread !== "string" && validAnchor(m.meta.anchor),
 		);
@@ -251,15 +297,19 @@
 
 	async function load() {
 		try {
-			const items = await readAll();
-			const payload = JSON.stringify(items);
+			if (cursor === null) await rebuild(0);
+			else await follow();
+			const next = toThreads();
+			const payload = JSON.stringify(next);
 			if (payload === lastPayload) return;
 			lastPayload = payload;
-			threads = toThreads(items);
+			threads = next;
 			errorMsg = "";
 			reanchor();
 			render();
 		} catch (e) {
+			// Start over from a fresh snapshot next time, rather than trust a cursor the board refused.
+			cursor = null;
 			errorMsg = "Couldn't load comments: " + e.message;
 			render();
 		}
@@ -271,7 +321,6 @@
 		errorMsg = "";
 		try {
 			await fn();
-			lastPayload = "";
 			await load();
 		} catch (e) {
 			errorMsg = e.message;
@@ -286,8 +335,9 @@
 		const t = s.replace(/\s+/g, " ").trim();
 		return t.length > n ? t.slice(0, n - 1) + "…" : t;
 	};
-	// Markdown punctuation is escaped, and a word joiner after each @ keeps a quoted excerpt from pinging anyone.
-	const quoteMarkdown = (s) => s.replace(/[\\`*_[\]<>#|~]/g, "\\$&").replace(/@/g, "@\u2060");
+	// A word joiner after each @ keeps quoted text and page paths (such as @codex/notes.md) from pinging anyone.
+	const unmention = (s) => s.replace(/@/g, "@⁠");
+	const quoteMarkdown = (s) => unmention(s.replace(/[\\`*_[\]<>#|~]/g, "\\$&"));
 	const pageUrl = () =>
 		location.origin +
 		"/p/" +
@@ -296,7 +346,7 @@
 			.join("/");
 	const LINK = /^— on \[.*\]\(.*\)$/;
 	const rootBody = (quote, comment) =>
-		`> ${quoteMarkdown(clip(quote, 280))}\n\n${comment}\n\n— on [${PAGE.replace(/[\\[\]]/g, "\\$&")}](${pageUrl()})`;
+		`> ${quoteMarkdown(clip(quote, 280))}\n\n${comment}\n\n— on [${unmention(PAGE.replace(/[\\[\]]/g, "\\$&"))}](${pageUrl()})`;
 	/** The comment itself, without the excerpt and link a root adds for the board. */
 	function commentText(m) {
 		if (typeof m.meta.thread === "string") return m.body;
@@ -648,13 +698,26 @@
 	function setStatus(tid) {
 		const t = threads.find((x) => x.id === tid);
 		if (!t) return;
-		// PATCH replaces meta whole, so carry the anchor and anything an agent added.
-		const meta = { ...t.root.meta };
-		delete meta.resolved_by;
-		delete meta.resolved_at;
-		if (t.status === "resolved") meta.status = "open";
-		else Object.assign(meta, { status: "resolved", resolved_by: VIEWER, resolved_at: Date.now() });
-		void mutate(() => call("PATCH", "/api/messages/" + encodeURIComponent(tid), { meta }));
+		const reopen = t.status === "resolved";
+		void mutate(async () => {
+			// PATCH replaces meta whole, so start from the root as it is now, not as the last poll saw it, and change
+			// only the status fields: the anchor and anything an agent added survive.
+			const fresh = await getJson("/api/messages", {
+				tag: TAG,
+				newest: "1",
+				before: String(t.root.seq + 1),
+				limit: "1",
+				mark: "0",
+			});
+			const root = fresh.items[0];
+			if (!isMessage(root) || root.id !== tid) throw new Error("This thread was deleted. Reload the page.");
+			const meta = { ...root.meta };
+			delete meta.resolved_by;
+			delete meta.resolved_at;
+			if (reopen) meta.status = "open";
+			else Object.assign(meta, { status: "resolved", resolved_by: VIEWER, resolved_at: Date.now() });
+			await call("PATCH", "/api/messages/" + encodeURIComponent(tid), { meta });
+		});
 	}
 
 	list.addEventListener("click", (e) => {

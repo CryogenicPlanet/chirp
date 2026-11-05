@@ -2,12 +2,13 @@ import { assertionHeader } from "@comms/protocol/headers";
 import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { commentTopic, decorateHtmlPage, pageChrome } from "../src/page-comments.ts";
+import { commentTopic } from "../src/page-comments.ts";
 import { conversation } from "./fixtures/conversation.ts";
 
 const client = "/page-assets/comments.js";
 const palette = '<script type="module" src="/assets/board.js"></script>';
 const search = "data-chirp-palette";
+const bar = '<nav class="chirp-page-bar">';
 
 it("files comments under the nearest folder that is a topic path, else pages", () => {
 	expect(commentTopic("home/renovation/plan.md")).toBe("home/renovation");
@@ -15,38 +16,6 @@ it("files comments under the nearest folder that is a topic path, else pages", (
 	expect(commentTopic("Home/plan.md")).toBe("pages");
 	expect(commentTopic("plan.md")).toBe("pages");
 	expect(commentTopic("@codex/notes.md")).toBe("@codex");
-});
-
-it("escapes every path segment in the bar and the client tag, and keeps the doctype first", () => {
-	const name = `x&y/a"<b>'.html`;
-	const page = decorateHtmlPage(
-		"<!doctype html><html><head></head><body class=a><p>hi</p></body></html>",
-		name,
-		"rahul",
-	);
-	expect(page.startsWith('<!doctype html><html><head></head><body class=a><nav class="chirp-page-bar">')).toBe(true);
-	expect(page).toContain('<a href="/p/x%26y">x&amp;y</a>');
-	expect(page).toContain('<a href="/p/x%26y/a%22%3Cb%3E&#39;.html">a&quot;&lt;b&gt;&#39;.html</a>');
-	expect(page).toContain('href="/p/x%26y/a%22%3Cb%3E&#39;.html?raw=1"');
-	expect(page).toContain(`data-page="x&amp;y/a&quot;&lt;b&gt;&#39;.html" data-topic="pages" data-viewer="rahul"`);
-	expect(page).not.toContain('a"<b>');
-	expect(page.endsWith("<p>hi</p></body></html>")).toBe(true);
-	expect(decorateHtmlPage("<!DOCTYPE html><title>t</title>", "t.html", "rahul").startsWith("<!DOCTYPE html><nav")).toBe(
-		true,
-	);
-	expect(decorateHtmlPage("<head><title>t</title></head><p>x</p>", "t.html", "rahul")).toMatch(
-		/^<head><title>t<\/title><\/head><nav/,
-	);
-	for (const meta of [
-		'<meta name="chirp-comments" content="off">',
-		"<meta content='OFF' name='chirp-comments' />",
-		"<meta name=chirp-comments content=off>",
-	])
-		expect(pageChrome(meta, "t.html", "rahul"), meta).toEqual({ search: "", scripts: "" });
-	const on = pageChrome('<meta name="chirp-comments" content="on">', "t.html", "rahul");
-	expect(on.scripts).toContain(client);
-	expect(on.scripts).toContain(palette);
-	expect(on.search).toContain(search);
 });
 
 it("adds the bar, comment client and palette only to /p pages a signed-in human reads", async (test) => {
@@ -60,15 +29,28 @@ it("adds the bar, comment client and palette only to /p pages a signed-in human 
 		example.replace("../../packages/server/src/kernel/extension-api.ts", "../kernel/extension-api.ts"),
 	);
 	const html = "<!doctype html><html><head><title>Plan</title></head><body><h1>Plan</h1></body></html>";
-	const optOut =
-		'<!doctype html><html><head><meta name="chirp-comments" content="off"></head><body>quiet</body></html>';
-	await mkdir(join(fixture.root, "pages/home/renovation"), { recursive: true });
-	await mkdir(join(fixture.root, "pages/public"), { recursive: true });
-	await writeFile(join(fixture.root, "pages/home/renovation/plan.md"), "# Plan\n\nOak or maple?\n");
-	await writeFile(join(fixture.root, "pages/home/renovation/plan.html"), html);
-	await writeFile(join(fixture.root, "pages/home/renovation/quiet.html"), optOut);
-	await writeFile(join(fixture.root, "pages/public/guide.md"), "# Guide\n");
-	await writeFile(join(fixture.root, "pages/public/page.html"), html);
+	const decoys =
+		"<!doctype html><html><head><title>Styling the <body> tag</title><!-- <body> --><style>/* <body> */</style></head>";
+	const pages: Record<string, string> = {
+		"home/renovation/plan.md": "# Plan\n\nOak or maple?\n",
+		"home/renovation/plan.html": html,
+		"home/renovation/decoys.html": `${decoys}<body class=a><p>hi</p></body></html>`,
+		"home/renovation/unclosed.html": "<html><body><p>open",
+		"home/renovation/bodiless.html": "<!DOCTYPE html><title>t</title><p>x</p>",
+		"home/renovation/head-only.html": "<head><title>t</title></head><p>x</p>",
+		"home/renovation/quiet.html":
+			"<html><head><meta content='OFF' name='chirp-comments' /></head><body>q</body></html>",
+		"home/renovation/bare.html": "<meta name=chirp-comments content=off><p>bare</p>",
+		"home/renovation/quoted.md": '# Docs\n\nOpt out with `<meta name="chirp-comments" content="off">`.\n',
+		"home/renovation/quiet.md": "---\nchirp-comments: off\n---\n# Quiet\n",
+		"x&y/a\"<b>'.html": "<body><p>hi</p></body>",
+		"public/guide.md": "# Guide\n",
+		"public/page.html": html,
+	};
+	for (const [name, content] of Object.entries(pages)) {
+		await mkdir(join(fixture.root, "pages", name, ".."), { recursive: true });
+		await writeFile(join(fixture.root, "pages", name), content);
+	}
 	const app = await fixture.launch(join(seed, "server.ts"));
 	await app.setup();
 	const cookie = await app.login();
@@ -80,7 +62,7 @@ it("adds the bar, comment client and palette only to /p pages a signed-in human 
 		return response.text();
 	};
 	const bare = (body: string) => {
-		for (const injected of [client, palette, search]) expect(body).not.toContain(injected);
+		for (const injected of [bar, client, palette, search]) expect(body).not.toContain(injected);
 	};
 
 	const markdown = await text("/p/home/renovation/plan.md");
@@ -89,20 +71,39 @@ it("adds the bar, comment client and palette only to /p pages a signed-in human 
 	);
 	expect(markdown).toContain(palette);
 	expect(markdown).toContain(search);
-	expect(markdown).not.toContain("chirp-page-bar");
+	expect(markdown).not.toContain(bar);
 	const decorated = await text("/p/home/renovation/plan.html");
-	expect(decorated).toContain('<body><nav class="chirp-page-bar">');
+	expect(decorated).toContain(`<body>${bar}`);
 	expect(decorated).toContain(`data-page="home/renovation/plan.html"`);
+	expect(decorated).toMatch(/<h1>Plan<\/h1><style>.*<\/script><\/body><\/html>$/);
 	expect(decorated).toContain(palette);
 	expect(decorated).toContain(search);
-	expect(decorated).toContain("<h1>Plan</h1></body></html>");
 	const head = await fetch(app.url + "/p/home/renovation/plan.html", { method: "HEAD", headers: { cookie } });
 	expect(head.headers.get("content-security-policy")).toContain("script-src 'self';");
 	expect(await text("/p/home/renovation/plan.html?raw=1")).toBe(html);
-	expect(await text("/p/home/renovation/plan.md?raw=1")).toBe("# Plan\n\nOak or maple?\n");
-	const quiet = await text("/p/home/renovation/quiet.html");
-	expect(quiet).toContain("chirp-page-bar");
-	bare(quiet);
+	expect(await text("/p/home/renovation/plan.md?raw=1")).toBe(pages["home/renovation/plan.md"]);
+
+	// Only the real body element counts, wherever else the text "<body>" appears.
+	expect(await text("/p/home/renovation/decoys.html")).toMatch(
+		new RegExp(`^${decoys.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}<body class=a>${bar}`),
+	);
+	expect(await text("/p/home/renovation/unclosed.html")).toMatch(/<p>open<style>.*<\/script>$/);
+	expect(await text("/p/home/renovation/bodiless.html")).toMatch(/^<!DOCTYPE html><nav/);
+	expect(await text("/p/home/renovation/head-only.html")).toMatch(/^<head><title>t<\/title><\/head><nav/);
+
+	// Opting out keeps an HTML page's exact bytes; Markdown opts out only in frontmatter, not by quoting the tag.
+	expect(await text("/p/home/renovation/quiet.html")).toBe(pages["home/renovation/quiet.html"]);
+	expect(await text("/p/home/renovation/bare.html")).toBe(pages["home/renovation/bare.html"]);
+	expect(await text("/p/home/renovation/quoted.md")).toContain(client);
+	bare(await text("/p/home/renovation/quiet.md"));
+
+	// Every path segment is escaped in the crumbs, the raw link and the client's data attributes.
+	const escaped = await text("/p/" + ["x&y", "a\"<b>'.html"].map(encodeURIComponent).join("/"));
+	expect(escaped).toContain('<a href="/p/x%26y">x&amp;y</a>');
+	expect(escaped).toContain('<a href="/p/x%26y/a%22%3Cb%3E&#39;.html">a&quot;&lt;b&gt;&#39;.html</a>');
+	expect(escaped).toContain('href="/p/x%26y/a%22%3Cb%3E&#39;.html?raw=1"');
+	expect(escaped).toContain(`data-page="x&amp;y/a&quot;&lt;b&gt;&#39;.html" data-topic="pages" data-viewer="`);
+	expect(escaped).not.toContain('a"<b>');
 
 	const script = await get(client);
 	expect(script.status).toBe(200);
