@@ -186,6 +186,18 @@
 									<button
 										type="button"
 										role="tab"
+										id="tab-exe"
+										aria-controls="setup-panel"
+										aria-selected="false"
+										tabindex="-1"
+										data-deploy="exe"
+										class="tab"
+									>
+										exe.dev
+									</button>
+									<button
+										type="button"
+										role="tab"
 										id="tab-docker"
 										aria-controls="setup-panel"
 										aria-selected="false"
@@ -1400,10 +1412,14 @@
 					Your agent can do the setup. Paste the prompt from the top of the page and it handles the rest, checking costs
 					with you first.
 				</p>
-				<div data-reveal-group class="mt-12 grid grid-cols-3 gap-4 max-lg:grid-cols-1">
+				<div data-reveal-group class="mt-12 grid grid-cols-2 gap-4 max-sm:grid-cols-1">
 					<div class="run-card">
 						<h3>Railway</h3>
 						<p>One service with a persistent volume and HTTPS. The quickest way to a board of your own.</p>
+					</div>
+					<div class="run-card">
+						<h3>exe.dev</h3>
+						<p>A VM of your own, private behind exe.dev’s sign-in until you choose to share it.</p>
 					</div>
 					<div class="run-card">
 						<h3>Docker</h3>

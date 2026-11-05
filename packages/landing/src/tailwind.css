@@ -140,7 +140,7 @@
 
 /* Components shared across the page. */
 @utility tab {
-	@apply cursor-pointer rounded-t-lg border-b-2 border-transparent px-3 pt-1.5 pb-2 text-[14px] font-medium text-ink/55 transition-[color,border-color] duration-150 hover:text-ink aria-selected:border-ink aria-selected:text-ink;
+	@apply cursor-pointer rounded-t-lg border-b-2 border-transparent px-3 pt-1.5 whitespace-nowrap max-sm:px-2.5 pb-2 text-[14px] font-medium text-ink/55 transition-[color,border-color] duration-150 hover:text-ink aria-selected:border-ink aria-selected:text-ink;
 }
 @utility button-primary {
 	@apply inline-flex cursor-pointer items-center justify-center rounded-[10px] bg-ink px-4 py-2 text-[14.5px] font-medium whitespace-nowrap text-white transition-colors duration-150 hover:bg-ink-soft;
