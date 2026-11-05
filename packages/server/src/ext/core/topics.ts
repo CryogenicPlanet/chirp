@@ -1,5 +1,4 @@
 import { isDescendant } from "@comms/storage/dialect";
-import { TopicSummary } from "@comms/protocol/topics";
 import { Context, Effect, Layer, Schema } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import { KernelError } from "../../kernel/boot-channel.ts";
@@ -7,10 +6,20 @@ import { KernelError } from "../../kernel/boot-channel.ts";
 import { Messages, StoredMessage, topicPathDetail, validTopic } from "./messages.ts";
 import type { Identity } from "../../kernel/identity.ts";
 import { publishedTopics } from "./published-topics.ts";
-import { publishedMessages } from "./published-messages.ts";
+import { publishedActivity, publishedMessages } from "./published-messages.ts";
 import { Pages } from "./pages.ts";
 
-const StoredTopic = Schema.Struct({ ...TopicSummary.fields, meta: Schema.fromJsonString(Schema.JsonObject) });
+const PublishedTopic = Schema.Struct({
+	path: Schema.String,
+	name: Schema.String,
+	meta: Schema.fromJsonString(Schema.JsonObject),
+	archived_at: Schema.NullOr(Schema.Int),
+	deleted_at: Schema.NullOr(Schema.Int),
+});
+const TopicActivity = Schema.Struct({ topic: Schema.String, last_seq: Schema.Int, unread: Schema.Int });
+/** The path itself and every ancestor, exactly the paths `isDescendant` or equality would match. */
+const lineage = (path: string) => [path, ...Array.from(path.matchAll(/\//g), (match) => path.slice(0, match.index))];
+const covered = (path: string, roots: ReadonlySet<string>) => lineage(path).some((ancestor) => roots.has(ancestor));
 export const makeTopics = (sql: SqlClient.SqlClient, read: Messages["Service"]["read"], pages: Pages["Service"]) => {
 	const detail = (identity: Identity, path: string, depth = 1, archived = false) =>
 		read((ceiling) =>
@@ -22,26 +31,56 @@ export const makeTopics = (sql: SqlClient.SqlClient, read: Messages["Service"]["
 					Effect.gen(function* () {
 						yield* sql`SELECT epoch FROM kernel_writer`;
 
-						const rows =
-							yield* sql`WITH visible_topics AS (${publishedTopics(sql, ceiling)}), visible_messages AS (${publishedMessages(sql, ceiling)}) SELECT t.path,t.name,t.meta,t.archived_at,
-   COALESCE((SELECT MAX(m.seq) FROM visible_messages m WHERE m.seq<=${ceiling} AND (m.topic=t.path OR ${isDescendant(sql, sql("m.topic"), sql("t.path"))})),0) AS last_seq,
-   (SELECT COUNT(*) FROM visible_messages m WHERE m.deleted_at IS NULL AND m.seq<=${ceiling} AND (m.topic=t.path OR ${isDescendant(sql, sql("m.topic"), sql("t.path"))})
-    AND NOT EXISTS(SELECT 1 FROM visible_topics a WHERE a.archived_at IS NOT NULL AND (m.topic=a.path OR ${isDescendant(sql, sql("m.topic"), sql("a.path"))}))
-    AND m.seq>COALESCE((SELECT MAX(r.seq) FROM ${sql("reads")} r WHERE r.instance=${identity.instance} AND (r.topic='' OR r.topic=m.topic OR ${isDescendant(sql, sql("m.topic"), sql("r.topic"))})),0)) AS unread
-   FROM visible_topics t WHERE NOT EXISTS(SELECT 1 FROM visible_topics a WHERE a.deleted_at IS NOT NULL AND (t.path=a.path OR ${isDescendant(sql, sql("t.path"), sql("a.path"))})) AND (${path}='' OR t.path=${path} OR ${isDescendant(sql, sql("t.path"), path)})
-   AND (${archived ? 1 : 0}=1 OR t.path=${path} OR NOT EXISTS(SELECT 1 FROM visible_topics a WHERE a.archived_at IS NOT NULL AND (t.path=a.path OR ${isDescendant(sql, sql("t.path"), sql("a.path"))})))
-   ORDER BY last_seq DESC,t.path`.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(StoredTopic))));
-						const deletedTopics =
-							yield* sql`WITH visible_topics AS (${publishedTopics(sql, ceiling)}) SELECT path FROM visible_topics WHERE deleted_at IS NOT NULL`.pipe(
-								Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ path: Schema.String })))),
+						const topics =
+							yield* sql`WITH visible_topics AS (${publishedTopics(sql, ceiling)}) SELECT path,name,meta,archived_at,deleted_at FROM visible_topics`.pipe(
+								Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(PublishedTopic))),
 							);
-						if (deletedTopics.some((row) => path === row.path || path.startsWith(`${row.path}/`)))
-							return yield* new KernelError({ code: "topic_not_found" });
+						const deletedTopics = topics.filter((row) => row.deleted_at !== null);
+						const archivedTopics = topics.filter((row) => row.archived_at !== null);
+						const deleted = new Set(deletedTopics.map((row) => row.path));
+						const archivedPaths = new Set(archivedTopics.map((row) => row.path));
+						if (covered(path, deleted)) return yield* new KernelError({ code: "topic_not_found" });
+						// One pass over the subtree's messages, grouped by topic, joined to each topic's effective read
+						// mark. Ancestors take their totals from these groups below, instead of a correlated scan per topic.
+						// The mark list reads topics from the index, so the message scan is not materialized twice.
+						// Root and subtree reads are separate statements: a parameterized `path=''` test leaves a cached
+						// generic plan guessing at the row count, which on PostgreSQL chose a spilling sort.
+						const scope = (column: string) =>
+							path === "" ? sql`1=1` : sql`(${sql(column)}=${path} OR ${isDescendant(sql, sql(column), path)})`;
+						const activity =
+							yield* sql`SELECT a.topic,MAX(a.seq) AS last_seq,COUNT(CASE WHEN a.deleted_at IS NULL AND a.seq>k.mark THEN 1 END) AS unread FROM (${publishedActivity(sql, ceiling)}) a
+   JOIN (SELECT t.topic,COALESCE(MAX(r.seq),0) AS mark FROM (SELECT DISTINCT topic FROM messages WHERE seq<=${ceiling} AND ${scope("topic")}) t
+    LEFT JOIN ${sql("reads")} r ON r.instance=${identity.instance} AND (r.topic='' OR r.topic=t.topic OR ${isDescendant(sql, sql("t.topic"), sql("r.topic"))}) GROUP BY t.topic) k ON k.topic=a.topic
+   WHERE ${scope("a.topic")} GROUP BY a.topic`.pipe(
+								Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(TopicActivity))),
+							);
+						const lastSeq = new Map<string, number>();
+						const unread = new Map<string, number>();
+						for (const group of activity) {
+							// Messages under a deleted topic are not published; under an archived one they are never unread.
+							if (covered(group.topic, deleted)) continue;
+							const counted = !covered(group.topic, archivedPaths);
+							for (const ancestor of lineage(group.topic)) {
+								lastSeq.set(ancestor, Math.max(lastSeq.get(ancestor) ?? 0, group.last_seq));
+								if (counted) unread.set(ancestor, (unread.get(ancestor) ?? 0) + group.unread);
+							}
+						}
+						const rows = topics
+							.filter(
+								(row) =>
+									!covered(row.path, deleted) &&
+									(path === "" || row.path === path || row.path.startsWith(`${path}/`)) &&
+									(archived || row.path === path || !covered(row.path, archivedPaths)),
+							)
+							.map((row) => ({
+								path: row.path,
+								name: row.name,
+								meta: row.meta,
+								archived_at: row.archived_at,
+								last_seq: lastSeq.get(row.path) ?? 0,
+								unread: unread.get(row.path) ?? 0,
+							}));
 						const visible = [...rows];
-						const archivedTopics =
-							yield* sql`WITH visible_topics AS (${publishedTopics(sql, ceiling)}) SELECT path FROM visible_topics WHERE archived_at IS NOT NULL`.pipe(
-								Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ path: Schema.String })))),
-							);
 						for (const directory of page.directories) {
 							if (
 								visible.some((row) => row.path === directory) ||
@@ -67,7 +106,7 @@ export const makeTopics = (sql: SqlClient.SqlClient, read: Messages["Service"]["
 							(row) => row.path !== path && row.path.split("/").length <= segments + depth,
 						);
 						const recent =
-							yield* sql`WITH visible_topics AS (${publishedTopics(sql, ceiling)}), visible_messages AS (${publishedMessages(sql, ceiling)}) SELECT * FROM visible_messages WHERE deleted_at IS NULL AND (${path}='' OR topic=${path}) AND seq<=${ceiling} AND (${path}<>'' OR NOT EXISTS(SELECT 1 FROM visible_topics a WHERE a.archived_at IS NOT NULL AND (visible_messages.topic=a.path OR ${isDescendant(sql, sql("visible_messages.topic"), sql("a.path"))}))) ORDER BY seq DESC LIMIT 100`.pipe(
+							yield* sql`WITH visible_topics AS (${publishedTopics(sql, ceiling)}), visible_messages AS (${publishedMessages(sql, ceiling)}) SELECT * FROM visible_messages WHERE deleted_at IS NULL AND seq<=${ceiling} AND ${path === "" ? sql`NOT EXISTS(SELECT 1 FROM visible_topics a WHERE a.archived_at IS NOT NULL AND (visible_messages.topic=a.path OR ${isDescendant(sql, sql("visible_messages.topic"), sql("a.path"))}))` : sql`topic=${path}`} ORDER BY seq DESC LIMIT 100`.pipe(
 								Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(StoredMessage))),
 							);
 						return {

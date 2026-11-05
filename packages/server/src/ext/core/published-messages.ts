@@ -14,3 +14,8 @@ export const publishedMessages = (sql: SqlClient, ceiling: number) => sql`
  FROM messages WHERE seq<=${ceiling}
  AND NOT EXISTS(SELECT 1 FROM (${publishedTopics(sql, ceiling)}) topic
   WHERE topic.deleted_at IS NOT NULL AND (messages.topic=topic.path OR ${isDescendant(sql, sql("messages.topic"), sql("topic.path"))}))`;
+
+// Topic rollups need only position and the published deletion; the caller applies deleted-topic exclusion.
+export const publishedActivity = (sql: SqlClient, ceiling: number) => sql`
+ SELECT topic,seq,CASE WHEN updated_seq>${ceiling} THEN ${jsonInt(sql, sql("previous"), "deleted_at")} ELSE deleted_at END AS deleted_at
+ FROM messages WHERE seq<=${ceiling}`;
