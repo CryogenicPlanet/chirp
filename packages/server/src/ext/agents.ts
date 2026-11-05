@@ -20,11 +20,15 @@ interface Reads {
 }
 
 const Mark = Schema.Struct({ instance: Schema.String, topic: Schema.String, seq: Schema.Int });
-type Mark = typeof Mark.Type;
 
-const covers = (mark: Mark, message: { readonly topic: string; readonly seq: number }) =>
-	message.seq <= mark.seq &&
-	(mark.topic === "" || message.topic === mark.topic || message.topic.startsWith(`${mark.topic}/`));
+/** A topic and every ancestor, root ("") first: the marks that can cover a message in it. */
+const lineage = (topic: string) =>
+	topic
+		.split("/")
+		.reduce<ReadonlyArray<string>>(
+			(paths, part, index) => [...paths, index === 0 ? part : `${paths.at(-1)}/${part}`],
+			[""],
+		);
 
 /**
  * Posting activity per author and read progress per session, for the board's agents view. Joining and token use
@@ -45,7 +49,12 @@ export default function agents(api: Api) {
 						);
 						const byAgent = new Map<string, Activity>();
 						const authorOf = new Map<string, string>();
-						const seen: Array<{ readonly topic: string; readonly seq: number; readonly agent: string }> = [];
+						const lineages = new Map<string, ReadonlyArray<string>>();
+						const seen: Array<{
+							readonly lineage: ReadonlyArray<string>;
+							readonly seq: number;
+							readonly agent: string;
+						}> = [];
 						let cursor = 0;
 						// Like standup.ts, this pages every published message in one snapshot. Deleted messages are not listed.
 						while (cursor < fence) {
@@ -62,17 +71,23 @@ export default function agents(api: Api) {
 									mcp: (previous?.mcp ?? false) || message.instance.startsWith("extension:mcp:"),
 								});
 								authorOf.set(message.instance, message.agent);
-								seen.push({ topic: message.topic, seq: message.seq, agent: message.agent });
+								const known = lineages.get(message.topic) ?? lineage(message.topic);
+								lineages.set(message.topic, known);
+								seen.push({ lineage: known, seq: message.seq, agent: message.agent });
 							}
 							cursor = page.cursor;
 						}
 						const instances = [...new Set(marks.map((mark) => mark.instance))];
 						const reads = instances.map((instance): Reads => {
-							const own = marks.filter((mark) => mark.instance === instance);
+							const own = new Map(
+								marks.filter((mark) => mark.instance === instance).map((mark) => [mark.topic, mark.seq]),
+							);
 							// A session's own posts are never unread to it; its name is known once it has posted.
 							const others = seen.filter((message) => message.agent !== authorOf.get(instance));
-							const read = others.filter((message) => own.some((mark) => covers(mark, message))).length;
-							return { instance, read, unread: others.length - read, topics: own.length };
+							const read = others.filter((message) =>
+								message.lineage.some((path) => (own.get(path) ?? -1) >= message.seq),
+							).length;
+							return { instance, read, unread: others.length - read, topics: own.size };
 						});
 						return { items: [...byAgent.values()].sort((a, b) => b.last_post_at - a.last_post_at), reads };
 					}),
