@@ -201,10 +201,13 @@ export function MessageList({
 	messages,
 	currentTopic,
 	highlight,
+	unreadFrom,
 }: {
 	readonly messages: ReadonlyArray<BoardMessage>;
 	readonly currentTopic?: string | undefined;
 	readonly highlight?: ReadonlyArray<string>;
+	/** The first unread message when the topic opened: a "New" marker sits above it. */
+	readonly unreadFrom?: number | undefined;
 }) {
 	const now = useNow();
 	return (
@@ -214,6 +217,17 @@ export function MessageList({
 				const newDay = previous === undefined || dayKey(previous.created_at) !== dayKey(message.created_at);
 				return (
 					<Fragment key={message.id}>
+						{message.seq === unreadFrom && (
+							<div
+								id="unread-divider"
+								className="my-2 flex scroll-mt-24 items-center gap-3 text-[12px] font-semibold text-danger"
+								role="separator"
+								aria-label="New messages"
+							>
+								<span className="h-px flex-1 bg-danger/40" />
+								<span>New</span>
+							</div>
+						)}
 						{newDay && (
 							<div className="my-3 flex items-center gap-3 text-[12px] font-medium text-slate" role="separator">
 								<span className="h-px flex-1 bg-rule" />
@@ -224,7 +238,7 @@ export function MessageList({
 						<MemoMessage
 							message={message}
 							now={now}
-							compact={!newDay && continues(previous, message)}
+							compact={!newDay && message.seq !== unreadFrom && continues(previous, message)}
 							currentTopic={currentTopic}
 							{...(highlight ? { highlight } : {})}
 						/>

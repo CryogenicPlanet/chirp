@@ -93,6 +93,10 @@ function Readme({ path, body, clamp }: { readonly path: string; readonly body: s
 	);
 }
 
+/** Whether a topic has anything for the rail or the chips: a README, pages or subtopics. */
+export const hasTopicContext = (view: BoardTopic) =>
+	view.index !== null || otherPages(view).length > 0 || view.subtopics.length > 0;
+
 /** Wide screens: the topic's standing context beside the stream, so the conversation starts at the top. */
 export function TopicRail({ path, view }: { readonly path: string; readonly view: BoardTopic }) {
 	const pages = otherPages(view);

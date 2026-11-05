@@ -21,11 +21,12 @@ import { profileFromPath } from "./profile-api.ts";
 import { Search } from "./search.tsx";
 import { TopicSettings } from "./topic-controls.tsx";
 import { useLoad } from "./use-load.ts";
+import { useIntent } from "./use-intent.ts";
 import { boardChanged } from "./live-events.ts";
 import { Composer } from "./composer.tsx";
 import { LoadProblem, useAutoRetry } from "./load-problem.tsx";
 import { HistoryEdge } from "./history-edge.tsx";
-import { TopicContextBar, TopicRail } from "./topic-context.tsx";
+import { hasTopicContext, TopicContextBar, TopicRail } from "./topic-context.tsx";
 import { useOlderMessages } from "./older-messages.ts";
 import { Link, useLocation, useScrollOnNavigate } from "./router.tsx";
 import { Bot, FileText, Hash, Home, Puzzle, RefreshCw, Settings2 } from "lucide-react";
@@ -81,6 +82,13 @@ export function App() {
 			/>
 		</TooltipProvider>
 	);
+}
+
+/** A topic card that warms its topic when a click looks likely. */
+function TopicCard({ path, ...props }: Parameters<typeof Link>[0] & { readonly path: string }) {
+	const { prefetchTopic } = useBoardClient();
+	const intent = useIntent(() => prefetchTopic(path));
+	return <Link {...props} {...intent} />;
 }
 
 function TopicNav({
@@ -149,6 +157,8 @@ function Board({
 	const searchPage = pathname === "/search";
 	const path = searchPage ? "" : currentPath(pathname);
 	const [showArchived, setShowArchived] = useState(false);
+	// Set once this route's topic has opened; older history loads and reads are marked only from then on.
+	const [armedPath, setArmedPath] = useState<string | null>(null);
 	const [searching, setSearching] = useState(() => new URLSearchParams(search).has("q"));
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const composer = useRef<ComposerBridge>(null);
@@ -159,7 +169,10 @@ function Board({
 	const request = useMemo(() => {
 		if (path === null) return Atom.make(Effect.succeed(null));
 		const root = client.topic("", showArchived, visible && path === "" && !searching);
-		const topic = path === "" ? root : client.topic(path, showArchived, visible && !searching);
+		// A topic first loads without marking (the same read a hover prefetch warms), so its unread position is
+		// known; once it has opened (armed), the view re-reads with marking on.
+		const topic =
+			path === "" ? root : client.topic(path, showArchived, visible && !searching && armedPath === pathname);
 		const read = Atom.make((get) =>
 			Effect.all(
 				{ root: get.result(root, { suspendOnWaiting: true }), topic: get.result(topic, { suspendOnWaiting: true }) },
@@ -170,7 +183,7 @@ function Board({
 			refresh(root);
 			if (topic !== root) refresh(topic);
 		});
-	}, [client, path, showArchived, searching, visible]);
+	}, [client, path, showArchived, searching, visible, armedPath, pathname]);
 	const { value, error, loading, reload, update } = useLoad(request);
 	// Live: re-read this view when the board changes (coalesced in live-events.ts), unless searching.
 	useEffect(() => {
@@ -211,26 +224,28 @@ function Board({
 	const view = fresh ? topic : peeked !== null && peeked !== undefined && peeked.path === path ? peeked : undefined;
 	const retry = useAutoRetry(error, reload);
 	const landed = useRef<string | null>(null);
-	// Older history loads only after the topic has opened at its latest message (or at a linked one).
-	const [armedPath, setArmedPath] = useState<string | null>(null);
-	useEffect(() => {
-		if (hash !== "" && view !== undefined) setArmedPath(pathname);
-	}, [hash, view, pathname]);
+	const [firstUnread, setFirstUnread] = useState<{ readonly path: string; readonly seq: number } | null>(null);
 	const messageCount = view?.messages.length ?? 0;
 	useEffect(() => {
-		if (
-			view === undefined ||
-			path === "" ||
-			hash !== "" ||
-			searching ||
-			messageCount === 0 ||
-			landed.current === pathname
-		)
-			return;
+		if (view === undefined || path === "" || landed.current === pathname) return;
 		landed.current = pathname;
+		if (hash !== "" || searching || messageCount === 0) {
+			setFirstUnread(null);
+			setArmedPath(pathname);
+			return;
+		}
+		// Unread messages in a leaf topic: mark where they start, and open there. (A topic's unread count also
+		// includes its subtopics, so the position is only known for topics without them.)
+		const unreadFrom =
+			view.subtopics.length === 0 && view.unread > 0 && view.unread < view.messages.length
+				? (view.messages[view.messages.length - view.unread]?.seq ?? null)
+				: null;
+		setFirstUnread(unreadFrom === null ? null : { path: pathname, seq: unreadFrom });
 		const frame = requestAnimationFrame(() => {
-			window.scrollTo(0, document.documentElement.scrollHeight);
-			pinned.current = true;
+			const divider = unreadFrom === null ? null : document.getElementById("unread-divider");
+			if (divider !== null) divider.scrollIntoView({ block: "start" });
+			else window.scrollTo(0, document.documentElement.scrollHeight);
+			pinned.current = divider === null;
 			setArmedPath(pathname);
 		});
 		return () => cancelAnimationFrame(frame);
@@ -287,7 +302,7 @@ function Board({
 	);
 	return (
 		<BoardLayout
-			wide={path !== null && path !== ""}
+			wide={path !== null && path !== "" && view !== undefined && hasTopicContext(view)}
 			navigation={<TopicNav path={searchPage ? null : path} topics={sidebarTopics} />}
 			sidebar={
 				<label className="mx-2.5 mt-4 flex cursor-pointer items-center gap-2 text-[13px] text-slate hover:text-ink">
@@ -395,7 +410,10 @@ function Board({
 						<div
 							className={cn(
 								"flex flex-1 flex-col",
-								path !== "" && "xl:grid xl:grid-cols-[minmax(0,1fr)_300px] xl:items-start xl:gap-10",
+								path !== "" &&
+									view !== undefined &&
+									hasTopicContext(view) &&
+									"xl:grid xl:grid-cols-[minmax(0,1fr)_300px] xl:items-start xl:gap-10",
 							)}
 						>
 							<div className="flex min-h-full min-w-0 flex-1 flex-col">
@@ -467,8 +485,9 @@ function Board({
 											<section className="mb-6" aria-label="Topics">
 												<div className="grid grid-cols-1 gap-2 sm:grid-cols-2 min-[1900px]:grid-cols-3">
 													{view.subtopics.map((item) => (
-														<Link
+														<TopicCard
 															key={item.path}
+															path={item.path}
 															href={topicHref(item.path)}
 															className="group flex items-start gap-3 rounded-xl bg-card px-4 py-3 shadow-raised transition-shadow hover:shadow-[0_0_0_1px_rgb(32_42_58/0.14),0_1px_3px_rgb(32_42_58/0.06),0_8px_20px_-8px_rgb(32_42_58/0.14)]"
 														>
@@ -495,7 +514,7 @@ function Board({
 																	{item.unread > 99 ? "99+" : item.unread}
 																</Badge>
 															)}
-														</Link>
+														</TopicCard>
 													))}
 												</div>
 											</section>
@@ -535,7 +554,11 @@ function Board({
 													) : (
 														<>
 															<h2 className="sr-only">{path ? "Messages" : "Recent messages"}</h2>
-															<MessageList messages={shownMessages} currentTopic={path || undefined} />
+															<MessageList
+																messages={shownMessages}
+																currentTopic={path || undefined}
+																unreadFrom={firstUnread?.path === pathname ? firstUnread.seq : undefined}
+															/>
 														</>
 													)}
 												</section>
