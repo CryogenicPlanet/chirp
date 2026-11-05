@@ -13,6 +13,9 @@ export const mountPagePalette = () => {
 	if (document.getElementById("chirp-palette") !== null) return;
 	const host = document.createElement("div");
 	host.id = "chirp-palette";
+	// Above anything an authored page stacks (decks and canvases often use huge z-indexes); the zero-size host
+	// takes no clicks itself, while the dialog inside is fixed to the viewport.
+	host.style.cssText = "position:fixed;top:0;left:0;width:0;height:0;z-index:2147483647;";
 	document.body.append(host);
 	const shadow = host.attachShadow({ mode: "open" });
 	const sheet = document.createElement("link");

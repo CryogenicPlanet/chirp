@@ -56,7 +56,12 @@ function ShadowDialog({
 		>
 			<div className={overlayClass} data-state="open" onClick={() => onOpenChange(false)} />
 			<div ref={content} role="dialog" aria-modal="true" aria-label={label} className={contentClass} data-state="open">
-				<CommandPrimitive label={label} loop {...(shouldFilter === undefined ? {} : { shouldFilter })}>
+				<CommandPrimitive
+					label={label}
+					loop
+					className="flex min-h-0 flex-1 flex-col overflow-hidden"
+					{...(shouldFilter === undefined ? {} : { shouldFilter })}
+				>
 					{children}
 				</CommandPrimitive>
 			</div>

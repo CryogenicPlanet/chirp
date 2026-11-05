@@ -429,8 +429,9 @@ export function CommandPalette({
 				setOpen((value) => !value);
 			}
 		};
-		document.addEventListener("keydown", toggle);
-		return () => document.removeEventListener("keydown", toggle);
+		// Capture phase on window: pages that handle keys themselves (decks, editors) can't swallow ⌘K first.
+		window.addEventListener("keydown", toggle, { capture: true });
+		return () => window.removeEventListener("keydown", toggle, { capture: true });
 	}, []);
 	useEffect(() => setOpen(false), [location.pathname]);
 	const openPalette = useMemo(() => () => setOpen(true), []);
