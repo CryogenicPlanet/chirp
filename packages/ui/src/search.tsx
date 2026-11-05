@@ -24,26 +24,38 @@ export interface ParsedQuery {
 	readonly topic: string;
 }
 
+/** Quote an operator value that has spaces or quotes, so it stays one value: tag:"release candidate". */
+export const operatorValue = (value: string) => (/[\s"]/u.test(value) ? `"${value.replaceAll('"', "")}"` : value);
+
 export const parseQuery = (input: string): ParsedQuery => {
 	const filters = { agent: "", tag: "", topic: "" };
-	// Quoted phrases are search text verbatim, even when they contain "in:" or "from:".
+	const set = (key: string, value: string) => {
+		// Tags match exactly as written; agent names and topic paths are lowercase, with an optional @ or #.
+		if (key.toLowerCase() === "tag") filters.tag = value;
+		else if (key.toLowerCase() === "in") filters.topic = value.replace(/^#/u, "").toLowerCase();
+		else filters.agent = value.replace(/^@/u, "").toLowerCase();
+	};
+	// A quoted operator value (tag:"release candidate") is one value; any other quoted phrase is search text
+	// verbatim, even when it contains "in:" or "from:".
 	const text = input
-		.split(/("[^"]*"?)/u)
-		.map((part, index) =>
-			index % 2 === 1
-				? part
-				: part
-						.replace(/(?:^|\s)(from|by|tag|in):([^\s"]+)/giu, (_match, key: string, value: string) => {
-							// Tags match exactly as written; agent names and topic paths are lowercase, with an
-							// optional @ or # in front.
-							if (key.toLowerCase() === "tag") filters.tag = value;
-							else if (key.toLowerCase() === "in") filters.topic = value.replace(/^#/u, "").toLowerCase();
-							else filters.agent = value.replace(/^@/u, "").toLowerCase();
-							return " ";
-						})
-						// An operator still waiting for its value is not search text.
-						.replace(/(?:^|\s)(?:from|by|tag|in):(?=\s|$)/giu, " "),
-		)
+		.split(/((?:^|(?<=\s))(?:from|by|tag|in):"[^"]*"?|"[^"]*"?)/iu)
+		.map((part, index) => {
+			if (index % 2 === 1) {
+				const quoted = /^(from|by|tag|in):"([^"]*)"?$/iu.exec(part);
+				if (quoted === null) return part;
+				if (quoted[2]) set(quoted[1] ?? "", quoted[2]);
+				return " ";
+			}
+			return (
+				part
+					.replace(/(?:^|\s)(from|by|tag|in):([^\s"]+)/giu, (_match, key: string, value: string) => {
+						set(key, value);
+						return " ";
+					})
+					// An operator still waiting for its value is not search text.
+					.replace(/(?:^|\s)(?:from|by|tag|in):(?=\s|$)/giu, " ")
+			);
+		})
 		.join("")
 		.replace(/\s+/gu, " ")
 		.trim();
@@ -142,10 +154,11 @@ export function Search({
 	const choose = (value: string) => {
 		if (operator === null) return;
 		const start = caret - (operator[2]?.length ?? 0);
-		const next = `${input.slice(0, start)}${value} ${input.slice(caret).trimStart()}`;
-		pendingCaret.current = start + value.length + 1;
+		const token = operatorValue(value);
+		const next = `${input.slice(0, start)}${token} ${input.slice(caret).trimStart()}`;
+		pendingCaret.current = start + token.length + 1;
 		setInput(next);
-		setCaret(start + value.length + 1);
+		setCaret(start + token.length + 1);
 		setActive(0);
 	};
 
@@ -254,9 +267,9 @@ export function Search({
 	const removeFilter = (pattern: RegExp) =>
 		setInput((value) => value.replace(pattern, " ").replace(/\s+/gu, " ").trimStart());
 	const pills = [
-		...(query.agent ? [{ key: "from", value: query.agent, pattern: /(?:^|\s)(?:from|by):\S+/giu }] : []),
-		...(query.tag ? [{ key: "tag", value: query.tag, pattern: /(?:^|\s)tag:\S+/giu }] : []),
-		...(query.topic ? [{ key: "in", value: query.topic, pattern: /(?:^|\s)in:\S+/giu }] : []),
+		...(query.agent ? [{ key: "from", value: query.agent, pattern: /(?:^|\s)(?:from|by):(?:"[^"]*"?|\S+)/giu }] : []),
+		...(query.tag ? [{ key: "tag", value: query.tag, pattern: /(?:^|\s)tag:(?:"[^"]*"?|\S+)/giu }] : []),
+		...(query.topic ? [{ key: "in", value: query.topic, pattern: /(?:^|\s)in:(?:"[^"]*"?|\S+)/giu }] : []),
 	];
 
 	return (

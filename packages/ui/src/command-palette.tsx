@@ -24,7 +24,7 @@ import { invitePrompt } from "./copy-prompt.tsx";
 import { useDirectory } from "./directory.tsx";
 import { profileHref } from "./profile-api.ts";
 import { navigate, useLocation } from "./router.tsx";
-import { parseQuery } from "./search.tsx";
+import { operatorValue, parseQuery } from "./search.tsx";
 import { useLoad } from "./use-load.ts";
 import { AgentAvatar } from "./ui/bird.tsx";
 import {
@@ -234,7 +234,7 @@ function PaletteBody({
 		.slice(0, 8);
 	const complete = (value: string) => {
 		if (operator === null) return;
-		setQuery(`${query.slice(0, query.length - (operator[2]?.length ?? 0))}${value} `);
+		setQuery(`${query.slice(0, query.length - (operator[2]?.length ?? 0))}${operatorValue(value)} `);
 	};
 	return (
 		<>

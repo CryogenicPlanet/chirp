@@ -262,7 +262,8 @@ export function Composer({
 		() => ({
 			reply: ({ agent, label, seq, topic: replyTopic }) => {
 				if (pending !== null) return;
-				if (replyTopic !== topic && path === "") setTopic(replyTopic);
+				// A reply goes to its message's conversation, wherever the picker pointed.
+				if (replyTopic !== topic) setTopic(replyTopic);
 				const who =
 					label !== undefined && directory !== null && reachable(directory, `@${agent}/${label}`)
 						? `@${agent}/${label}`
