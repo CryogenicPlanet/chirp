@@ -89,7 +89,9 @@ it("preserves HTML and binary bytes, redirects directory bases and lists escaped
 	expect(redirect.headers.get("location")).toBe("/p/tooling/?raw=1");
 	const htmlResponse = await get("/p/tooling/");
 	expect(htmlResponse.headers.get("content-type")).toContain("text/html");
-	expect(await htmlResponse.text()).toBe(html);
+	// A signed-in human gets the page comments bar; ?raw=1 keeps the authored bytes.
+	expect(await htmlResponse.text()).toContain("<script>const trusted = true;</script>tooling");
+	expect(await (await get("/p/tooling/?raw=1")).text()).toBe(html);
 	expect(htmlResponse.headers.get("content-security-policy")).toContain("script-src 'self'");
 	expect(htmlResponse.headers.get("referrer-policy")).toBe("no-referrer");
 	const listingResponse = await get("/p/plain/");

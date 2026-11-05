@@ -27,9 +27,12 @@ const latinExt =
 	"U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C4,U+2113,U+2C60-2C7F,U+A720-A7FF";
 const font = (family: string, file: string, style: string, weight: string, range: string) =>
 	`@font-face{font-family:"${family}";src:url(/assets/${file}.woff2) format("woff2");font-style:${style};font-weight:${weight};font-display:swap;unicode-range:${range}}`;
+/** The board's sans face, which page comments also declare on verbatim HTML pages. */
+export const brandFont =
+	font("Schibsted Grotesk", "schibsted-grotesk-latin", "normal", "400 800", latin) +
+	font("Schibsted Grotesk", "schibsted-grotesk-latin-ext", "normal", "400 800", latinExt);
 const pageStyle = [
-	font("Schibsted Grotesk", "schibsted-grotesk-latin", "normal", "400 800", latin),
-	font("Schibsted Grotesk", "schibsted-grotesk-latin-ext", "normal", "400 800", latinExt),
+	brandFont,
 	font("Schibsted Grotesk", "schibsted-grotesk-italic-latin", "italic", "400 800", latin),
 	font("JetBrains Mono", "jetbrains-mono-latin", "normal", "400 500", latin),
 	':root{color-scheme:light}body{margin:0;background:#f7f5f0;color:#202a3a;font:16px/1.65 "Schibsted Grotesk",ui-sans-serif,system-ui,sans-serif}',
@@ -47,20 +50,36 @@ const pageStyle = [
 // chirp.wiki's favicon (packages/landing/public/favicon.svg), inline so it needs no signed-in request.
 const favicon =
 	"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath fill='%23ed9b83' d='M8 20h8V12h16v8h8v8h-8v8H16v-8H8zM8 12h8v8H8zM16 36h8v8h-8z'/%3E%3Cpath fill='%23161b1d' d='M24 16h4v4h-4z'/%3E%3C/svg%3E";
-export const pageDocument = (
-	name: string,
-	body: string,
-	options: { title?: string; raw?: string; rawHref?: string; assets?: string; mount?: string } = {},
-) => {
+/** Breadcrumb links from the board root to a page, each segment escaped for HTML and encoded for its href. */
+export const pageCrumbs = (name: string, mount = "/p") => {
 	let current = "";
-	const mount = options.mount ?? "/p";
 	const crumbs = [...(mount === "/p" ? ['<a href="/">chirp</a>'] : []), `<a href="${escapeHtml(mount)}/">pages</a>`];
 	for (const part of name.split("/").filter(Boolean)) {
 		current = current ? `${current}/${part}` : part;
 		crumbs.push(`<a href="${escapeHtml(pageHref(current, mount))}">${escapeHtml(part)}</a>`);
 	}
+	return crumbs.join(" / ");
+};
+export const pageDocument = (
+	name: string,
+	body: string,
+	options: {
+		title?: string;
+		raw?: string;
+		rawHref?: string;
+		assets?: string;
+		mount?: string;
+		/** Page chrome for a signed-in reader (page-comments.ts): a nav control and trailing scripts. */
+		chrome?: { readonly search: string; readonly scripts: string };
+	} = {},
+) => {
+	const mount = options.mount ?? "/p";
+	const raw =
+		options.rawHref || options.raw
+			? `<a href="${escapeHtml(options.rawHref ?? `${pageHref(options.raw ?? "", mount)}?raw=1`)}">raw</a>`
+			: "";
 	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#f7f5f0"><link rel="icon" type="image/svg+xml" href="${favicon}"><title>${escapeHtml(options.title ?? (name || "Pages"))}</title>
-${options.assets ?? ""}<style>${pageStyle}</style></head><body><div class="wrap"><nav><span>${crumbs.join(" / ")}</span>${options.rawHref || options.raw ? `<a href="${escapeHtml(options.rawHref ?? `${pageHref(options.raw ?? "", mount)}?raw=1`)}">raw</a>` : ""}</nav><article class="markdown-body">${body}</article></div></body></html>`;
+${options.assets ?? ""}<style>${pageStyle}</style></head><body><div class="wrap"><nav><span>${pageCrumbs(name, mount)}</span>${options.chrome?.search ? `<span>${options.chrome.search}${raw}</span>` : raw}</nav><article class="markdown-body">${body}</article></div>${options.chrome?.scripts ?? ""}</body></html>`;
 };
 
 /** Each Pages instance owns its parser and highlighter; never change package defaults. */
@@ -83,7 +102,15 @@ export const pageMarkdown = () => {
 			},
 		},
 	});
-	return (text: string, name: string, options: { rawHref?: string; mount?: string } = {}) => {
+	return (
+		text: string,
+		name: string,
+		options: {
+			rawHref?: string;
+			mount?: string;
+			chrome?: { readonly search: string; readonly scripts: string };
+		} = {},
+	) => {
 		const matched = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
 		const frontmatter = matched?.[1] ?? "";
 		const body = parser.parse(matched ? text.slice(matched[0].length) : text, { async: false });

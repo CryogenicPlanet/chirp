@@ -25,6 +25,17 @@
 			}
 		},
 		{
+			"files": ["packages/server/src/page-comments.js"],
+			"rules": {
+				"effecttsgo/async-function": "off",
+				"effecttsgo/crypto-random-uuid": "off",
+				"effecttsgo/global-date": "off",
+				"effecttsgo/global-fetch": "off",
+				"effecttsgo/global-random": "off",
+				"effecttsgo/global-timers": "off"
+			}
+		},
+		{
 			"files": ["packages/ui/vite.config.ts"],
 			"rules": {
 				"effecttsgo/process-env": "off"
