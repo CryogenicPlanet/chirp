@@ -155,6 +155,7 @@ export function Search({ path, onActive }: { readonly path: string; readonly onA
 	useEffect(() => () => onActive(false), [onActive]);
 
 	const scope = query.topic || (everywhere ? "" : path);
+	const highlightTerms = useMemo(() => termsOf(searched?.text ?? ""), [searched]);
 	useEffect(() => {
 		request.current?.abort();
 		const parsed = parseQuery(input);
@@ -168,6 +169,7 @@ export function Search({ path, onActive }: { readonly path: string; readonly onA
 		}
 		if (within && !validTopic(within)) {
 			setError("in: needs a topic path, like in:home/renovation.");
+			setLoading(false);
 			return;
 		}
 		const controller = new AbortController();
@@ -439,7 +441,7 @@ export function Search({ path, onActive }: { readonly path: string; readonly onA
 						</p>
 					)}
 					<div className={cn("transition-opacity", loading && "opacity-60")}>
-						<MessageList messages={items} highlight={termsOf(searched?.text ?? "")} />
+						<MessageList messages={items} highlight={highlightTerms} />
 					</div>
 					{items.length === limit && (
 						<p className="pt-4 text-center text-[13px] text-slate">

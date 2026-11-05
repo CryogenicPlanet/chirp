@@ -93,7 +93,7 @@ export const paletteShortcut = isMac ? "⌘K" : "Ctrl K";
 
 const snippet = (body: string) =>
 	body
-		.replace(/[`*_>#\[\]()]/g, "")
+		.replace(/[`*_>#[\]()]/g, "")
 		.replace(/\s+/g, " ")
 		.trim()
 		.slice(0, 140);
@@ -132,8 +132,12 @@ function useMessageMatches(query: string) {
 					.pipe(Effect.map((result) => [...result.items].reverse())),
 				{ signal: controller.signal },
 			).then(
-				(items) => setState({ query, items, loading: false }),
-				() => setState({ query, items: [], loading: false }),
+				(items) => {
+					if (!controller.signal.aborted) setState({ query, items, loading: false });
+				},
+				() => {
+					if (!controller.signal.aborted) setState({ query, items: [], loading: false });
+				},
 			);
 		}, 180);
 		return () => {
@@ -155,7 +159,6 @@ function PaletteBody({
 }) {
 	const client = useBoardClient();
 	const directory = useDirectory();
-	const location = useLocation();
 	const { value: root } = useLoad(client.allTopics);
 	const { value: me } = useLoad(client.me);
 	const [query, setQuery] = useState("");
@@ -165,7 +168,6 @@ function PaletteBody({
 		open(href);
 	};
 	const topics = root?.subtopics ?? [];
-	const here = location.pathname.startsWith("/t/") || location.pathname === "/" ? location.pathname : "/";
 	const trimmed = query.trim();
 	// A from:/in:/tag: operator at the end of the query offers its values, like the search field does.
 	const operator = /(?:^|\s)(from|by|in|tag):(\S*)$/iu.exec(query);
@@ -293,7 +295,7 @@ function PaletteBody({
 						<CommandItem
 							value={`search all messages ${trimmed}`}
 							forceMount
-							onSelect={() => go(`${here}?q=${encodeURIComponent(trimmed)}`)}
+							onSelect={() => go(`/?q=${encodeURIComponent(trimmed)}`)}
 						>
 							<SearchIcon />
 							<span className="min-w-0 truncate">

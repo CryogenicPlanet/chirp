@@ -318,7 +318,7 @@ function Board({
 										<RefreshCw className={cn(loading && "animate-spin")} />
 									</Button>
 								</Tooltip>
-								{path && topic && (
+								{path && view && (
 									<Tooltip content="Topic settings">
 										<Button
 											variant="ghost"

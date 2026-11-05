@@ -35,32 +35,34 @@ const DirectoryContext = createContext<Directory | null>(null);
 export function DirectoryProvider({ children }: { readonly children: ReactNode }) {
 	const client = useBoardClient();
 	const [request] = useState(() =>
-		Effect.all(
-			{
-				families: getFamilies().pipe(
-					Effect.map((list) => list.items),
-					Effect.orElseSucceed(() => []),
-				),
-				custom: getCustomMentions(),
-				me: client.read(client.me).pipe(Effect.option),
-			},
-			{ concurrency: "unbounded" },
-		).pipe(
-			Effect.map(({ families, custom, me }): Directory => {
-				const self = me._tag === "Some" && me.value.kind === "human" ? me.value.agent : undefined;
-				const live = families.filter((family) => !family.revoked);
-				const names = [...new Set([...live.map((family) => family.agent), ...(self === undefined ? [] : [self])])]
-					.filter((name) => !hidden.has(name))
-					.sort((a, b) => a.localeCompare(b));
-				return {
-					self: self ?? null,
-					custom: custom.filter((item) => item.mention !== "@here"),
-					agents: names.map((name) => ({
-						name,
-						labels: [...new Set(live.filter((family) => family.agent === name).map((family) => family.label))].sort(),
-					})),
-				};
-			}),
+		client.identityBound(
+			Effect.all(
+				{
+					families: getFamilies().pipe(
+						Effect.map((list) => list.items),
+						Effect.orElseSucceed(() => []),
+					),
+					custom: getCustomMentions(),
+					me: client.read(client.me).pipe(Effect.option),
+				},
+				{ concurrency: "unbounded" },
+			).pipe(
+				Effect.map(({ families, custom, me }): Directory => {
+					const self = me._tag === "Some" && me.value.kind === "human" ? me.value.agent : undefined;
+					const live = families.filter((family) => !family.revoked);
+					const names = [...new Set([...live.map((family) => family.agent), ...(self === undefined ? [] : [self])])]
+						.filter((name) => !hidden.has(name))
+						.sort((a, b) => a.localeCompare(b));
+					return {
+						self: self ?? null,
+						custom: custom.filter((item) => item.mention !== "@here"),
+						agents: names.map((name) => ({
+							name,
+							labels: [...new Set(live.filter((family) => family.agent === name).map((family) => family.label))].sort(),
+						})),
+					};
+				}),
+			),
 		),
 	);
 	const { value } = useLoad(request);

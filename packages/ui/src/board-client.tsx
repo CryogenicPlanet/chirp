@@ -27,6 +27,9 @@ const makeClient = (registry: AtomRegistry.AtomRegistry) => {
 	return {
 		live: Client.runtime.atom(liveEvents),
 		extensions: Client.query("ext", "list", { reactivityKeys: ["extensions"] }),
+		/** An Effect re-read whenever identity state is invalidated: tab focus, reloads, extension changes. */
+		identityBound: <A, E>(effect: Effect.Effect<A, E>) =>
+			Client.runtime.factory.withReactivity(["identity"])(Atom.make(effect)),
 		lock: Client.runtime.factory.withReactivity(["extensions"])(
 			Atom.make((get) =>
 				getEditLock.pipe(

@@ -36,25 +36,43 @@ export interface MentionOption {
 	readonly mention: string;
 	readonly name: string;
 	readonly hint: string;
+	/** A group name (@here, custom) or an agent, for the menu icon. */
+	readonly kind: "group" | "agent";
 }
 
 /** @here reaches every listening agent; @name every instance of it; @name/label one instance. */
-export const mentionOptions = (directory: Directory): ReadonlyArray<MentionOption> => [
-	{ mention: "@here", name: "here", hint: "Every listening agent" },
-	...directory.custom.map((item) => ({ mention: item.mention, name: "here", hint: item.description || "Custom" })),
-	...directory.agents
-		.filter((agent) => agent.name !== directory.self)
-		.flatMap((agent) => [
-			{
-				mention: `@${agent.name}`,
-				name: agent.name,
-				hint: agent.labels.length > 1 ? `All ${agent.labels.length} instances` : "Agent",
-			},
-			...(agent.labels.length > 1
-				? agent.labels.map((label) => ({ mention: `@${agent.name}/${label}`, name: agent.name, hint: "One instance" }))
-				: []),
-		]),
-];
+export const mentionOptions = (directory: Directory): ReadonlyArray<MentionOption> =>
+	uniqueMentions([
+		{ mention: "@here", name: "here", hint: "Every listening agent", kind: "group" },
+		...directory.custom.map((item) => ({
+			mention: item.mention,
+			name: item.mention.slice(1),
+			hint: item.description || "Custom",
+			kind: "group" as const,
+		})),
+		...directory.agents
+			.filter((agent) => agent.name !== directory.self)
+			.flatMap((agent) => [
+				{
+					mention: `@${agent.name}`,
+					name: agent.name,
+					hint: agent.labels.length > 1 ? `All ${agent.labels.length} instances` : "Agent",
+					kind: "agent" as const,
+				},
+				...(agent.labels.length > 1
+					? agent.labels.map((label) => ({
+							mention: `@${agent.name}/${label}`,
+							name: agent.name,
+							hint: "One instance",
+							kind: "agent" as const,
+						}))
+					: []),
+			]),
+	]);
+
+/** The first option for each mention wins, so a custom name shadowing an agent appears once. */
+const uniqueMentions = (options: ReadonlyArray<MentionOption>): ReadonlyArray<MentionOption> =>
+	options.filter((option, index) => options.findIndex((other) => other.mention === option.mention) === index);
 
 /** A mention is known when it names @here, a custom name, a known agent, or one of its labels. */
 export const reachable = (directory: Directory, mention: string): boolean => {

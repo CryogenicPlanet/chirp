@@ -173,7 +173,7 @@ function MentionMenu({
 						onPick(option);
 					}}
 				>
-					{option.name === "here" ? (
+					{option.kind === "group" ? (
 						<span className="grid size-7 shrink-0 place-items-center rounded-lg bg-wash text-slate">
 							<AtSign className="size-4" />
 						</span>
@@ -236,11 +236,14 @@ export function Composer({
 						? `@${agent}/${label}`
 						: `@${agent}`;
 				const prefix = `${who} re #${seq} `;
-				const next = body.startsWith(prefix) ? body : `${prefix}${body}`;
+				if (body.startsWith(prefix)) {
+					textarea.current?.focus();
+					return;
+				}
+				const next = `${prefix}${body}`;
 				pendingCaret.current = next.length;
 				setBody(next);
 				setCaret(next.length);
-				if (next === body) textarea.current?.focus();
 			},
 		}),
 		[pending, topic, path, directory, body],
@@ -268,7 +271,7 @@ export function Composer({
 		typing === null || tokenStart === dismissed || pending !== null
 			? []
 			: everyone
-					.filter((option) => option.mention.slice(1).startsWith(query) || option.name.includes(query))
+					.filter((option) => option.mention.slice(1).startsWith(query) || option.name.startsWith(query))
 					.slice(0, 8);
 	const menuOpen = matches.length > 0;
 	const activeIndex = Math.min(active, matches.length - 1);
