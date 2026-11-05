@@ -21,19 +21,31 @@ import { authenticator } from "./fixtures/authenticator.ts";
 const ceremony = Schema.Struct({ id: Schema.String, options: Schema.Struct({ challenge: Schema.String }) });
 const childState = Schema.Struct({ child: Schema.Struct({ state: Schema.String, attempt: Schema.Int }) });
 
-async function launch(test: TestContext, mode = "normal", blockedAttempts = false) {
-	const root = await mkdtemp(join(tmpdir(), "comms-auth-http-"));
-	test.onTestFinished(() => rm(root, { recursive: true, force: true }));
+/** again restarts boot over an earlier launch's data, with its passkey, and optionally more environment. */
+async function launch(
+	test: TestContext,
+	mode = "normal",
+	blockedAttempts = false,
+	again?: {
+		readonly root: string;
+		readonly device: ReturnType<typeof authenticator>;
+		readonly env?: Readonly<Record<string, string>>;
+	},
+) {
+	const root = again?.root ?? (await mkdtemp(join(tmpdir(), "comms-auth-http-")));
+	if (!again) test.onTestFinished(() => rm(root, { recursive: true, force: true }));
 	const seed = join(root, "seed");
-	await mkdir(seed);
-	await copyFile(join(import.meta.dirname, "fixtures/child.ts"), join(seed, "fixture.ts"));
-	await writeFile(join(seed, "child.ts"), `import { serve } from "./fixture.ts"; serve(${JSON.stringify(mode)});`);
+	if (!again) {
+		await mkdir(seed);
+		await copyFile(join(import.meta.dirname, "fixtures/child.ts"), join(seed, "fixture.ts"));
+		await writeFile(join(seed, "child.ts"), `import { serve } from "./fixture.ts"; serve(${JSON.stringify(mode)});`);
+	}
 	if (blockedAttempts) {
 		await mkdir(join(root, "data"));
 		await writeFile(join(root, "data", "attempts"), "preserve this obstruction");
 	}
 	const processHandle = spawn("bun", [join(import.meta.dirname, "fixtures/launcher.ts")], {
-		env: { ...process.env, ENTRY: join(seed, "child.ts"), DATA_DIR: join(root, "data") },
+		env: { ...process.env, ENTRY: join(seed, "child.ts"), DATA_DIR: join(root, "data"), ...again?.env },
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 	let output = "";
@@ -76,7 +88,8 @@ async function launch(test: TestContext, mode = "normal", blockedAttempts = fals
 		)
 		.not.toBe("");
 	phase = "setup";
-	await expect.poll(async () => (await fetch(`${url}/setup`)).status).toBe(200);
+	if (again) await expect.poll(async () => (await fetch(`${url}/_boot/auth/state`)).status).toBe(200);
+	else await expect.poll(async () => (await fetch(`${url}/setup`)).status).toBe(200);
 	phase = "ready";
 	const code = () => {
 		const value = [...output.matchAll(/\/setup is open, code ([A-F0-9]+)/g)].at(-1)?.[1];
@@ -89,14 +102,14 @@ async function launch(test: TestContext, mode = "normal", blockedAttempts = fals
 			headers: { "content-type": "application/json", origin, ...(cookie ? { cookie } : {}) },
 			body: JSON.stringify(body),
 		});
-	const device = authenticator();
-	const setup = async () => {
-		const options = await post("/_boot/auth/setup/options", { code: code() });
+	const device = again?.device ?? authenticator();
+	const setup = async (name = "rahul", registering = device) => {
+		const options = await post("/_boot/auth/setup/options", { code: code(), name });
 		expect(options.status).toBe(200);
 		const input = Schema.decodeUnknownSync(ceremony)(await options.json());
 		const registered = await post("/_boot/auth/setup/verify", {
 			id: input.id,
-			response: device.registration(input.options.challenge),
+			response: registering.registration(input.options.challenge),
 		});
 		expect(registered.status).toBe(200);
 	};
@@ -112,8 +125,95 @@ async function launch(test: TestContext, mode = "normal", blockedAttempts = fals
 		if (!header || !cookie) throw new Error("Missing session cookie");
 		return { response, cookie, header, payload };
 	};
-	return { url, code, post, setup, login, device, root, output: () => output };
+	const stop = async () => {
+		if (processHandle.exitCode !== null || processHandle.signalCode !== null) return;
+		const exited = once(processHandle, "exit");
+		processHandle.kill("SIGTERM");
+		await exited;
+	};
+	return { url, code, post, setup, login, device, root, stop, output: () => output };
 }
+
+const echo = async (app: { readonly url: string }, cookie: string) => {
+	const headers = { cookie };
+	await expect
+		.poll(
+			async () =>
+				Schema.decodeUnknownSync(childState)(await (await fetch(`${app.url}/_boot/status`, { headers })).json()).child
+					.state,
+		)
+		.toBe("live");
+	const echoed: Readonly<Record<string, unknown>> = await (await fetch(`${app.url}/echo`, { headers })).json();
+	const launched: unknown = await (await fetch(`${app.url}/fixture-owner`, { headers })).json();
+	return { ...echoed, launched };
+};
+const ownerState = async (app: { readonly url: string }) =>
+	(await (await fetch(`${app.url}/_boot/auth/state`)).json()).owner_required;
+const refusal = async (response: Response) => ({ status: response.status, code: (await response.json()).error?.code });
+
+it("names the board's human at first setup, signs them in under that name and reserves it", async (test) => {
+	const app = await launch(test);
+	expect(await ownerState(app)).toBe(true);
+	const page = await (await fetch(`${app.url}/setup`)).text();
+	expect(page).toContain('id="name"');
+	// A name an agent has asked for is taken; so are the board's own voices and anything outside agent names.
+	expect((await app.post("/auth/enroll", { name: "codex", kind: "codex", host: "laptop" })).status).toBe(200);
+	for (const name of [undefined, "", "boot", "system", "Alice", "-alice", "codex", "a".repeat(65)])
+		expect(
+			await refusal(
+				await app.post("/_boot/auth/setup/options", { code: app.code(), ...(name === undefined ? {} : { name }) }),
+			),
+		).toEqual({ status: 400, code: "owner_name_invalid" });
+	await app.setup("alice");
+	expect(await ownerState(app)).toBe(false);
+	const session = await app.login();
+	const first = await echo(app, session.cookie);
+	// The app started before setup, so it learns the name at its next launch.
+	expect(first).toMatchObject({ agent: "alice", kind: "human", launched: { owner: "null" } });
+	expect(await refusal(await app.post("/auth/enroll", { name: "alice", kind: "codex", host: "laptop" }))).toEqual({
+		status: 400,
+		code: "invalid_request",
+	});
+	await app.stop();
+	const restarted = await launch(test, "normal", false, { root: app.root, device: app.device });
+	expect(await ownerState(restarted)).toBe(false);
+	const later = await echo(restarted, (await restarted.login(2)).cookie);
+	expect(later).toMatchObject({ agent: "alice", launched: { owner: '"alice"' } });
+});
+
+it("keeps rahul for a board set up before setup asked, and REOPEN_SETUP never renames", async (test) => {
+	const app = await launch(test);
+	await app.setup("alice");
+	// Stop only a live board, as an upgrade would.
+	expect(await echo(app, (await app.login()).cookie)).toMatchObject({ agent: "alice" });
+	await app.stop();
+	// An older image never wrote the row; its board has a passkey and nothing else.
+	await promisify(execFile)("bun", [
+		join(import.meta.dirname, "fixtures/store.ts"),
+		join(app.root, "data", "boot.db"),
+		"DELETE FROM settings WHERE key='owner_name'",
+	]);
+	const legacy = await launch(test, "normal", false, { root: app.root, device: app.device });
+	expect(await ownerState(legacy)).toBe(false);
+	expect((await fetch(`${legacy.url}/setup`)).status).toBe(404);
+	expect(await echo(legacy, (await legacy.login(2)).cookie)).toMatchObject({
+		agent: "rahul",
+		launched: { owner: '"rahul"' },
+	});
+	await legacy.stop();
+	const reopened = await launch(test, "normal", false, {
+		root: app.root,
+		device: app.device,
+		env: { REOPEN_SETUP: "1" },
+	});
+	expect(await ownerState(reopened)).toBe(false);
+	// A recovery passkey on a reopened setup; the name it sends is ignored.
+	await reopened.setup("bob", authenticator());
+	expect(await echo(reopened, (await reopened.login(3)).cookie)).toMatchObject({
+		agent: "rahul",
+		launched: { owner: '"rahul"' },
+	});
+});
 
 it("creates a passkey and a protected session, forwards verified identity, and logs out", async (test) => {
 	const app = await launch(test);
@@ -125,7 +225,7 @@ it("creates a passkey and a protected session, forwards verified identity, and l
 	expect((await fetch(`${app.url}/_boot/status`)).status).toBe(401);
 	await app.setup();
 	expect((await fetch(`${app.url}/setup`)).status).toBe(404);
-	expect((await app.post("/_boot/auth/setup/options", { code: app.code() })).status).toBe(404);
+	expect((await app.post("/_boot/auth/setup/options", { code: app.code(), name: "rahul" })).status).toBe(404);
 	const session = await app.login();
 	for (const flag of ["HttpOnly", "Secure", "SameSite=Strict", "Path=/", "Max-Age=2592000"])
 		expect(session.header).toContain(flag);
@@ -223,14 +323,22 @@ it("reports minimal setup state while the editable onboarding is unavailable", a
 	const getState = (cookie?: string) => fetch(`${app.url}/_boot/auth/state`, { headers: cookie ? { cookie } : {} });
 	const fresh = await getState();
 	expect(fresh.headers.get("cache-control")).toBe("no-store");
-	expect(await fresh.json()).toEqual({ setup_required: true, authenticated: false });
+	expect(await fresh.json()).toEqual({ setup_required: true, owner_required: true, authenticated: false });
 	expect((await fetch(`${app.url}/setup`)).status).toBe(200);
 	expect((await fetch(`${app.url}/onboarding`)).status).toBe(503);
-	expect((await app.post("/_boot/auth/setup/options", { code: "wrong" })).status).toBe(401);
+	expect((await app.post("/_boot/auth/setup/options", { code: "wrong", name: "rahul" })).status).toBe(401);
 	await app.setup();
-	expect(await (await getState()).json()).toEqual({ setup_required: false, authenticated: false });
+	expect(await (await getState()).json()).toEqual({
+		setup_required: false,
+		owner_required: false,
+		authenticated: false,
+	});
 	const session = await app.login();
-	expect(await (await getState(session.cookie)).json()).toEqual({ setup_required: false, authenticated: true });
+	expect(await (await getState(session.cookie)).json()).toEqual({
+		setup_required: false,
+		owner_required: false,
+		authenticated: true,
+	});
 	expect((await fetch(`${app.url}/setup`)).status).toBe(404);
 	for (const path of ["/_boot/auth/state", "/onboarding", "/assets/board.js", "/assets/style.css"])
 		expect((await fetch(`${app.url}${path}`, { headers: { authorization: "Bearer invalid" } })).status).toBe(401);
@@ -246,7 +354,8 @@ it("rejects cross-origin, malformed, oversized, replayed and explicit invalid cr
 	const code = app.code();
 	for (let n = 0; n < 3; n++)
 		expect(
-			(await app.post("/_boot/auth/setup/options", { code: "wrong" }, undefined, "https://evil.test")).status,
+			(await app.post("/_boot/auth/setup/options", { code: "wrong", name: "rahul" }, undefined, "https://evil.test"))
+				.status,
 		).toBe(403);
 	expect(app.code()).toBe(code);
 	for (const body of ['{"code":', JSON.stringify({ code: "x".repeat(70_000) }), JSON.stringify({ code: 123 })]) {
@@ -259,7 +368,7 @@ it("rejects cross-origin, malformed, oversized, replayed and explicit invalid cr
 		expect(await invalid.text()).not.toContain(code);
 	}
 	const started = Schema.decodeUnknownSync(ceremony)(
-		await (await app.post("/_boot/auth/setup/options", { code })).json(),
+		await (await app.post("/_boot/auth/setup/options", { code, name: "rahul" })).json(),
 	);
 	expect(
 		(

@@ -88,7 +88,7 @@ const main = Effect.gen(function* () {
 		});
 		const code = output.at(-1)?.split("code ")[1];
 		assert.ok(code);
-		const setup = yield* auth.startSetup(code);
+		const setup = yield* auth.startSetup(code, "rahul");
 		yield* auth.finishSetup(setup.id, device.registration(setup.options.challenge));
 		const login = yield* auth.startLogin;
 		const owner = yield* auth.finishLogin(login.id, proof(login).response);
@@ -181,7 +181,7 @@ const main = Effect.gen(function* () {
 		const offeredKey = `auth.identity:${yield* identityId(issuer.issuer, rahul.subject)}`;
 		const offeredRow = sql`SELECT value FROM settings WHERE ${sql("key")}=${offeredKey}`;
 		const stale = yield* restarted.mintSetupCode([rahul]);
-		const staleChallenge = yield* restarted.startSetup(stale.code);
+		const staleChallenge = yield* restarted.startSetup(stale.code, "rahul");
 		const fresh = yield* restarted.mintSetupCode([{ ...rahul, label: "Rahul again" }]);
 		assert.equal(fresh.identities, 1);
 		const staleFinish = yield* Effect.result(
@@ -194,7 +194,7 @@ const main = Effect.gen(function* () {
 		);
 		assert.equal((yield* sql`SELECT id FROM passkeys`).length, 0);
 		assert.equal((yield* offeredRow).length, 0);
-		const challenge = yield* restarted.startSetup(fresh.code);
+		const challenge = yield* restarted.startSetup(fresh.code, "rahul");
 		const { finished, replaced } = yield* Effect.all(
 			{
 				finished: Effect.result(restarted.finishSetup(challenge.id, device.registration(challenge.options.challenge))),
@@ -209,7 +209,7 @@ const main = Effect.gen(function* () {
 			);
 			assert.equal((yield* sql`SELECT id FROM passkeys`).length, 0);
 			assert.equal((yield* offeredRow).length, 0);
-			const retried = yield* other.startSetup(replaced.success.code);
+			const retried = yield* other.startSetup(replaced.success.code, "rahul");
 			yield* other.finishSetup(retried.id, device.registration(retried.options.challenge));
 		} else assert.ok(Result.isFailure(replaced));
 		assert.equal((yield* sql`SELECT id FROM passkeys`).length, 1);

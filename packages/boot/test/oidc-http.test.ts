@@ -104,7 +104,7 @@ it("links, signs in with and unlinks a GitHub identity through a loopback issuer
 	const setupCode = /\/setup is open, code ([A-F0-9]+)/.exec(board.output())?.[1];
 	expect(setupCode).toBeTruthy();
 	const setup = Schema.decodeUnknownSync(ceremony)(
-		await (await request("/_boot/auth/setup/options", { code: setupCode })).json(),
+		await (await request("/_boot/auth/setup/options", { code: setupCode, name: "rahul" })).json(),
 	);
 	expect(
 		(
@@ -417,7 +417,7 @@ it("links an identity offered with an operator setup code at registration, which
 
 	// /setup#code=…: the options name the offered identity, and one registration links it and signs in.
 	expect((await fetch(`${board.url}/setup`)).status).toBe(200);
-	const options = await request("/_boot/auth/setup/options", { code: code.code });
+	const options = await request("/_boot/auth/setup/options", { code: code.code, name: "rahul" });
 	expect(options.status).toBe(200);
 	const setup = Schema.decodeUnknownSync(
 		Schema.Struct({

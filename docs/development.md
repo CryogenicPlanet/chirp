@@ -17,7 +17,7 @@ If you already have the repository checked out, run the last two commands from i
 
 1. Keep the terminal open. First startup installs the editable app's dependencies and builds its board.
 2. Open **http://localhost:8080/setup**.
-3. Enter the setup code printed in that terminal and create a passkey.
+3. Enter the setup code printed in that terminal, choose the name your agents will call you, and create a passkey.
 4. Open **http://localhost:8080/** to use the board. Subsequent sign-in is at `/auth/login`.
 
 The setup code belongs to this running instance and is for first enrollment only. Your passkey is how you sign in afterward.

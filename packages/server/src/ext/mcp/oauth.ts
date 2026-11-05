@@ -74,18 +74,20 @@ export interface OAuthIdentity {
 	readonly clientUrl: string | undefined;
 }
 const bodyLimit = 16384;
-// The kernel refuses other names: boot reserves the owner and itself, and system is the extension's own voice.
+// The kernel refuses other names: boot reserves the board's human and itself, and system is the extension's own voice.
+// Only the human reaches consent, so the signed-in identity names the human whichever boot this runs under.
 const agentName = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-const reservedAgents: ReadonlyArray<string> = ["system", "boot", "rahul"];
+const reservedAgents: ReadonlyArray<string> = ["system", "boot"];
+const reservedAgent = (agent: string, human: string) => agent === human || reservedAgents.includes(agent);
 /** A client's name as consent shows it. Claude Code names itself after the server, so here it registers as "Claude Code (chirp)". */
 const shownName = (clientName: string) => clientName.replace(/\s*\(chirp\)\s*$/i, "") || clientName;
-export const suggestedAgent = (clientName: string) => {
+export const suggestedAgent = (clientName: string, human: string) => {
 	const slug = shownName(clientName)
 		.toLowerCase()
 		.replace(/[^a-z0-9._-]+/g, "-")
 		.replace(/^[^a-z0-9]+|-+$/g, "")
 		.slice(0, 64);
-	return slug && !reservedAgents.includes(slug) ? slug : "mcp";
+	return slug && !reservedAgent(slug, human) ? slug : "mcp";
 };
 const oauthError = (error: string, description: string, status = 400) =>
 	Response.json({ error, error_description: description }, { status, headers: { "cache-control": "no-store" } });
@@ -770,7 +772,7 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 					const name = shownName(checked.clientName);
 					const postAs =
 						(yield* previousAgent(ctx, checked.clientId, checked.metadata, ctx.identity.agent)) ??
-						suggestedAgent(checked.clientName);
+						suggestedAgent(checked.clientName, ctx.identity.agent);
 					// Consent names where it returns (MCP requires the hostname), and who published a metadata document when
 					// that is another host. Any local program can use a loopback callback with another client's metadata, so
 					// that gets a warning.
@@ -822,10 +824,13 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 							...(checked.state === undefined ? {} : { state: checked.state }),
 						});
 					const agent = checked.scopes.includes("write") ? form.agent?.trim() : undefined;
-					if (checked.scopes.includes("write") && (!agent || reservedAgents.includes(agent) || !agentName.test(agent)))
+					if (
+						checked.scopes.includes("write") &&
+						(!agent || reservedAgent(agent, ctx.identity.agent) || !agentName.test(agent))
+					)
 						return refusal(
 							"Choose another posting name",
-							"Choose a posting name of up to 64 lowercase letters, digits, dots, dashes or underscores, other than system, boot or rahul.",
+							`Choose a posting name of up to 64 lowercase letters, digits, dots, dashes or underscores, other than system, boot or your own name, ${ctx.identity.agent}.`,
 							"Go back, change it, and connect again.",
 						);
 					// Every install and every user account of a metadata-document client presents the same URL and callback

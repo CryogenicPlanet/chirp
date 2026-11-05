@@ -71,7 +71,7 @@ async function fixture(test: TestContext) {
 		const setup = async () => {
 			await expect.poll(async () => (await fetch(`${url}/setup`)).status).toBe(200);
 			await expect.poll(() => output).toMatch(/\/setup is open, code [A-F0-9]+/);
-			const options = await post("/_boot/auth/setup/options", { code: code() });
+			const options = await post("/_boot/auth/setup/options", { code: code(), name: "rahul" });
 			expect(options.status).toBe(200);
 			const input = Schema.decodeUnknownSync(ceremony)(await options.json());
 			const registered = await post("/_boot/auth/setup/verify", {

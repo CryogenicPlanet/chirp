@@ -72,6 +72,8 @@ export function serve(mode: string) {
 			if (url.pathname === "/cancelled") return new Response(String(cancelled));
 			// Lets a test act as this live attempt on boot's private channel, as the real app does for grants.
 			// What boot told this app about its board.
+			// The board's human as boot named them at this launch.
+			if (url.pathname === "/fixture-owner") return Response.json({ owner: process.env.BOARD_OWNER ?? null });
 			if (url.pathname === "/fixture-board")
 				return Response.json({
 					origin: process.env.BOARD_ORIGIN ?? null,

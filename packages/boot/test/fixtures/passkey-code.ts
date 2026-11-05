@@ -70,7 +70,7 @@ const run = Effect.gen(function* () {
 	};
 	const setupCode = output.at(-1)?.split("code ")[1];
 	assert.ok(setupCode);
-	const setup = yield* auth.startSetup(setupCode);
+	const setup = yield* auth.startSetup(setupCode, "rahul");
 	yield* auth.finishSetup(setup.id, first.registration(setup.options.challenge, base.expectedOrigin, base.rpId));
 	const login = (device: ReturnType<typeof authenticator>, party: RelyingParty) =>
 		Effect.gen(function* () {
@@ -576,7 +576,7 @@ const run = Effect.gen(function* () {
 	} else if (scenario === "reopen-setup") {
 		// Without the flag, /setup stays closed while passkeys exist.
 		assert.equal(yield* auth.setupOpen, false);
-		yield* fails(auth.startSetup("0000000000000000"), "setup_closed");
+		yield* fails(auth.startSetup("0000000000000000", "rahul"), "setup_closed");
 		// With REOPEN_SETUP=1 boot warns, prints a fresh setup code, and opens /setup with passkeys present.
 		auth = yield* start(primary, false, true);
 		assert.ok(warnings.some((line) => line.includes("REOPEN_SETUP=1")));
@@ -585,10 +585,10 @@ const run = Effect.gen(function* () {
 		assert.ok(recoveryCode);
 		assert.notEqual(recoveryCode, setupCode);
 		// The recovery passkey is only for the primary origin.
-		yield* fails(auth.at(other).startSetup(recoveryCode), "origin_invalid");
+		yield* fails(auth.at(other).startSetup(recoveryCode, "rahul"), "origin_invalid");
 		const third = authenticator();
 		// A setup whose transaction fails leaves the switch armed, and its unconsumed setup code still works.
-		const failing = yield* auth.startSetup(recoveryCode);
+		const failing = yield* auth.startSetup(recoveryCode, "rahul");
 		yield* sql`CREATE TRIGGER refuse_recovery BEFORE INSERT ON passkeys BEGIN SELECT RAISE(ABORT, 'disk failure'); END`;
 		assert.ok(
 			Exit.isFailure(
@@ -601,7 +601,7 @@ const run = Effect.gen(function* () {
 		const retryCode = output.at(-1)?.split("code ")[1];
 		assert.ok(retryCode);
 		assert.equal(retryCode, recoveryCode);
-		const recovery = yield* auth.startSetup(retryCode);
+		const recovery = yield* auth.startSetup(retryCode, "rahul");
 		yield* auth.finishSetup(recovery.id, third.registration(recovery.options.challenge));
 		assert.deepEqual(yield* sql`SELECT rp_id, label FROM passkeys WHERE id=${third.id}`, [
 			{ rp_id: "comms.test", label: "Recovery passkey" },
@@ -613,7 +613,7 @@ const run = Effect.gen(function* () {
 		yield* login(first, primary);
 		// One use per process: setup closes again while the flag is still set.
 		assert.equal(yield* auth.setupOpen, false);
-		yield* fails(auth.startSetup(recoveryCode), "setup_closed");
+		yield* fails(auth.startSetup(recoveryCode, "rahul"), "setup_closed");
 		const reopened = yield* sql`SELECT event FROM events WHERE type='auth.setup_reopened'`;
 		assert.equal(reopened.length, 1);
 		assert.ok(!JSON.stringify(reopened).includes(recoveryCode));

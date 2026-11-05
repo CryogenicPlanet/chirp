@@ -124,7 +124,7 @@ it("shows a pending enrollment's expiry, and lists its approval and collection b
 		});
 	const setupCode = () => /\/setup is open, code ([A-F0-9]+)/.exec(app.output())?.[1];
 	await expect.poll(setupCode).toBeTruthy();
-	const setup = ceremony(await (await post("/_boot/auth/setup/options", { code: setupCode() })).json());
+	const setup = ceremony(await (await post("/_boot/auth/setup/options", { code: setupCode(), name: "rahul" })).json());
 	expect(
 		(await post("/_boot/auth/setup/verify", { id: setup.id, response: device.registration(setup.options.challenge) }))
 			.status,

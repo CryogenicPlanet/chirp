@@ -60,7 +60,7 @@ async function launch(test: TestContext) {
 		});
 	const device = authenticator();
 	const setup = async () => {
-		const options = await post("/_boot/auth/setup/options", { code: code() });
+		const options = await post("/_boot/auth/setup/options", { code: code(), name: "rahul" });
 		expect(options.status).toBe(200);
 		const input = Schema.decodeUnknownSync(ceremony)(await options.json());
 		const registered = await post("/_boot/auth/setup/verify", {

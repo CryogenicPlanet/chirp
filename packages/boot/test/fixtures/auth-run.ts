@@ -64,18 +64,18 @@ const run = Effect.gen(function* () {
 		yield* fails(boot.authenticateSession(token), "session_invalid");
 	} else if (scenario === "setup") {
 		const firstCode = code();
-		const pending = yield* boot.startSetup(firstCode);
-		for (let n = 0; n < 3; n++) yield* fails(boot.startSetup("wrong"), "setup_code_invalid");
+		const pending = yield* boot.startSetup(firstCode, "rahul");
+		for (let n = 0; n < 3; n++) yield* fails(boot.startSetup("wrong", "rahul"), "setup_code_invalid");
 		assert.notEqual(code(), firstCode);
 		yield* fails(boot.finishSetup(pending.id, device.registration(pending.options.challenge)), "challenge_invalid");
-		const another = yield* boot.startSetup(code());
+		const another = yield* boot.startSetup(code(), "rahul");
 		const previous = code();
 		const again = yield* restart();
 		assert.notEqual(code(), previous);
-		yield* fails(again.startSetup(previous), "setup_code_invalid");
+		yield* fails(again.startSetup(previous, "rahul"), "setup_code_invalid");
 		yield* fails(again.finishSetup(another.id, device.registration(another.options.challenge)), "challenge_invalid");
-		const a = yield* again.startSetup(code());
-		const b = yield* again.startSetup(code());
+		const a = yield* again.startSetup(code(), "rahul");
+		const b = yield* again.startSetup(code(), "rahul");
 		const other = authenticator();
 		const results = yield* Effect.all(
 			[
@@ -88,15 +88,15 @@ const run = Effect.gen(function* () {
 		assert.equal((yield* sql`SELECT id FROM passkeys`).length, 1);
 		const priorCode = code();
 		yield* sql`DELETE FROM passkeys`;
-		yield* fails(again.startSetup(priorCode), "setup_code_invalid");
+		yield* fails(again.startSetup(priorCode, "rahul"), "setup_code_invalid");
 		assert.equal(yield* again.setupOpen, true);
 		assert.notEqual(code(), priorCode);
-		const recovery = yield* again.startSetup(code());
+		const recovery = yield* again.startSetup(code(), "rahul");
 		yield* again.finishSetup(recovery.id, device.registration(recovery.options.challenge));
 		assert.equal(yield* again.setupOpen, false);
-		yield* fails(again.startSetup(code()), "setup_closed");
+		yield* fails(again.startSetup(code(), "rahul"), "setup_closed");
 	} else {
-		const registration = yield* boot.startSetup(code());
+		const registration = yield* boot.startSetup(code(), "rahul");
 		if (scenario === "registration-validation") {
 			yield* fails(
 				boot.finishSetup(registration.id, device.registration(registration.options.challenge, "https://evil.test")),

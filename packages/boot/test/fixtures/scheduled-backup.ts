@@ -12,6 +12,7 @@ import { AuthError } from "../../src/auth.ts";
 import { ChildError } from "../../src/child-process.ts";
 import { type EventRecord, Events, layer as eventsLayer } from "../../src/events.ts";
 import { layer as generationsLayer } from "../../src/generations.ts";
+import { layer as ownerLayer } from "../../src/owner.ts";
 import { layer as kernelBootLayer } from "../../src/kernel-boot.ts";
 import { initializeBootSchema } from "../../src/boot-schema.ts";
 import { BackupRecord } from "../../src/backup-metadata.ts";
@@ -303,6 +304,7 @@ const main = Effect.gen(function* () {
 				backupLayer({ _tag: "file", filename }, root),
 				ownersLayer(root).pipe(Layer.provide(kernelBootLayer)),
 				generationsLayer,
+				ownerLayer,
 			).pipe(Layer.provideMerge(eventsLayer(Effect.void)), Layer.provideMerge(boot)),
 		),
 	);

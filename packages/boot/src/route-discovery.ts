@@ -167,7 +167,7 @@ const routes = [
 		"get",
 		["/_boot/auth/state"],
 		"public",
-		"Whether first-passkey setup is required and whether the caller has a verified human session. Explicit credentials are authenticated; no credential or passkey details are returned.",
+		"Whether first-passkey setup is required, whether that setup must also name the board's human (owner_required), and whether the caller has a verified human session. Explicit credentials are authenticated; no credential or passkey details are returned.",
 	],
 	[
 		"get",
@@ -179,13 +179,13 @@ const routes = [
 		"post",
 		["/_boot/auth/setup/options"],
 		"public",
-		"Start first-passkey registration with {code} from boot stdout or the operator command, and exact Origin. Returns {id,options,identities}: identities lists {provider,label} for each GitHub or Google identity the operator offered with that code, which finishing links; it is empty without an offer and for a reopened setup.",
+		"Start first-passkey registration with {code,name} from boot stdout or the operator command, and exact Origin. name is what agents call the human, required while no owner is recorded (see owner_required) and ignored afterwards, so a reopened setup never renames: an agent name other than boot, system or one an agent holds or has requested, else owner_name_invalid before any passkey is created. Returns {id,options,identities}: identities lists {provider,label} for each GitHub or Google identity the operator offered with that code, which finishing links; it is empty without an offer and for a reopened setup.",
 	],
 	[
 		"post",
 		["/_boot/auth/setup/verify"],
 		"public",
-		"Complete setup with {id,response} registration proof and exact Origin. Stores the passkey, links any identities offered with the code in the same commit, and issues a secure human session cookie, as passkey sign-in does.",
+		"Complete setup with {id,response} registration proof and exact Origin. Stores the passkey, records the owner name the challenge started with, links any identities offered with the code in the same commit, and issues a secure human session cookie, as passkey sign-in does.",
 	],
 	[
 		"post",
@@ -308,7 +308,7 @@ const routes = [
 		"get",
 		["/auth/oidc/callback"],
 		"public",
-		"The issuer's return with code, state and iss, from the browser that started. Claims the state before redeeming so a concurrent callback cannot spend it; any refusal has already spent that state. Login opens an ordinary human session only for an identity already linked, matched by issuer and subject; link holds the verified identity for /@rahul?link=<id> to confirm. Answers an HTML page that continues by a same-site navigation. A linked identity is not a recovery path; passkeys and REOPEN_SETUP are.",
+		"The issuer's return with code, state and iss, from the browser that started. Claims the state before redeeming so a concurrent callback cannot spend it; any refusal has already spent that state. Login opens an ordinary human session only for an identity already linked, matched by issuer and subject; link holds the verified identity for /@<owner>?link=<id> to confirm. Answers an HTML page that continues by a same-site navigation. A linked identity is not a recovery path; passkeys and REOPEN_SETUP are.",
 	],
 	[
 		"get",

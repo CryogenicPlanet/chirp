@@ -10,6 +10,7 @@ import { RemoteDatabaseError } from "./remote-db-ops.ts";
 import { DbOps } from "./db-ops.ts";
 import { AppRecovery } from "./app-recovery.ts";
 import type { ChildAttempts } from "./child-attempts.ts";
+import type { Owner } from "./owner.ts";
 import { ChildError } from "./child-process.ts";
 import { Events } from "./events.ts";
 import type { Generations } from "./generations.ts";
@@ -27,7 +28,7 @@ export const databaseBackup = Effect.fn("databaseBackup")(function* (supervisor:
 	const crypto = yield* Crypto.Crypto;
 	const retention = yield* artifactRetention(recovery.dataDirectory, backup.engine);
 	const headroom = yield* storageHeadroom(recovery.dataDirectory);
-	const context = yield* Effect.context<Generations | AppRecovery | ChildAttempts>();
+	const context = yield* Effect.context<Generations | AppRecovery | ChildAttempts | Owner>();
 	const capture = <E = never>(options: {
 		readonly reason: "hourly" | "manual";
 		readonly epoch?: string;

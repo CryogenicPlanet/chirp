@@ -42,16 +42,18 @@ it.each([
 					? status
 					: id === "code"
 						? { value: "private-setup-code" }
-						: {
-								dataset: { mode: scenario === "get" ? "login" : "setup" },
-								querySelector: () => button,
-								addEventListener: (
-									_name: string,
-									callback: (event: { preventDefault: () => void }) => Promise<void>,
-								) => {
-									submit = () => callback({ preventDefault: () => {} });
+						: id === "name"
+							? null
+							: {
+									dataset: { mode: scenario === "get" ? "login" : "setup" },
+									querySelector: () => button,
+									addEventListener: (
+										_name: string,
+										callback: (event: { preventDefault: () => void }) => Promise<void>,
+									) => {
+										submit = () => callback({ preventDefault: () => {} });
+									},
 								},
-							},
 		},
 		window: {
 			isSecureContext: true,
@@ -209,8 +211,18 @@ it("fills in a setup code from the fragment, clears it, and shows offered identi
 	}
 });
 
-/** Open /setup#code=… and create the passkey, with the options response carrying `extra`. */
-const setupFromFragment = async (extra: Readonly<Record<string, unknown>>) => {
+it("asks first setup what agents should call the human, and sends the name with the code", async () => {
+	expect(authPage("setup", [], true)).toContain('<input id="name" name="name" required');
+	expect(authPage("setup")).not.toContain('id="name"');
+	expect(authPage("code", [], true)).not.toContain('id="name"');
+	const named = await setupFromFragment({}, " alice ");
+	expect(named.requests[0]?.body).toEqual({ code: "0123456789ABCDEF", name: "alice" });
+	expect(named.assigned).toBe("/");
+});
+
+/** Open /setup#code=… and create the passkey, with the options response carrying `extra`. A name is typed into the
+ * page's name field, which only first setup renders. */
+const setupFromFragment = async (extra: Readonly<Record<string, unknown>>, name?: string) => {
 	const status = { textContent: "" },
 		button = { disabled: false },
 		code = { value: "" };
@@ -231,16 +243,20 @@ const setupFromFragment = async (extra: Readonly<Record<string, unknown>>) => {
 					? status
 					: id === "code"
 						? code
-						: {
-								dataset: { mode: "setup" },
-								querySelector: () => button,
-								addEventListener: (
-									_name: string,
-									callback: (event: { preventDefault: () => void }) => Promise<void>,
-								) => {
-									submit = () => callback({ preventDefault: () => {} });
+						: id === "name"
+							? name === undefined
+								? null
+								: { value: name }
+							: {
+									dataset: { mode: "setup" },
+									querySelector: () => button,
+									addEventListener: (
+										_name: string,
+										callback: (event: { preventDefault: () => void }) => Promise<void>,
+									) => {
+										submit = () => callback({ preventDefault: () => {} });
+									},
 								},
-							},
 		},
 		window: {
 			isSecureContext: true,

@@ -68,14 +68,14 @@ const run = Effect.gen(function* () {
 		assert.match(first.code, /^[A-F0-9]{16}$/);
 		assert.equal(first.expires_at, now + 900_000);
 		assert.equal(first.identities, 0);
-		const pending = yield* auth.startSetup(first.code);
+		const pending = yield* auth.startSetup(first.code, "rahul");
 		assert.deepEqual(pending.identities, []);
 		const second = yield* auth.mintSetupCode();
 		assert.notEqual(first.code, second.code);
-		yield* fails(auth.startSetup(first.code), "setup_code_invalid");
+		yield* fails(auth.startSetup(first.code, "rahul"), "setup_code_invalid");
 		yield* fails(auth.finishSetup(pending.id, device.registration(pending.options.challenge)), "challenge_invalid");
 		now += 899_999;
-		const finalMoment = yield* auth.startSetup(second.code);
+		const finalMoment = yield* auth.startSetup(second.code, "rahul");
 		assert.deepEqual(yield* sql`SELECT expires_at FROM auth_challenges WHERE id=${finalMoment.id}`, [
 			{ expires_at: second.expires_at },
 		]);
@@ -86,8 +86,8 @@ const run = Effect.gen(function* () {
 		assert.ok(typeof replacement === "string");
 		const replacementCode = /code ([A-F0-9]{16})$/.exec(replacement)?.[1];
 		assert.ok(replacementCode);
-		yield* fails(auth.startSetup(second.code), "setup_code_invalid");
-		const replacementCeremony = yield* auth.startSetup(replacementCode);
+		yield* fails(auth.startSetup(second.code, "rahul"), "setup_code_invalid");
+		const replacementCeremony = yield* auth.startSetup(replacementCode, "rahul");
 		yield* fails(
 			auth.finishSetup(finalMoment.id, device.registration(finalMoment.options.challenge)),
 			"challenge_invalid",
@@ -98,7 +98,7 @@ const run = Effect.gen(function* () {
 		const loggedAfterExpiry = output.length;
 		const crossing = yield* auth.mintSetupCode();
 		now = crossing.expires_at - 4;
-		const crossingChallenge = yield* auth.startSetup(crossing.code);
+		const crossingChallenge = yield* auth.startSetup(crossing.code, "rahul");
 		now = crossing.expires_at - 3;
 		let finishClockReads = 0;
 		yield* fails(
@@ -116,11 +116,11 @@ const run = Effect.gen(function* () {
 		assert.equal(finishClockReads, 3, "Expiry is rechecked after asynchronous credential verification");
 		assert.equal((yield* sql`SELECT id FROM passkeys`).length, 0);
 		const third = yield* auth.mintSetupCode();
-		for (let i = 0; i < 3; i++) yield* fails(auth.startSetup("wrong"), "setup_code_invalid");
-		yield* fails(auth.startSetup(third.code), "setup_code_invalid");
+		for (let i = 0; i < 3; i++) yield* fails(auth.startSetup("wrong", "rahul"), "setup_code_invalid");
+		yield* fails(auth.startSetup(third.code, "rahul"), "setup_code_invalid");
 		assert.equal(output.length, loggedAfterExpiry, "Unexpired operator-code rotation must stay private");
 		const fresh = yield* auth.mintSetupCode();
-		const ceremony = yield* auth.startSetup(fresh.code);
+		const ceremony = yield* auth.startSetup(fresh.code, "rahul");
 		yield* auth.finishSetup(ceremony.id, device.registration(ceremony.options.challenge));
 		yield* fails(auth.mintSetupCode(), "setup_closed");
 		const recovery = yield* restart(true);
@@ -181,7 +181,7 @@ const run = Effect.gen(function* () {
 		assert.match(generated.code, /^[A-F0-9]{16}$/);
 		assert.ok(generated.expires_at > Date.now() + 890_000);
 		assert.equal(generated.identities, 0);
-		assert.deepEqual((yield* auth.startSetup(generated.code)).identities, []);
+		assert.deepEqual((yield* auth.startSetup(generated.code, "rahul")).identities, []);
 		// An offer replaces that code and is listed for the setup page.
 		const offered = yield* invoke(offer([rahul, google]));
 		assert.equal(offered.status, 0);
@@ -193,7 +193,7 @@ const run = Effect.gen(function* () {
 			{ provider: "github", label: "Rahul" },
 			{ provider: "google", label: "rahul@example.com" },
 		];
-		assert.deepEqual((yield* auth.startSetup(code.code)).identities, shown);
+		assert.deepEqual((yield* auth.startSetup(code.code, "rahul")).identities, shown);
 		// Malformed offers are refused before boot touches the code, so the offered code and its offer still stand.
 		for (const bad of [
 			offer([{ subject: "github:0123", label: "leading zero" }]),
@@ -229,7 +229,7 @@ const run = Effect.gen(function* () {
 			assert.ok(!refused.body.includes("code"));
 		}
 		assert.deepEqual(yield* raw(offer([rahul, rahul])), { status: 400, body: '{"error":"invalid_request"}' });
-		const still = yield* auth.startSetup(code.code);
+		const still = yield* auth.startSetup(code.code, "rahul");
 		assert.deepEqual(still.identities, shown);
 		assert.equal((yield* linkedRows).length, 0, "An offer is not a link before the passkey");
 		// Finishing links both under boot's configured issuer, in the passkey's commit, and signs the human in.

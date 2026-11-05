@@ -69,8 +69,14 @@ export const oidcRoute = (auth: Auth["Service"], requestId: string) =>
 			// Read before the callback spends the state, so a refusal can say whether it was a sign-in or a link.
 			const linking =
 				state !== undefined && (yield* auth.oidcIntent(state).pipe(Effect.orElseSucceed(() => null))) === "link";
+			const account = linking
+				? yield* auth.owner.pipe(
+						Effect.map((owner) => `/@${owner}`),
+						Effect.orElseSucceed(() => "/"),
+					)
+				: "/";
 			const page = (refusal: AuthError["code"]) =>
-				HttpServerResponse.text(oidcErrorPage(refusal, { canceled: url.searchParams.has("error"), linking }), {
+				HttpServerResponse.text(oidcErrorPage(refusal, { canceled: url.searchParams.has("error"), linking, account }), {
 					status: refusalStatus(refusal),
 					contentType: "text/html",
 					headers: oidcPageHeaders,

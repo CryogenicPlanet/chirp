@@ -160,8 +160,12 @@ export default (api: Api) => {
 };`,
 	);
 	await writeFile(join(fixture.root, "boot.config.json"), JSON.stringify({ applicationManagedIngress: true }));
+	const unnamed = await fixture.launch(join(seed, "server.ts"));
+	await unnamed.setup();
+	await unnamed.ready(await unnamed.login());
+	// Boot tells the app the human's name at each launch, so a child started before setup learns it at the next.
+	await unnamed.stop();
 	const app = await fixture.launch(join(seed, "server.ts"));
-	await app.setup();
 	const cookie = await app.login();
 	await app.ready(cookie);
 	const relay = async (agent: string) =>

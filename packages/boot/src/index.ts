@@ -31,6 +31,7 @@ import type { ApplicationSource } from "./application.ts";
 import { initializeBootSchema, BootIdentityUpgradePending } from "./boot-schema.ts";
 import { EditAuthority, editAuthorityActive, EditLock, EditRejected, layer as editLockLayer } from "./edit-lock.ts";
 import { Generations, layer as generationsLayer } from "./generations.ts";
+import { Owner, layer as ownerLayer } from "./owner.ts";
 import { SourceFiles, layer as sourceLayer } from "./source-files.ts";
 import { Events, layer as eventsLayer } from "./events.ts";
 import { AppRecovery, layer as recoveryLayer, remoteRecovery } from "./app-recovery.ts";
@@ -192,6 +193,7 @@ export const boot = Effect.fn("boot")(function* (options: ApplicationSource & { 
 	const graph = Layer.mergeAll(
 		authLayer({ ...options.auth, reopenSetup }),
 		generationsLayer,
+		ownerLayer,
 		preparationLayer(options).pipe(Layer.provide(preparationProcessLayer)),
 		attemptsLayer(options.dataDirectory, configuration._tag === "remote").pipe(Layer.provide(kernelBootLayer)),
 		databaseServices,
@@ -307,7 +309,8 @@ export const boot = Effect.fn("boot")(function* (options: ApplicationSource & { 
 				Events,
 				ChildAttempts,
 				Generations,
-			)(yield* Effect.context<Auth | Events | ChildAttempts | Generations>()),
+				Owner,
+			)(yield* Effect.context<Auth | Events | ChildAttempts | Generations | Owner>()),
 			BootHttp,
 			{
 				child,

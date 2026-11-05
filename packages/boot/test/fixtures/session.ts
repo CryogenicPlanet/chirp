@@ -19,6 +19,12 @@ export async function seedSession(data: string) {
 						join(data, "boot.db"),
 						`INSERT INTO sessions (id, hash, created_at, expires_at) VALUES ('${id}', '${hash}', 0, 9999999999999)`,
 					]);
+					// A signed-in board has named its human; setup records that with the first passkey.
+					await execute("bun", [
+						join(import.meta.dirname, "store.ts"),
+						join(data, "boot.db"),
+						`INSERT OR IGNORE INTO settings (key, value) VALUES ('owner_name', 'rahul')`,
+					]);
 					return true;
 				} catch {
 					return false;

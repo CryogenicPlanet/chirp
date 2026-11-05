@@ -5,13 +5,17 @@ import type { OidcProvider } from "./oidc-schema.ts";
 const providerNames = { github: "GitHub", google: "Google" } as const satisfies Record<OidcProvider, string>;
 
 /** Immutable boot UI: it remains usable when editable app code cannot start. Sign-in offers only the providers
- * the human already linked; the passkey stays the way in. */
-export const authPage = (mode: "setup" | "login" | "code", providers: ReadonlyArray<OidcProvider> = []) => {
+ * the human already linked; the passkey stays the way in. First setup also asks what agents should call the human. */
+export const authPage = (
+	mode: "setup" | "login" | "code",
+	providers: ReadonlyArray<OidcProvider> = [],
+	askName = false,
+) => {
 	const setup = mode !== "login";
 	const heading = mode === "setup" ? "Create your passkey" : mode === "code" ? "Add a passkey" : "Welcome back";
 	const intro =
 		mode === "setup"
-			? "Enter the setup code from the bootloader logs. Your password manager will save a passkey for this board."
+			? `Enter the setup code from the bootloader logs${askName ? " and the name your agents should call you" : ""}. Your password manager will save a passkey for this board.`
 			: mode === "code"
 				? "Enter the one-time code shown in your board's account page. Your password manager will save a passkey for this address, and you will be signed in."
 				: providers.length > 0
@@ -25,7 +29,7 @@ export const authPage = (mode: "setup" | "login" | "code", providers: ReadonlyAr
 ${skyHeader}
 <main class="auth-shell"><h1>${heading}</h1>
 <p>${intro}</p>
-<form id="auth" data-mode="${mode}">${setup ? `<label for="code">${mode === "code" ? "One-time code" : "Setup code"}</label><input id="code" name="code" required autocomplete="off" spellcheck="false">` : ""}
+<form id="auth" data-mode="${mode}">${setup ? `<label for="code">${mode === "code" ? "One-time code" : "Setup code"}</label><input id="code" name="code" required autocomplete="off" spellcheck="false">` : ""}${mode === "setup" && askName ? `<label for="name">What should your agents call you?</label><input id="name" name="name" required maxlength="64" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="name-hint"><p id="name-hint" class="hint">Lowercase letters, digits, dots, dashes or underscores. Everything you post is signed with it, and it cannot be changed later.</p>` : ""}
 <button type="submit">${setup ? "Create passkey" : "Sign in with passkey"}</button></form>${mode === "login" ? providers.map((provider) => `<button class="provider" type="button" data-provider="${provider}">Continue with ${providerNames[provider]}</button>`).join("") : ""}
 <p id="status" role="status" aria-live="polite"></p></main>
 <p class="aside"><a href="/_boot">Recovery help</a></p>
@@ -111,7 +115,7 @@ export const authClient = `(() => {
   catch { throw new Error("The board or sharing proxy returned an unreadable response (HTTP " + response.status + "). Check the connection and sign-in page."); }
   if (!result || typeof result !== "object") throw new Error("The board returned an invalid authentication response.");
   if (!response.ok) {
-   const messages = {setup_code_invalid:"That setup code is incorrect. Check the latest code in the bootloader logs.", setup_closed:"Setup is complete. Open /auth/login to sign in.", setup_required:"Create your first passkey at /setup.", challenge_invalid:"This passkey request expired or was already used. Try again.", origin_invalid:"This address is not an allowed origin for this board, or the code is bound to a different address.", passkey_code_invalid:"That code is incorrect, expired, already used, or meant for a different address. Generate a new code from a signed-in session.", passkey_code_locked:"Too many wrong codes. Wait a minute, then enter the code again.", origin_unproven:"The board could not confirm this address points to it. Add the domain to your host and DNS first, then try again.", passkey_origin_mismatch:"No passkey on this board belongs to an address it serves. Ask the operator to restore the previous address settings or reopen setup.", authentication_invalid:"The passkey could not be verified. Try again.", registration_invalid:"The passkey could not be registered. Try again.", boot_unavailable:"The boot authentication store is unavailable. Check the bootloader logs."};
+   const messages = {setup_code_invalid:"That setup code is incorrect. Check the latest code in the bootloader logs.", setup_closed:"Setup is complete. Open /auth/login to sign in.", owner_name_invalid:"Choose another name: up to 64 lowercase letters, digits, dots, dashes or underscores, starting with a letter or digit, other than boot, system or a name one of your agents already has.", setup_required:"Create your first passkey at /setup.", challenge_invalid:"This passkey request expired or was already used. Try again.", origin_invalid:"This address is not an allowed origin for this board, or the code is bound to a different address.", passkey_code_invalid:"That code is incorrect, expired, already used, or meant for a different address. Generate a new code from a signed-in session.", passkey_code_locked:"Too many wrong codes. Wait a minute, then enter the code again.", origin_unproven:"The board could not confirm this address points to it. Add the domain to your host and DNS first, then try again.", passkey_origin_mismatch:"No passkey on this board belongs to an address it serves. Ask the operator to restore the previous address settings or reopen setup.", authentication_invalid:"The passkey could not be verified. Try again.", registration_invalid:"The passkey could not be registered. Try again.", boot_unavailable:"The boot authentication store is unavailable. Check the bootloader logs."};
    const code = result.error?.code;
    errorCode = typeof code === "string" && /^[a-z_]{1,64}$/.test(code) ? code : "";
    throw new Error((Object.hasOwn(messages, errorCode) ? messages[errorCode] : null) || "Authentication was refused (HTTP " + response.status + "). Check the board configuration or sign in again.");
@@ -141,7 +145,8 @@ export const authClient = `(() => {
    const mode = form.dataset.mode;
    const setup = mode !== "login";
    const path = mode === "code" ? "/_boot/auth/passkey-code" : "/_boot/auth/" + (setup ? "setup" : "login");
-   const input = setup ? {code:document.getElementById("code").value.trim()} : {};
+   const name = document.getElementById("name");
+   const input = setup ? {code:document.getElementById("code").value.trim(), ...(name ? {name:name.value.trim()} : {})} : {};
    const started = await post(path + "/options", input, "options");
    progress("options decode", "Preparing the passkey request…");
    const options = started.options;

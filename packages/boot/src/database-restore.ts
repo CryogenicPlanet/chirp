@@ -3,7 +3,7 @@ import { snapshotStoreEntry } from "./application.ts";
 import { lockBootWrite } from "./boot-write-lock.ts";
 import { RemoteDatabaseError } from "./remote-db-ops.ts";
 import { restoreBeforeImage } from "./restore-before-image.ts";
-import { humanAgent } from "./human-agent.ts";
+import { type Owner, requireOwner } from "./owner.ts";
 import { recoveryIntents } from "./recovery-intents.ts";
 import { Cause, Clock, Crypto, DateTime, Effect, FileSystem, Path, Ref, Schema } from "effect";
 import { SqlClient } from "effect/unstable/sql";
@@ -41,7 +41,7 @@ export const databaseRestore = Effect.fn("databaseRestore")(function* (superviso
 	const path = yield* Path.Path;
 	const retention = yield* artifactRetention(recovery.dataDirectory, backup.engine);
 	const headroom = yield* storageHeadroom(recovery.dataDirectory);
-	const context = yield* Effect.context<Generations | AppRecovery | ChildAttempts>();
+	const context = yield* Effect.context<Generations | AppRecovery | ChildAttempts | Owner>();
 	const preparationContext = yield* Effect.context<Effect.Services<ReturnType<typeof prepareRestoreGeneration>>>();
 	const ready = yield* Ref.make(false);
 	const offlineRestore = backup.offlineRestore;
@@ -185,7 +185,7 @@ export const databaseRestore = Effect.fn("databaseRestore")(function* (superviso
 									at: (yield* DateTime.nowAsDate).getTime(),
 									type: "db.restored",
 									level: "info",
-									actor: humanAgent,
+									actor: yield* requireOwner(sql),
 									instance: record.session_id,
 									generation: generation.n,
 									request_id: null,
@@ -212,7 +212,7 @@ export const databaseRestore = Effect.fn("databaseRestore")(function* (superviso
 								sources.prepareTrustedTree(
 									{ id: record.lock_id, family: record.lock_family },
 									selectedSource,
-									humanAgent,
+									yield* requireOwner(sql),
 								),
 								(proposal) =>
 									sources.publishWithAcceptance(

@@ -1,4 +1,3 @@
-import { humanAgent } from "./human-agent.ts";
 import { Effect, Schema } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import { Scope } from "./enrollment-schema.ts";
@@ -12,9 +11,10 @@ export const MintToken = Schema.Struct({
 export type MintToken = typeof MintToken.Type;
 export const MintBinding = Schema.Struct({ ...MintToken.fields, idempotency_key: Schema.optionalKey(Schema.String) });
 export type MintBinding = typeof MintBinding.Type;
-export const validMint = (input: MintBinding) =>
+/** The owner is the board's human, so no token can be minted for that name. */
+export const validMint = (input: MintBinding, owner: string) =>
 	/^[a-z0-9][a-z0-9._-]{0,63}$/.test(input.agent) &&
-	![humanAgent, "boot"].includes(input.agent) &&
+	![owner, "boot"].includes(input.agent) &&
 	/^[a-z0-9][a-z0-9._-]{0,63}$/.test(input.label) &&
 	input.scopes.length > 0 &&
 	new Set(input.scopes).size === input.scopes.length &&

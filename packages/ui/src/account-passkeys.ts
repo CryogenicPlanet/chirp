@@ -168,10 +168,12 @@ const registerPasskey = (started: typeof Registration.Type) =>
 		};
 	});
 
-/** First registration also signs in: boot answers setup/verify with the session cookie. */
-export const setupPasskey = (code: string) =>
+/** First registration also signs in: boot answers setup/verify with the session cookie. A board whose human is not
+ * named yet takes the name with the code, and refuses a bad one before the browser creates a passkey. */
+export const setupPasskey = (code: string, name?: string) =>
 	Effect.gen(function* () {
-		const started = yield* accountPost("/_boot/auth/setup/options", { code: code.trim() }).pipe(
+		const body = name === undefined ? { code: code.trim() } : { code: code.trim(), name: name.trim() };
+		const started = yield* accountPost("/_boot/auth/setup/options", body).pipe(
 			Effect.flatMap(Schema.decodeUnknownEffect(Registration)),
 			Effect.catchTag("SchemaError", () => unreadable),
 		);
