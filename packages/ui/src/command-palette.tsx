@@ -15,7 +15,7 @@ import {
 	SearchIcon,
 	UserRound,
 } from "lucide-react";
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { topicHref, type BoardMessage } from "./board-api.ts";
 import { RegistryContext } from "@effect/atom-react";
@@ -46,44 +46,68 @@ const pageLimit = 3000;
 
 /**
  * Every page path on the board, from boot's file listing (filesystem work, outside the database read budget).
- * Walks folders breadth-first, a few at a time, and stops at a cap so a huge board stays responsive.
+ * Walks folders breadth-first, many at a time, reporting each level as it lands so the shallow pages most people
+ * look for show up within a second or two. Stops at a cap so a huge board stays responsive.
  */
-const listPages = Effect.gen(function* () {
-	const found: Array<string> = [];
-	const listFolder = (folder: string) =>
-		accountRequest(
-			HttpClientRequest.get(
-				new URL(
-					`/api/fs/pages${folder ? `/${folder.split("/").map(encodeURIComponent).join("/")}` : ""}`,
-					window.location.origin,
-				).href,
-			),
-		).pipe(
-			Effect.flatMap(Schema.decodeUnknownEffect(DirectoryListing)),
-			Effect.map((listing) => listing.items),
-			Effect.orElseSucceed(() => []),
-		);
-	let level: ReadonlyArray<string> = [""];
-	while (level.length > 0 && found.length < pageLimit) {
-		const listings = yield* Effect.forEach(
-			level,
-			(folder) => listFolder(folder).pipe(Effect.map((items) => ({ folder, items }))),
-			{
-				concurrency: 6,
-			},
-		);
-		const next: Array<string> = [];
-		for (const { folder, items } of listings)
-			for (const item of items) {
-				if (item.name.startsWith(".")) continue;
-				const path = folder ? `${folder}/${item.name}` : item.name;
-				if (item.type === "directory") next.push(path);
-				else if (/\.(md|html?)$/i.test(item.name)) found.push(path);
-			}
-		level = next;
+const listPages = (onLevel: (pages: ReadonlyArray<string>) => void) =>
+	Effect.gen(function* () {
+		const found: Array<string> = [];
+		const listFolder = (folder: string) =>
+			accountRequest(
+				HttpClientRequest.get(
+					new URL(
+						`/api/fs/pages${folder ? `/${folder.split("/").map(encodeURIComponent).join("/")}` : ""}`,
+						window.location.origin,
+					).href,
+				),
+			).pipe(
+				Effect.flatMap(Schema.decodeUnknownEffect(DirectoryListing)),
+				Effect.map((listing) => listing.items),
+				Effect.orElseSucceed(() => []),
+			);
+		let level: ReadonlyArray<string> = [""];
+		while (level.length > 0 && found.length < pageLimit) {
+			const listings = yield* Effect.forEach(
+				level,
+				(folder) => listFolder(folder).pipe(Effect.map((items) => ({ folder, items }))),
+				{ concurrency: 12 },
+			);
+			const next: Array<string> = [];
+			for (const { folder, items } of listings)
+				for (const item of items) {
+					if (item.name.startsWith(".")) continue;
+					const path = folder ? `${folder}/${item.name}` : item.name;
+					if (item.type === "directory") next.push(path);
+					else if (/\.(md|html?)$/i.test(item.name)) found.push(path);
+				}
+			onLevel([...found].sort());
+			level = next;
+		}
+		return found.slice(0, pageLimit).sort();
+	});
+
+// The page list is kept for a few minutes per browser tab, so moving between pages does not walk the tree again.
+const pageCacheKey = "chirp:page-index";
+const pageCacheAge = 5 * 60_000;
+const cachedPages = (): ReadonlyArray<string> | null => {
+	try {
+		const raw = window.sessionStorage.getItem(pageCacheKey);
+		if (raw === null) return null;
+		const decoded = Schema.decodeUnknownOption(
+			Schema.Struct({ at: Schema.Number, pages: Schema.Array(Schema.String) }),
+		)(JSON.parse(raw));
+		return decoded._tag === "Some" && Date.now() - decoded.value.at < pageCacheAge ? decoded.value.pages : null;
+	} catch {
+		return null;
 	}
-	return found.slice(0, pageLimit).sort();
-});
+};
+const cachePages = (pages: ReadonlyArray<string>) => {
+	try {
+		window.sessionStorage.setItem(pageCacheKey, JSON.stringify({ at: Date.now(), pages }));
+	} catch {
+		// Storage can be unavailable (private windows); the index just loads again next time.
+	}
+};
 
 const PaletteContext = createContext<(() => void) | null>(null);
 /** Opens the command palette; null outside the board. */
@@ -153,10 +177,12 @@ function PaletteBody({
 	close,
 	go: open,
 	pages,
+	pagesDone,
 }: {
 	readonly close: () => void;
 	readonly go: (href: string) => void;
 	readonly pages: ReadonlyArray<string> | null;
+	readonly pagesDone: boolean;
 }) {
 	const client = useBoardClient();
 	const directory = useDirectory();
@@ -259,6 +285,7 @@ function PaletteBody({
 						</CommandItem>
 					))}
 				</CommandGroup>
+				{trimmed !== "" && !pagesDone && <CommandLoading>Finding pages…</CommandLoading>}
 				{trimmed !== "" && pages !== null && pages.length > 0 && (
 					<CommandGroup heading="Pages">
 						{pages.map((page) => (
@@ -411,7 +438,8 @@ export function CommandPalette({
 	readonly container?: HTMLElement;
 }) {
 	const [open, setOpen] = useState(false);
-	const [pages, setPages] = useState<ReadonlyArray<string> | null>(null);
+	const [pages, setPages] = useState<ReadonlyArray<string> | null>(cachedPages);
+	const [pagesDone, setPagesDone] = useState(() => cachedPages() !== null);
 	// Warm the topic list once the board has settled, so ⌘K opens with topics already there.
 	const client = useBoardClient();
 	const registry = useContext(RegistryContext);
@@ -424,12 +452,28 @@ export function CommandPalette({
 			release();
 		};
 	}, [client, registry]);
+	// Index pages when the palette first opens, or once the page has been idle a few seconds.
 	const indexing = useRef(false);
-	useEffect(() => {
-		if (!open || indexing.current) return;
+	const startIndex = useCallback(() => {
+		if (indexing.current || pagesDone) return;
 		indexing.current = true;
-		void Effect.runPromise(listPages).then(setPages, () => setPages([]));
-	}, [open]);
+		void Effect.runPromise(listPages(setPages)).then(
+			(all) => {
+				setPages(all);
+				setPagesDone(true);
+				cachePages(all);
+			},
+			() => setPagesDone(true),
+		);
+	}, [pagesDone]);
+	useEffect(() => {
+		if (open) startIndex();
+	}, [open, startIndex]);
+	useEffect(() => {
+		const idle = window.requestIdleCallback ?? ((run: () => void) => window.setTimeout(run, 1));
+		const timer = window.setTimeout(() => idle(startIndex), 3_000);
+		return () => window.clearTimeout(timer);
+	}, [startIndex]);
 	const location = useLocation();
 	useEffect(() => {
 		const show = () => setOpen(true);
@@ -458,7 +502,7 @@ export function CommandPalette({
 				label="Command palette"
 				{...(container === undefined ? {} : { container })}
 			>
-				{open && <PaletteBody close={() => setOpen(false)} go={go} pages={pages} />}
+				{open && <PaletteBody close={() => setOpen(false)} go={go} pages={pages} pagesDone={pagesDone} />}
 			</CommandDialog>
 		</PaletteContext.Provider>
 	);

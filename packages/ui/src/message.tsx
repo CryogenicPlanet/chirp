@@ -119,8 +119,10 @@ function MessageView({
 	return (
 		<article
 			id={`message-${message.seq}`}
+			// Focusable by tap, so touch screens can reach the reply and link actions (shown on focus-within).
+			tabIndex={-1}
 			className={cn(
-				"group/message relative -mx-3 flex scroll-mt-24 gap-3 rounded-xl px-3 transition-colors hover:bg-card/70 target:bg-marker/25",
+				"group/message relative -mx-3 flex scroll-mt-24 gap-3 rounded-xl px-3 transition-colors outline-none hover:bg-card/70 focus-within:bg-card/70 target:bg-marker/25",
 				compact ? "py-1" : "mt-2 pt-2.5 pb-1.5",
 			)}
 		>
