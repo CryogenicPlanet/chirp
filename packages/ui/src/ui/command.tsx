@@ -1,12 +1,67 @@
 import { Command as CommandPrimitive } from "cmdk";
 import { SearchIcon } from "lucide-react";
-import type { ComponentProps, ReactNode } from "react";
+import { useEffect, useRef, type ComponentProps, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "../cn.ts";
 
 /** shadcn-style wrappers around cmdk in the board's tokens. */
 export function Command({ className, ...props }: ComponentProps<typeof CommandPrimitive>) {
 	return (
 		<CommandPrimitive className={cn("flex h-full w-full flex-col overflow-hidden text-ink", className)} {...props} />
+	);
+}
+
+const overlayClass =
+	"fixed inset-0 z-50 bg-ink/25 backdrop-blur-[2px] data-[state=open]:animate-[fade-in_120ms_ease-out]";
+const contentClass =
+	"fixed top-[12vh] left-1/2 z-50 flex max-h-[min(560px,76vh)] w-[min(640px,calc(100vw-24px))] -translate-x-1/2 flex-col overflow-hidden rounded-2xl bg-card shadow-float data-[state=open]:animate-[pop-in_140ms_cubic-bezier(0.32,0.72,0,1)]";
+
+/**
+ * Inside a shadow root (board pages), Radix's focus trap and outside-click detection see the shadow host instead of
+ * the dialog, so this small dialog manages itself: Escape and the backdrop close it, the input takes focus, and focus
+ * returns to where it was.
+ */
+function ShadowDialog({
+	onOpenChange,
+	label,
+	children,
+	container,
+	shouldFilter,
+}: {
+	readonly onOpenChange: (open: boolean) => void;
+	readonly label: string;
+	readonly children: ReactNode;
+	readonly container: HTMLElement;
+	readonly shouldFilter?: boolean;
+}) {
+	const content = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		const previous = document.activeElement;
+		const frame = requestAnimationFrame(() =>
+			content.current?.querySelector<HTMLInputElement>("[cmdk-input]")?.focus(),
+		);
+		return () => {
+			cancelAnimationFrame(frame);
+			if (previous instanceof HTMLElement) previous.focus();
+		};
+	}, []);
+	return createPortal(
+		<div
+			onKeyDown={(event) => {
+				if (event.key === "Escape") {
+					event.preventDefault();
+					onOpenChange(false);
+				}
+			}}
+		>
+			<div className={overlayClass} data-state="open" onClick={() => onOpenChange(false)} />
+			<div ref={content} role="dialog" aria-modal="true" aria-label={label} className={contentClass} data-state="open">
+				<CommandPrimitive label={label} loop {...(shouldFilter === undefined ? {} : { shouldFilter })}>
+					{children}
+				</CommandPrimitive>
+			</div>
+		</div>,
+		container,
 	);
 }
 
@@ -23,9 +78,20 @@ export function CommandDialog({
 	readonly label: string;
 	readonly children: ReactNode;
 	readonly shouldFilter?: boolean;
-	/** Where the dialog portals to; a shadow root when embedded in a page. */
+	/** A shadow root's element when embedded in a board page. */
 	readonly container?: HTMLElement;
 }) {
+	if (container !== undefined)
+		return open ? (
+			<ShadowDialog
+				onOpenChange={onOpenChange}
+				label={label}
+				container={container}
+				{...(shouldFilter === undefined ? {} : { shouldFilter })}
+			>
+				{children}
+			</ShadowDialog>
+		) : null;
 	return (
 		<CommandPrimitive.Dialog
 			open={open}
@@ -33,9 +99,8 @@ export function CommandDialog({
 			label={label}
 			loop
 			{...(shouldFilter === undefined ? {} : { shouldFilter })}
-			{...(container === undefined ? {} : { container })}
-			overlayClassName="fixed inset-0 z-50 bg-ink/25 backdrop-blur-[2px] data-[state=open]:animate-[fade-in_120ms_ease-out]"
-			contentClassName="fixed top-[12vh] left-1/2 z-50 flex max-h-[min(560px,76vh)] w-[min(640px,calc(100vw-24px))] -translate-x-1/2 flex-col overflow-hidden rounded-2xl bg-card shadow-float data-[state=open]:animate-[pop-in_140ms_cubic-bezier(0.32,0.72,0,1)]"
+			overlayClassName={overlayClass}
+			contentClassName={contentClass}
 		>
 			{children}
 		</CommandPrimitive.Dialog>

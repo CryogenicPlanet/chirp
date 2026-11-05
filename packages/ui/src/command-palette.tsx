@@ -353,7 +353,10 @@ function PaletteBody({
 						value="write a new message post compose"
 						onSelect={() => {
 							close();
-							requestAnimationFrame(() => document.getElementById("message-body")?.focus());
+							const composer = document.getElementById("message-body");
+							// Pages have no composer: open the board's.
+							if (composer === null) open("/");
+							else requestAnimationFrame(() => composer.focus());
 						}}
 					>
 						<PenLine />
