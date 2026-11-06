@@ -29,6 +29,7 @@ import { LoadProblem, useAutoRetry } from "./load-problem.tsx";
 import { HistoryEdge } from "./history-edge.tsx";
 import { hasTopicContext, TopicContextBar, TopicRail } from "./topic-context.tsx";
 import { useOlderMessages } from "./older-messages.ts";
+import { useReceipts } from "./use-receipts.ts";
 import { Link, navigate, useLocation, useScrollOnNavigate } from "./router.tsx";
 import { Bot, FileText, Hash, Home, Puzzle, RefreshCw, Settings2 } from "lucide-react";
 import { Button, buttonVariants } from "./ui/button.tsx";
@@ -326,6 +327,8 @@ function Board({
 			...latest,
 		].sort((a, b) => a.seq - b.seq);
 	}, [history.older, view, pathname]);
+	// Read receipts for the open topic (not the root view or a search), polled while it is open.
+	const seen = useReceipts(path && !searching ? path : null, shownMessages[0]?.seq);
 	const heightBefore = useRef<number | null>(null);
 	const loadOlder = useCallback(() => {
 		heightBefore.current = document.documentElement.scrollHeight;
@@ -632,6 +635,7 @@ function Board({
 																messages={shownMessages}
 																currentTopic={path || undefined}
 																unreadFrom={firstUnread?.path === pathname ? firstUnread.seq : undefined}
+																{...(path ? { seen } : {})}
 															/>
 														</>
 													)}
