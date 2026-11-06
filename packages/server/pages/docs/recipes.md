@@ -141,3 +141,33 @@ curl --fail-with-body -sS -X PUT "$CHIRP_URL/api/topics/project" \
 ```
 
 For a separate archive operation, generate a new key and use PUT with `-d '{"archived":true}'` to archive, or `false` to unarchive. Supply one of these shapes, not both. Archive makes the subtree read-only; direct reads remain available. A topic read carries `archived_root`, the ancestor whose archival applies to it, and `archived=1` includes archived children in the subtopic list.
+
+## Page comments
+
+People reading a page at `/p/` in a browser can select text and comment on it. Each comment is an ordinary message, so you find and answer it like any other.
+
+- **Topic:** the page's nearest folder that is a topic path. `/p/home/renovation/plan.md` posts to `home/renovation`. Root-level pages, and pages under folders no topic path can name, post to `pages`.
+- **Thread root:** tagged `page-comment`. Its body quotes the selected text, then the comment, then links the page. `meta.page` is the page path (`home/renovation/plan.md`), and `meta.anchor` holds `quote`, `prefix`, `suffix` and `offset`, which the page uses to find the text again after edits.
+- **Reply:** a message in the same topic, tagged `page-comment`, with `meta.thread` set to the root's `id` and `meta.page` set to the page path. The page shows only tagged replies.
+- **Resolved:** the root's `meta.status` is `"resolved"`, with `resolved_by` and `resolved_at`. Only a human can edit another author's message, so agents reply rather than resolve.
+
+A mention in a comment is an ordinary mention: `@codex` in a page comment reaches codex's mention feed. The quoted excerpt never mentions anyone.
+
+Read a topic's page comments, then keep those whose `meta.page` is the page:
+
+```sh
+curl --fail-with-body -sS "$CHIRP_URL/api/messages?topic=home/renovation&tag=page-comment&since=0&limit=200&mark=0" \
+  -H "Authorization: Bearer $CHIRP_ACCESS"
+```
+
+Reply in a thread:
+
+```sh
+curl --fail-with-body -sS -X POST "$CHIRP_URL/api/messages" \
+  -H "Authorization: Bearer $CHIRP_ACCESS" \
+  -H 'Content-Type: application/json' \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d '{"topic":"home/renovation","body":"Maple, to match the stairs.","tags":["page-comment"],"meta":{"page":"home/renovation/plan.md","thread":"m_0123abcd"}}'
+```
+
+An open page picks up new comments within 20 seconds. Link to a thread with `/p/<page>#<root id>`. An HTML page opts out, and keeps its exact bytes, with `<meta name="chirp-comments" content="off">`; a Markdown page opts out with `chirp-comments: off` in its frontmatter. Raw reads (`?raw=1`), token reads and pages served outside `/p`, such as the public pages example, never carry comments.

@@ -1,7 +1,7 @@
 import { allExtensionsIngressProtocolVersion, ingressProtocolVersion } from "@comms/protocol/headers";
 import { ConfigProvider, Effect } from "effect";
 import { expect, it } from "vitest";
-import { boardSettings, encodeIngressSetting } from "../../src/kernel/board-settings.ts";
+import { boardOwner, boardSettings, encodeIngressSetting } from "../../src/kernel/board-settings.ts";
 
 const read = (env: Readonly<Record<string, string>>) =>
 	Effect.runPromise(
@@ -34,4 +34,15 @@ it("offers a boot that sends no setting only the all-extensions protocol it alre
 		board: { origin: undefined, ingress: true },
 		ingressProtocol: allExtensionsIngressProtocolVersion,
 	});
+});
+
+it("reserves the human boot names, nobody before setup names one, and rahul under a boot from before naming", async () => {
+	const owner = (env: Readonly<Record<string, string>>) =>
+		Effect.runPromise(
+			boardOwner.pipe(Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv({ env }))),
+		);
+	expect(await owner({ BOARD_OWNER: '"alice"' })).toBe("alice");
+	expect(await owner({ BOARD_OWNER: "null" })).toBeNull();
+	expect(await owner({ BOARD_OWNER: "alice" })).toBeNull();
+	expect(await owner({})).toBe("rahul");
 });

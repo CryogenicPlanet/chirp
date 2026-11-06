@@ -14,6 +14,7 @@ import { AuthError } from "./auth.ts";
 import { AppRecovery } from "./app-recovery.ts";
 import { snapshotStoreEntry, type ApplicationSource } from "./application.ts";
 import { ChildAttempts } from "./child-attempts.ts";
+import type { Owner } from "./owner.ts";
 import { ChildError } from "./child-process.ts";
 import { Events } from "./events.ts";
 import { EditLock, EditRejected, type Ownership } from "./edit-lock.ts";
@@ -59,7 +60,7 @@ export const cutover = Effect.fn("cutover")(function* (options: ApplicationSourc
 	const retention = yield* artifactRetention(options.dataDirectory, backup.engine);
 	const policy = yield* HeadroomPolicy;
 	const headroom = yield* storageHeadroom(options.dataDirectory);
-	const context = yield* Effect.context<Generations | AppRecovery | ChildAttempts>();
+	const context = yield* Effect.context<Generations | AppRecovery | ChildAttempts | Owner>();
 	const freshEpoch = crypto.randomBytes(32).pipe(Effect.map((bytes) => Buffer.from(bytes).toString("hex")));
 	const ready = yield* Ref.make(false);
 	const read = sql`SELECT * FROM cutover WHERE singleton=1`.pipe(

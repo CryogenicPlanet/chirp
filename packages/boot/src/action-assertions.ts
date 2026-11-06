@@ -2,6 +2,7 @@ import { refuse } from "./auth-primitives.ts";
 import { generateAuthenticationOptions } from "@simplewebauthn/server";
 import { Crypto, Effect, Schema, type Semaphore } from "effect";
 import { SqlClient } from "effect/unstable/sql";
+import { requireOwner } from "./owner.ts";
 import { AuthError } from "./auth.ts";
 import type { RelyingParty } from "./auth-origins.ts";
 import { SettingsChange, canonicalSettings } from "./settings-schema.ts";
@@ -127,7 +128,9 @@ export const makeActionAssertions = <E, R, RandomError>(
 				startOriginRemoveAssertion: (params: RemoveOrigin, sessionId: string) =>
 					canonicalOriginRemove(params, sessionId).pipe(Effect.flatMap((binding) => start("origin.remove", binding))),
 				startMintAssertion: (params: MintBinding) =>
-					validMint(params) ? start("token.mint", canonicalMint(params)) : refuse("invalid_request"),
+					Effect.flatMap(requireOwner(sql), (owner) =>
+						validMint(params, owner) ? start("token.mint", canonicalMint(params)) : refuse("invalid_request"),
+					),
 				startDatabaseRestoreAssertion: (params: DatabaseRestore, sessionId: string) =>
 					validDatabaseRestore(params)
 						? start("db.restore", canonicalDatabaseRestore(params, sessionId))

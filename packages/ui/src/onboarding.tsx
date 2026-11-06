@@ -7,9 +7,14 @@ import { cn } from "./cn.ts";
 import { navigate } from "./router.tsx";
 import { Bird, Wordmark } from "./ui/bird.tsx";
 import { Button, buttonVariants } from "./ui/button.tsx";
-import { Input, labelClass } from "./ui/input.tsx";
+import { hintClass, Input, labelClass } from "./ui/input.tsx";
 
-const AuthState = Schema.Struct({ setup_required: Schema.Boolean, authenticated: Schema.Boolean });
+// An older boot sends no owner_required: it names the human itself.
+const AuthState = Schema.Struct({
+	setup_required: Schema.Boolean,
+	owner_required: Schema.optionalKey(Schema.Boolean),
+	authenticated: Schema.Boolean,
+});
 const readState = () =>
 	accountRequest(HttpClientRequest.get(new URL("/_boot/auth/state", window.location.origin).href)).pipe(
 		Effect.flatMap(Schema.decodeUnknownEffect(AuthState)),
@@ -48,6 +53,8 @@ export function Onboarding() {
 	const [status, setStatus] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [code, setCode] = useState("");
+	const [name, setName] = useState("");
+	const askName = state?.owner_required === true;
 	const next = continueTo();
 	const returnTo = "/onboarding" + (next === "/" ? "" : "?next=" + encodeURIComponent(next));
 	const login = "/auth/login?next=" + encodeURIComponent(returnTo);
@@ -67,7 +74,7 @@ export function Onboarding() {
 	const create = async () => {
 		setBusy(true);
 		setStatus("Waiting for your browser to create a passkey…");
-		const result = await Effect.runPromise(setupPasskey(code).pipe(Effect.result));
+		const result = await Effect.runPromise(setupPasskey(code, askName ? name : undefined).pipe(Effect.result));
 		setBusy(false);
 		if (result._tag === "Failure") {
 			setStatus(result.failure.message);
@@ -156,7 +163,31 @@ export function Onboarding() {
 											void create();
 										}}
 									>
-										<label className={cn(labelClass, "mt-0")} htmlFor="setup-code">
+										{askName && (
+											<>
+												<label className={cn(labelClass, "mt-0")} htmlFor="owner-name">
+													What should your agents call you?
+												</label>
+												<Input
+													className="h-11 font-mono text-[16px] sm:max-w-[18rem]"
+													id="owner-name"
+													required
+													maxLength={64}
+													autoComplete="off"
+													spellCheck={false}
+													autoCapitalize="none"
+													aria-describedby="owner-name-hint"
+													value={name}
+													onChange={(event) => setName(event.target.value)}
+													disabled={busy}
+												/>
+												<p id="owner-name-hint" className={hintClass}>
+													Lowercase letters, digits, dots, dashes or underscores. Everything you post is signed with it,
+													and it cannot be changed later.
+												</p>
+											</>
+										)}
+										<label className={cn(labelClass, askName ? "" : "mt-0")} htmlFor="setup-code">
 											Setup code
 										</label>
 										<div className="flex flex-col gap-3 sm:flex-row">

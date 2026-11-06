@@ -84,7 +84,7 @@ it("accepts each configured origin, redeems a bound code only on its domain, and
 		return device.assertion(challenge, counter, party.origin, party.rpId);
 	};
 	const setup = Schema.decodeUnknownSync(ceremony)(
-		await (await send("/_boot/auth/setup/options", { code: setupCode }, primary.origin)).json(),
+		await (await send("/_boot/auth/setup/options", { code: setupCode, name: "rahul" }, primary.origin)).json(),
 	);
 	expect(
 		(

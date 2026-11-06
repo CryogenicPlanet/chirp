@@ -18,6 +18,8 @@ export interface MessageQuery {
 	/** One instance, or at most 64, whose posts are omitted before the page is limited. */
 	readonly exclude?: string | ReadonlyArray<string>;
 	readonly newest?: boolean;
+	/** Only messages older than this sequence; with newest, pages backwards through history. */
+	readonly before?: number;
 	readonly tag?: string;
 	readonly agent?: string;
 	readonly q?: string;

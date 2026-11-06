@@ -6,7 +6,8 @@ Run it through the server launcher with `bun run start` at the repository root. 
 
 ## Recovery surfaces
 
-- `/setup` and `/auth/login`: passkey registration and sign-in, and GitHub or Google sign-in once an account is linked. Registering at `/setup` also signs the human in, since whoever holds the setup code could sign in with the new passkey at once.
+- `/setup` and `/auth/login`: passkey registration and sign-in, and GitHub or Google sign-in once an account is linked. Registering at `/setup` also signs the human in, since whoever holds the setup code could sign in with the new passkey at once. The session cookie is `SameSite=Strict`, so a link to the board from another site arrives without it and boot sends a signed-in human to `/auth/login`. A sign-in page requested without the cookie asks `/_boot/auth/state`, which a same-origin fetch reaches with the cookie, and when the browser already holds a session it replaces itself with `next` and the fragment it arrived with. The cookie stays `Strict`, but this lets a link from another site reach a board page with the human's session, as `Lax` would, so it continues only to board pages: never to `/api`, `/_boot`, `/auth`, `/approve`, `/setup`, `/onboarding`, `/.well-known`, `/mcp` or `/health`, which still need a sign-in. One requested with the cookie means boot already refused that session, so it asks nothing and cannot loop; a ten-second marker in session storage also refuses a second continue to the same page.
+- First setup also asks what agents should call the human. Boot stores the name with the first passkey as the settings row `owner_name`, attributes the human's sessions and actions to it, reserves it from enrollment and tokens, and tells the app at each launch as `BOARD_OWNER`, a JSON string or `null` before setup. An app already running when setup names the human reserves the name from its next launch, such as the next reload; MCP consent checks the signed-in human instead, so it is never behind. Nothing renames it: a reopened setup, or one after emptying the passkey table, keeps it. A board that already had a passkey, session or token when this image first started is recorded as `rahul`, the name every earlier image used, so its history stays attributed. No schema step was needed; an older image ignores the row and calls the human `rahul`.
 - `/_boot`: recovery help, independent of the app.
 - `/_boot/status` and `/_boot/generations`: authenticated runtime and generation diagnostics.
 - `/_boot/events`: authenticated boot lifecycle, enrollment and request diagnostics. Boot records each enrollment's approval or denial and each credential collection, never an enrollment's anonymous creation: the app mirrors enrollment events into board messages, so an anonymous caller could otherwise post to the board.
@@ -52,7 +53,7 @@ Discovery must name the issuer exactly and keep every endpoint on the issuer's o
 
 A linked account is not a recovery path. It signs in only while a stored passkey could sign in too, and it never adds a passkey or reopens setup; passkeys, one-time codes and `REOPEN_SETUP` stay the way back in. No schema step was needed, so an older image ignores these rows.
 
-Identities the operator offers with a first-setup code (see [Cloud first setup](#cloud-first-setup)) are linked by the first passkey registration and never sign in before it. `/auth/login?provider=github` (or `google`) acts only when the page offers that provider: it starts that sign-in, or goes straight to `next` when the browser is already signed in.
+Identities the operator offers with a first-setup code (see [Cloud first setup](#cloud-first-setup)) are linked by the first passkey registration and never sign in before it. `/auth/login?provider=github` (or `google`) acts only when the page offers that provider: it starts that sign-in, or, when the browser is already signed in and `next` is a board page, goes straight there.
 
 Local development runs under one OS user. The image separates boot, app and build users; see [deploying a board](../../../docs/deploy.md) for its limits. [Storage](storage.md) describes capacity admission, protected artifacts and retention. [Constraints](constraints.md) records the failures boot is built to prevent; read it before changing boot.
 
@@ -73,7 +74,7 @@ OS user is not an isolation boundary.
 
 The command takes at most one argument, passed as its own argv element and never through a
 shell: a JSON identity offer of at most 2 KB, such as
-`{"identities":[{"subject":"github:583231","label":"Rahul"}]}`. It names at most two
+`{"identities":[{"subject":"github:583231","label":"octocat"}]}`. It names at most two
 identities with distinct subjects; a subject is `github:` and the numeric account id, or
 `google:` and the account id, and a label is 1–100 printable characters. Boot links them
 under its own `OIDC_ISSUER`; the operator never names an issuer. Without an argument the

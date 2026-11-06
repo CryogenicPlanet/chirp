@@ -48,7 +48,7 @@ export const tokenSession = Effect.gen(function* () {
 		events = Context.get(context, Events);
 	const device = authenticator();
 	let counter = 0;
-	const setup = yield* auth.startSetup(output[0]?.split("code ")[1] ?? "");
+	const setup = yield* auth.startSetup(output[0]?.split("code ")[1] ?? "", "rahul");
 	yield* auth.finishSetup(setup.id, device.registration(setup.options.challenge));
 	const login = yield* auth.startLogin;
 	const session = yield* auth.finishLogin(login.id, device.assertion(login.options.challenge, ++counter));

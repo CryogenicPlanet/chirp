@@ -181,9 +181,11 @@ def before():
     token = secrets.token_urlsafe(32)
     COOKIE.write_text('__Host-comms_session=' + token)
     COOKIE.chmod(0o600)
-    # Fixture setup creates only a hashed session, as existing HTTP transport tests do.
+    # Fixture setup creates only a hashed session, as existing HTTP transport tests do, and the owner name a
+    # real setup records with its passkey: a session signs in as that name.
     rows('INSERT INTO sessions(id,hash,created_at,expires_at) VALUES(?,?,0,9999999999999)',
          (secrets.token_hex(16), hashlib.sha256(token.encode()).hexdigest()))
+    rows("INSERT OR IGNORE INTO settings(key,value) VALUES('owner_name','rahul')")
     print('Guest auth schema ready:', time.monotonic(), flush=True)
     child = wait_for(live, 'initial live child')
     print('Guest initial child live:', time.monotonic(), flush=True)

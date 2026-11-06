@@ -169,6 +169,7 @@ export const makeMessages = (
 					!Number.isSafeInteger(since) ||
 					since < 0 ||
 					excluded.length > 64 ||
+					(input.before !== undefined && (!Number.isSafeInteger(input.before) || input.before < 1)) ||
 					!Number.isSafeInteger(input.limit) ||
 					input.limit < 1 ||
 					input.limit > 200 ||
@@ -205,7 +206,7 @@ export const makeMessages = (
 				const bodyMatch =
 					input.q === undefined ? sql`1=1` : yield* searchMessages(sql, input.q, ceiling, folding, mysql);
 				const items =
-					yield* sql`WITH visible_messages AS (${publishedMessages(sql, ceiling)}) SELECT * FROM visible_messages WHERE deleted_at IS NULL AND seq>${since} AND seq<=${ceiling}
+					yield* sql`WITH visible_messages AS (${publishedMessages(sql, ceiling)}) SELECT * FROM visible_messages WHERE deleted_at IS NULL AND seq>${since} AND seq<=${ceiling} AND seq<${input.before ?? Number.MAX_SAFE_INTEGER}
    AND ${addressed}
    AND ${excluded.length === 0 ? sql`1=1` : sql`instance NOT IN ${sql.in(excluded)}`}
    AND (${nullable(sql, input.agent ?? null)} IS NULL OR agent=${input.agent ?? null})

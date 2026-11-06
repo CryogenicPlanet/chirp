@@ -15,6 +15,19 @@ export interface BoardSettings {
 }
 
 /**
+ * The board's human, whose name no agent or extension may post as. Boot sends BOARD_OWNER at each launch as a JSON
+ * string, or null until first setup names the human, so a board named after this child started reserves the name from
+ * its next launch. A boot that sends none predates naming and calls its human rahul. An unreadable value names nobody.
+ */
+export const boardOwner: Effect.Effect<string | null, Config.ConfigError> = Effect.gen(function* () {
+	const value = yield* Config.option(Config.String("BOARD_OWNER"));
+	if (Option.isNone(value)) return "rahul";
+	return yield* Schema.decodeEffect(Schema.fromJsonString(Schema.NullOr(Schema.String)))(value.value).pipe(
+		Effect.orElseSucceed(() => null),
+	);
+});
+
+/**
  * Reads BOARD_ORIGIN and APPLICATION_MANAGED_INGRESS from the environment boot gives the app. An unreadable setting
  * admits nothing. A boot that sends no setting predates it: it forwards anonymous traffic only when its operator allows
  * every extension, and only to a kernel advertising the all-extensions protocol, so that is what this kernel offers it.

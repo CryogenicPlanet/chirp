@@ -36,7 +36,7 @@ const run = Effect.gen(function* () {
 	const device = authenticator();
 	const code = output.at(-1)?.split("code ")[1];
 	assert.ok(code);
-	const setup = yield* auth.startSetup(code);
+	const setup = yield* auth.startSetup(code, "rahul");
 	yield* auth.finishSetup(setup.id, device.registration(setup.options.challenge));
 	let counter = 0;
 	const login = () =>

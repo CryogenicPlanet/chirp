@@ -39,7 +39,11 @@ const handlers = (extension: ExtensionApi) =>
 							const ctx = yield* extension.context("read");
 							const limit = query.limit ?? 100,
 								wait = query.wait ?? 0;
-							if ((query.topic !== undefined && !validTopic(query.topic)) || (query.newest === "1" && wait > 0))
+							if (
+								(query.topic !== undefined && !validTopic(query.topic)) ||
+								(query.newest === "1" && wait > 0) ||
+								(query.before !== undefined && query.newest !== "1")
+							)
 								return yield* new KernelError({ code: "query_invalid" });
 							// A search that neither waits nor names a cursor reads all history.
 							const lookup = query.q !== undefined && query.since === undefined && wait === 0;
@@ -55,6 +59,7 @@ const handlers = (extension: ExtensionApi) =>
 								...(query.topic === undefined ? {} : { topic: query.topic }),
 								recursive: query.recursive === "1",
 								newest: query.newest === "1",
+								...(query.before === undefined ? {} : { before: query.before }),
 								...(query.tag === undefined ? {} : { tag: query.tag }),
 								...(query.agent === undefined ? {} : { agent: query.agent }),
 								...(query.q === undefined ? {} : { q: query.q }),

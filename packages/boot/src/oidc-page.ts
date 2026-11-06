@@ -1,7 +1,6 @@
 import { authStyles, skyHeader } from "./auth-styles.ts";
 import type { AuthError } from "./auth.ts";
 import { escape } from "./enrollment-page.ts";
-import { humanAgent } from "./human-agent.ts";
 
 /** Nothing on these pages loads, runs or submits; the continue page only navigates within the board. */
 export const oidcPageHeaders = Object.freeze({
@@ -54,15 +53,15 @@ const linkMessages: Readonly<Partial<Record<AuthError["code"], string>>> = Objec
 });
 
 /** canceled: the sign-in service sent the human back with an error, such as declining consent. linking: the refused
- * round trip was a link started from the account page. */
+ * round trip was a link started from the account page, which account names. */
 export const oidcErrorPage = (
 	code: AuthError["code"],
-	options: { readonly canceled: boolean; readonly linking: boolean },
+	options: { readonly canceled: boolean; readonly linking: boolean; readonly account: string },
 ) =>
 	options.linking
 		? page(
 				"Linking refused",
-				`<h1>Linking refused</h1><p>${escape(options.canceled ? "Linking was canceled or refused at the sign-in service." : (linkMessages[code] ?? "This link did not verify, expired or was already used. Start linking again from your account page."))}</p><p><a href="/@${humanAgent}">Back to your account</a></p>`,
+				`<h1>Linking refused</h1><p>${escape(options.canceled ? "Linking was canceled or refused at the sign-in service." : (linkMessages[code] ?? "This link did not verify, expired or was already used. Start linking again from your account page."))}</p><p><a href="${escape(options.account)}">Back to your account</a></p>`,
 			)
 		: page(
 				"Sign-in refused",

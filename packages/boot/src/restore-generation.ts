@@ -5,6 +5,7 @@ import { SqlClient } from "effect/unstable/sql";
 import { DbOps } from "./db-ops.ts";
 import { AppRecovery } from "./app-recovery.ts";
 import type { ChildAttempts } from "./child-attempts.ts";
+import type { Owner } from "./owner.ts";
 import { ChildError } from "./child-process.ts";
 import type { DatabaseRestoreRequest } from "./database-restore-schema.ts";
 import { Events } from "./events.ts";
@@ -65,7 +66,7 @@ export const rehearseRestoreGeneration = Effect.fn("rehearseRestoreGeneration")(
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	const root = recovery.dataDirectory;
-	const context = yield* Effect.context<Generations | AppRecovery | ChildAttempts>();
+	const context = yield* Effect.context<Generations | AppRecovery | ChildAttempts | Owner>();
 	return yield* Effect.scoped(
 		Effect.gen(function* () {
 			const temporary = yield* fs.makeTempDirectoryScoped({ directory: root, prefix: ".restore-rehearsal-" });

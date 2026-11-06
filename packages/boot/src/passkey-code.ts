@@ -14,7 +14,7 @@ import { AuthError, type AuthConfig } from "./auth.ts";
 import { allowedParties, codeTargetParty, originRelyingParty, type RelyingParty } from "./auth-origins.ts";
 import type { AssertionProof } from "./enrollment.ts";
 import { Events } from "./events.ts";
-import { humanAgent } from "./human-agent.ts";
+import { requireOwner } from "./owner.ts";
 import { canonicalPasskeyCode, type PasskeyCodeParams } from "./passkey-code-schema.ts";
 import { OriginProofError, originProofPath } from "./origin-proof.ts";
 
@@ -65,7 +65,7 @@ export const makePasskeyCodes = <E, R, S, SE, SR>(
 					at: yield* Clock.currentTimeMillis,
 					type,
 					level,
-					actor: humanAgent,
+					actor: yield* requireOwner(sql),
 					instance: null,
 					generation: 0,
 					request_id: null,

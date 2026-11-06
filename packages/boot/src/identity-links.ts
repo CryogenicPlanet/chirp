@@ -12,7 +12,7 @@ import { decodeRows } from "./decode-rows.ts";
 import { approvalReturn } from "./enrollment-page.ts";
 import type { AssertionProof } from "./enrollment.ts";
 import { Events } from "./events.ts";
-import { humanAgent } from "./human-agent.ts";
+import { requireOwner } from "./owner.ts";
 import { makeOidcClient } from "./oidc-client.ts";
 import {
 	canonicalIdentityLink,
@@ -82,7 +82,7 @@ export const makeIdentityLinks = <E, R, S extends { readonly id: string }, SE, S
 					at: yield* Clock.currentTimeMillis,
 					type,
 					level: "info",
-					actor: humanAgent,
+					actor: yield* requireOwner(sql),
 					instance,
 					generation: 0,
 					request_id: null,
@@ -197,7 +197,9 @@ export const makeIdentityLinks = <E, R, S extends { readonly id: string }, SE, S
 					nonce,
 					origin: party.expectedOrigin,
 					// The approval page's same-origin path rule, which also refuses dot segments that collapse into "//host".
-					next: link ? `/@${humanAgent}` : (approvalReturn(input.next ?? null, party.expectedOrigin) ?? "/"),
+					next: link
+						? `/@${yield* requireOwner(sql)}`
+						: (approvalReturn(input.next ?? null, party.expectedOrigin) ?? "/"),
 					binding_hash: yield* hash(binding),
 				});
 				yield* mutex.withPermit(

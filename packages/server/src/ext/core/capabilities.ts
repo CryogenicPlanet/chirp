@@ -19,10 +19,11 @@ import type { Identity } from "../../kernel/identity.ts";
 import { HealthProbe } from "../../kernel/health-probe.ts";
 import { Lifecycle, RequestMutation } from "../../kernel/lifecycle.ts";
 import { makeTopics } from "./topics.ts";
+import { boardOwner } from "../../kernel/board-settings.ts";
 
-// Mirrors boot's enrollment rule: boot reserves the human owner (packages/boot/src/human-agent.ts) and itself.
+// Mirrors boot's enrollment rule: boot reserves the board's human (packages/boot/src/owner.ts) and itself.
 const authorName = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-const reservedAuthors: ReadonlyArray<string> = ["system", "boot", "rahul"];
+const reservedAuthors: ReadonlyArray<string> = ["system", "boot"];
 const authorInstance = /^[A-Za-z0-9._-]{1,128}$/;
 // Boot authenticates a grant only by name; nothing the caller supplies may claim another identity or channel.
 const droppedGrantHeaders: ReadonlyArray<string> = [
@@ -49,6 +50,8 @@ export const extensionCapabilities = Effect.gen(function* () {
 	const crypto = yield* Crypto.Crypto;
 	const lifecycle = yield* Lifecycle;
 	const mysql = yield* mysqlSearchConfig(sql);
+	const owner = yield* boardOwner;
+	const reserved = owner === null ? reservedAuthors : [...reservedAuthors, owner];
 	return (
 		extension: string,
 		who?: Identity,
@@ -122,7 +125,7 @@ export const extensionCapabilities = Effect.gen(function* () {
 			if (
 				who ||
 				authenticatedManagedRequest ||
-				reservedAuthors.includes(author.agent) ||
+				reserved.includes(author.agent) ||
 				!authorName.test(author.agent) ||
 				!authorInstance.test(author.instance)
 			)

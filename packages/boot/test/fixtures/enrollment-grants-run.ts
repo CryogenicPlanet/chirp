@@ -48,7 +48,7 @@ const run = Effect.gen(function* () {
 		);
 	const device = authenticator();
 	let counter = 0;
-	const setup = yield* auth.startSetup(output[0]?.split("code ")[1] ?? "");
+	const setup = yield* auth.startSetup(output[0]?.split("code ")[1] ?? "", "rahul");
 	yield* auth.finishSetup(setup.id, device.registration(setup.options.challenge));
 	const decide = (params: EnrollmentDecision, signed: EnrollmentDecision = params) =>
 		Effect.gen(function* () {

@@ -2,6 +2,7 @@ import type { RemoteRuntime } from "./remote-runtime.ts";
 import { Redacted } from "effect";
 import { recoveryIntents } from "./recovery-intents.ts";
 import { SqlClient } from "effect/unstable/sql";
+import { encodeOwner, Owner } from "./owner.ts";
 import { render, type Store } from "@comms/storage/store";
 import { logRedactor } from "./log-redaction.ts";
 import {
@@ -180,6 +181,8 @@ export const supervise = Effect.fn("supervise")(function* (
 				? `${generation.snapshot_dir}.board`
 				: path.join(generation.snapshot_dir ?? "", "board");
 			const descriptor = yield* render(store);
+			// Read from boot's own store at each launch; null until first setup names the human.
+			const human = yield* (yield* Owner).name;
 			const owner = yield* owners.reserve(generation.n);
 			const process = yield* launchChild(
 				{
@@ -201,6 +204,7 @@ export const supervise = Effect.fn("supervise")(function* (
 						BOARD_DIRECTORY: board,
 						STATE: mode,
 						BOARD_ORIGIN: settings.origin,
+						BOARD_OWNER: encodeOwner(human),
 						APPLICATION_MANAGED_INGRESS: encodeIngress((yield* Ref.get(settings.ingress)).applicationManagedIngress),
 						...(mode === "rehearsal" ? { REHEARSAL_SEQUENCE: String(rehearsalSequence ?? 1) } : { BOOT_URL: callback }),
 					},

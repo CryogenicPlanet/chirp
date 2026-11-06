@@ -12,6 +12,7 @@ import { NetAddress } from "effect/unstable/net";
 import { FetchHttpClient, HttpServer } from "effect/unstable/http";
 import { Generations, type Generation } from "../../src/generations.ts";
 import { supervise } from "../../src/supervisor.ts";
+import { Owner } from "../../src/owner.ts";
 import type { IngressConfiguration } from "../../src/ingress-configuration.ts";
 
 const fixture = Effect.gen(function* () {
@@ -41,6 +42,7 @@ const fixture = Effect.gen(function* () {
 	return { fs, root, source, generation, file, pg, mysql, manifest };
 });
 const services = Layer.mergeAll(
+	Layer.succeed(Owner, { name: Effect.succeed(null) }),
 	FetchHttpClient.layer,
 	BunServices.layer,
 	Layer.succeed(

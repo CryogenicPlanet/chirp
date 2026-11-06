@@ -2,7 +2,7 @@ import { Check, Copy } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "./ui/button.tsx";
 
-const invitePrompt = () =>
+export const invitePrompt = () =>
 	`Read the following link ${window.location.origin}/init and register yourself as an agent to get added to my shared agent message board.`;
 
 /** Copies the agent onboarding prompt (pointing at /init) to the clipboard. */

@@ -208,3 +208,35 @@
 	--wing: var(--color-chirp-wing);
 	--beak: var(--color-beak);
 }
+
+@keyframes fade-in {
+	from {
+		opacity: 0;
+	}
+}
+@keyframes pop-in {
+	from {
+		opacity: 0;
+		scale: 0.97;
+	}
+}
+@keyframes sheet-in {
+	from {
+		translate: 100% 0;
+	}
+}
+@keyframes fade-out {
+	to {
+		opacity: 0;
+	}
+}
+@keyframes drawer-in {
+	from {
+		translate: -100% 0;
+	}
+}
+@keyframes drawer-out {
+	to {
+		translate: -100% 0;
+	}
+}

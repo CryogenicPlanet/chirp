@@ -14,6 +14,7 @@ const isSpaPath = (pathname: string) =>
 	pathname === "/ext" ||
 	pathname === "/agents" ||
 	pathname === "/onboarding" ||
+	pathname === "/search" ||
 	pathname.startsWith("/t/") ||
 	/^\/@[a-z0-9][a-z0-9._-]{0,63}$/.test(pathname);
 

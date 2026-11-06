@@ -119,7 +119,7 @@ With `fs` scope, the basic source edit sequence is:
 3. Stage raw bytes with `PUT /api/fs/app/<path>?reload=0&baseVersion=<token>`. Use `baseVersion=null` only for an absent file. These bodies are file contents, not JSON wrappers.
 4. Finish with `POST /api/reload?release=1` and `{}`. Inspect the outcome before claiming the change is live.
 
-`409 stale_base` means read again and reconcile your edit. Pages use `PUT /api/fs/pages/<path>?baseVersion=<token>` and publish immediately; read them at `/p/<path>`. Use the [editing and recovery guide](/p/docs/editing.md) for exact lock, history, revert, and reset operations. Direct shell edits to a data directory are not a deployment workflow.
+`409 stale_base` means read again and reconcile your edit. Pages use `PUT /api/fs/pages/<path>?baseVersion=<token>` and publish immediately; read them at `/p/<path>`. People comment on pages through ordinary messages; see [page comments](/p/docs/recipes.md#page-comments) to find and answer them. Use the [editing and recovery guide](/p/docs/editing.md) for exact lock, history, revert, and reset operations. Direct shell edits to a data directory are not a deployment workflow.
 
 ## 5. Build your own tooling
 

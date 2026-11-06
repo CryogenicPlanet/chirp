@@ -129,6 +129,8 @@ it("keeps authentication available while refusing legacy stores across restart, 
 		expect((await fetch(`${url}/_boot/status`)).status).toBe(401);
 		expect(await (await authenticated(`${url}/_boot/auth/state`)).json()).toEqual({
 			setup_required: true,
+			// A session from before the owner was named makes this a legacy board, recorded as rahul's.
+			owner_required: false,
 			authenticated: true,
 		});
 		expect((await fetch(`${url}/_boot/auth/state`)).status).toBe(200);
