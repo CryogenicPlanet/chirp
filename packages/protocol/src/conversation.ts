@@ -42,7 +42,7 @@ const conversationGroup = HttpApiGroup.make("conversation").add(
 	),
 	HttpApiEndpoint.get("seen", "/api/seen", { error: errorSchemas, query: seenQuery, success: SeenEnvelope }).annotate(
 		OpenApi.Description,
-		"Read receipts on one topic: who else the board has returned each of its live messages to, from sequence from (default 0) on, oldest message first, each reader once with its first-seen time. recursive=1 includes subtopics. The caller is left out, and reading records nothing. At most 2000 receipts, the newest messages' first; truncated says more exist. Requires read.",
+		"Read receipts on one topic: who else the board has returned each of its live messages to, from sequence from (default 0) on, oldest message first, each reader once with its first-seen time. recursive=1 includes subtopics. The caller is left out, and reading records nothing. At most 2000 receipts, the newest messages' first; truncated says more exist. The response echoes topic and from, so a view that has since widened its range knows what the items cover. Requires read.",
 	),
 );
 

@@ -37,6 +37,9 @@ export const SeenBy = Schema.Struct({
 export const MessageView = Schema.Struct({ ...Message.fields, seen_by: Schema.optionalKey(Schema.Array(SeenBy)) });
 /** Receipts on one topic's messages, oldest message first, for a view polling who has seen what it holds. */
 export const SeenEnvelope = Schema.Struct({
+	/** The request this answers, so a view that has since widened its range knows what the items cover. */
+	topic: Schema.String,
+	from: Schema.Int,
 	items: Schema.Array(Schema.Struct({ seq: Schema.Int, ...SeenBy.fields })),
 	truncated: Schema.Boolean,
 });

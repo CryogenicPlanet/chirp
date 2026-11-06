@@ -79,6 +79,8 @@ it("records who each view returned a message to, honoring mark=0 and leaving out
 	const before = await seen();
 	const polled = await get(`/api/seen?topic=work&from=${mention.seq}`, author);
 	expect(polled).toEqual({
+		topic: "work",
+		from: mention.seq,
 		truncated: false,
 		items: [mention, later].map((message) => ({ seq: message.seq, ...receipt })),
 	});

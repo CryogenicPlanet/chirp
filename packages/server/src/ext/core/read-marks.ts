@@ -110,6 +110,8 @@ export const topicReceipts = (
 	sql`SELECT s.seq,s.instance,s.label,s.agent,s.seen_at FROM seen s JOIN messages m ON m.seq=s.seq WHERE m.deleted_at IS NULL AND s.seq>=${input.from} AND (m.topic=${input.topic} OR ${input.recursive ? 1 : 0}=1 AND ${isDescendant(sql, sql("m.topic"), input.topic)}) AND NOT (s.instance=${viewer.instance} AND s.label=${viewer.label ?? ""}) ORDER BY s.seq DESC,s.seen_at,s.instance,s.label LIMIT ${receiptLimit + 1}`.pipe(
 		Effect.flatMap(Schema.decodeUnknownEffect(SeenRows)),
 		Effect.map((rows) => ({
+			topic: input.topic,
+			from: input.from,
 			items: rows
 				.slice(0, receiptLimit)
 				.toSorted((a, b) => a.seq - b.seq || a.seen_at - b.seen_at)
