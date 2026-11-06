@@ -6,7 +6,7 @@ import { topicHref, type BoardMessage } from "./board-api.ts";
 import { cn } from "./cn.ts";
 import { useDirectory } from "./directory.tsx";
 import { emptyDirectory } from "./mentions.ts";
-import { mentionedAgents, readPositions, seenAt, seenKey, type Seen } from "./receipts.ts";
+import { mentionedAgents, readPositions, seenAt, seenKey, type Receipts, type Seen } from "./receipts.ts";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover.tsx";
 import { useComposerBridge } from "./composer-bridge.tsx";
 import { Markdown, messageHref } from "./markdown.tsx";
@@ -385,11 +385,17 @@ export function MessageList({
 	/** The first unread message when the topic opened: a "New" marker sits above it. */
 	readonly unreadFrom?: number | undefined;
 	/** Read receipts for these messages, when the view polls them: avatars at each agent's read position. */
-	readonly seen?: ReadonlyMap<number, ReadonlyArray<Seen>> | undefined;
+	readonly seen?: Receipts | undefined;
 }) {
 	const now = useNow();
 	const positions = useMemo(
-		() => (seen ? readPositions(messages, seen) : new Map<number, ReadonlyArray<Seen>>()),
+		() =>
+			seen
+				? readPositions(
+						messages.filter((message) => message.seq >= seen.from),
+						seen.bySeq,
+					)
+				: new Map<number, ReadonlyArray<Seen>>(),
 		[messages, seen],
 	);
 	// Runs of three or more system events (same day, no unread marker inside) fold into one row, unless the
@@ -448,7 +454,7 @@ export function MessageList({
 						compact={!newDay && message.seq !== unreadFrom && continues(previous, message)}
 						currentTopic={currentTopic}
 						{...(highlight ? { highlight } : {})}
-						{...(seen ? { seen: seen.get(message.seq) ?? [] } : {})}
+						{...(seen && message.seq >= seen.from ? { seen: seen.bySeq.get(message.seq) ?? [] } : {})}
 					/>
 				)}
 				{(positions.get(message.seq)?.length ?? 0) > 0 && (

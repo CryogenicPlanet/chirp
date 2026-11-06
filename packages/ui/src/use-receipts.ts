@@ -4,16 +4,14 @@ import { useEffect, useMemo } from "react";
 import { useBoardClient } from "./board-client.tsx";
 import { useDirectory } from "./directory.tsx";
 import { boardChanged } from "./live-events.ts";
-import { seenByMessage, type Seen } from "./receipts.ts";
+import { seenByMessage, type Receipts } from "./receipts.ts";
 import { useLoad } from "./use-load.ts";
-
-const empty: ReadonlyMap<number, ReadonlyArray<Seen>> = new Map();
 
 /**
  * Who has seen the open topic's messages from `from` on. Receipts publish no event, so this polls every 15 seconds
  * while the tab is visible, and right away when the board changes. Returns nothing for the root view.
  */
-export function useReceipts(path: string | null, from: number | undefined) {
+export function useReceipts(path: string | null, from: number | undefined): Receipts | undefined {
 	const client = useBoardClient();
 	const self = useDirectory()?.self ?? null;
 	const request = useMemo(
@@ -35,5 +33,11 @@ export function useReceipts(path: string | null, from: number | undefined) {
 			window.removeEventListener(boardChanged, reload);
 		};
 	}, [path, from, reload]);
-	return useMemo(() => (value ? seenByMessage(value.items, self) : empty), [value, self]);
+	return useMemo(() => {
+		if (!value || from === undefined) return undefined;
+		// Truncated: the oldest message in the response may be cut short, so trust only what is newer.
+		const oldest = value.items[0]?.seq;
+		const covered = value.truncated && oldest !== undefined ? oldest + 1 : from;
+		return { bySeq: seenByMessage(value.items, self), from: covered };
+	}, [value, self, from]);
 }

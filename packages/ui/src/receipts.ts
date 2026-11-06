@@ -19,7 +19,16 @@ export interface Seen {
 }
 
 /** Boot and the board speak for themselves; their reads are not receipts anyone is waiting on. */
-const quiet = new Set(["system", "boot"]);
+const quiet: ReadonlySet<string> = new Set(["system", "boot"]);
+
+/**
+ * What a poll knows: receipts per message, and the first sequence it covers completely. A truncated poll (more receipts
+ * than one response holds) is cut at its oldest message, so that message and older ones are unknown, not unseen.
+ */
+export interface Receipts {
+	readonly bySeq: ReadonlyMap<number, ReadonlyArray<Seen>>;
+	readonly from: number;
+}
 
 /** Receipts per message, one entry per agent, first seen first. The viewer's own sessions are left out. */
 export const seenByMessage = (
