@@ -15,10 +15,7 @@ export function useReceipts(path: string | null, from: number | undefined): Rece
 	const client = useBoardClient();
 	const self = useDirectory()?.self ?? null;
 	const request = useMemo(
-		() =>
-			path && from !== undefined
-				? client.receipts(path, from)
-				: Atom.make(Effect.succeed({ items: [], truncated: false })),
+		() => (path && from !== undefined ? client.receipts(path, from) : Atom.make(Effect.succeed(null))),
 		[client, path, from],
 	);
 	const { value, reload } = useLoad(request);
@@ -34,10 +31,12 @@ export function useReceipts(path: string | null, from: number | undefined): Rece
 		};
 	}, [path, from, reload]);
 	return useMemo(() => {
-		if (!value || from === undefined) return undefined;
+		// A response answers the request it echoes: while a wider one (older history loaded) is in flight, the kept
+		// response still covers only its own range, and one for another topic covers nothing here.
+		if (!value || value.topic !== path) return undefined;
 		// Truncated: the oldest message in the response may be cut short, so trust only what is newer.
 		const oldest = value.items[0]?.seq;
-		const covered = value.truncated && oldest !== undefined ? oldest + 1 : from;
+		const covered = value.truncated && oldest !== undefined ? Math.max(value.from, oldest + 1) : value.from;
 		return { bySeq: seenByMessage(value.items, self), from: covered };
-	}, [value, self, from]);
+	}, [value, self, path]);
 }
