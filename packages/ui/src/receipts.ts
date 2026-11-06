@@ -85,9 +85,11 @@ export const mentionedAgents = (
 ): ReadonlyArray<{ readonly agent: string; readonly label: string | undefined }> =>
 	mentionsIn(body).flatMap((mention) => {
 		if (directory.custom.some((item) => item.mention === mention)) return [];
-		const [agent = "", label] = mention.slice(1).split("/");
+		// @name or @name/label; a deeper path names no instance, so it tracks nothing (as `reachable` treats it).
+		const [agent = "", label, ...rest] = mention.slice(1).split("/");
 		const known = directory.agents.find((item) => item.name === agent);
-		if (!known || agent === directory.self || (label !== undefined && !known.labels.includes(label))) return [];
+		if (!known || rest.length > 0 || agent === directory.self || (label !== undefined && !known.labels.includes(label)))
+			return [];
 		return [{ agent, label }];
 	});
 

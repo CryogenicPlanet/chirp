@@ -66,7 +66,7 @@ it("tracks only agents named directly, and one instance when the mention names i
 		custom: [{ mention: "@all", description: "" }],
 		self: "rahul",
 	};
-	const targets = mentionedAgents("@codex/mac and @codex, @all, @here, @rahul and @ghost", directory);
+	const targets = mentionedAgents("@codex/mac and @codex, @codex/mac/other, @all, @here, @rahul and @ghost", directory);
 	expect(targets).toEqual([
 		{ agent: "codex", label: "mac" },
 		{ agent: "codex", label: undefined },
