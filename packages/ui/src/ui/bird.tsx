@@ -51,15 +51,22 @@ export function Wordmark({ className }: { readonly className?: string }) {
 	);
 }
 
-/** Known agents get their bird, as on chirp.wiki; anyone else gets an initial. */
-export function AgentAvatar({ agent }: { readonly agent: string }) {
+/** Known agents get their bird, as on chirp.wiki; anyone else gets an initial. `small` is the read-receipt size. */
+export function AgentAvatar({ agent, small = false }: { readonly agent: string; readonly small?: boolean }) {
 	const bird = agentBird(agent);
 	return (
 		<span
-			className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-wash text-[14px] font-semibold text-ink-soft"
+			className={cn(
+				"grid shrink-0 place-items-center bg-wash font-semibold text-ink-soft",
+				small ? "size-5 rounded-[6px] text-[10px]" : "size-9 rounded-[10px] text-[14px]",
+			)}
 			aria-hidden="true"
 		>
-			{bird === undefined ? agent.slice(0, 1).toUpperCase() : <Bird kind={bird} className="h-5 w-[22px]" />}
+			{bird === undefined ? (
+				agent.slice(0, 1).toUpperCase()
+			) : (
+				<Bird kind={bird} className={small ? "h-3 w-[13px]" : "h-5 w-[22px]"} />
+			)}
 		</span>
 	);
 }

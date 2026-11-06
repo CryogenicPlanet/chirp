@@ -1,9 +1,13 @@
 import { authorLabel } from "@comms/protocol";
 import { DateTime } from "effect";
-import { Check, Link2, Reply } from "lucide-react";
-import { Fragment, memo, useEffect, useState, type ReactNode } from "react";
+import { Check, CheckCheck, Circle, Eye, Link2, Reply } from "lucide-react";
+import { Fragment, memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import { topicHref, type BoardMessage } from "./board-api.ts";
 import { cn } from "./cn.ts";
+import { useDirectory } from "./directory.tsx";
+import { emptyDirectory } from "./mentions.ts";
+import { mentionedAgents, readPositions, seenAt, seenKey, type Receipts, type Seen } from "./receipts.ts";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover.tsx";
 import { useComposerBridge } from "./composer-bridge.tsx";
 import { Markdown, messageHref } from "./markdown.tsx";
 import { profileHref } from "./profile-api.ts";
@@ -30,7 +34,153 @@ const useNow = () => {
 	return now;
 };
 
-function Actions({ message }: { readonly message: BoardMessage }) {
+/** "seen 5m", or "seen now". */
+const seenText = (at: number, now: number) => {
+	const ago = relativeTime(at, now);
+	return ago === "now" ? "seen now" : `seen ${ago}`;
+};
+
+/** A reader's label as the board shows it; a signed-in human's session label says nothing. */
+const shownLabel = (label: string | undefined) => (label === undefined || label === "human" ? undefined : label);
+
+/** "codex · seen 5m", with each session or client label when the agent has more than one. */
+const readerSummary = (entry: Seen, now: number) => {
+	const labelled = entry.readers.filter((reader) => shownLabel(reader.label) !== undefined);
+	if (entry.readers.length < 2 || labelled.length === 0) return `${entry.agent} · ${seenText(entry.at, now)}`;
+	return `${entry.agent} · ${entry.readers
+		.map((reader) => `${shownLabel(reader.label) === undefined ? "" : `@${reader.label} `}${seenText(reader.at, now)}`)
+		.join(" · ")}`;
+};
+
+/** Each agent whose newest seen message (in what is loaded) is this one: small avatars under it. */
+function ReadPositions({ entries, now }: { readonly entries: ReadonlyArray<Seen>; readonly now: number }) {
+	const shown = entries.slice(-4);
+	const rest = entries.slice(0, -4);
+	return (
+		<div
+			className="-mt-0.5 mb-0.5 flex justify-end gap-1 pr-1"
+			aria-label={`Seen up to here by ${entries.map((entry) => entry.agent).join(", ")}`}
+		>
+			{rest.length > 0 && (
+				<Tooltip content={rest.map((entry) => readerSummary(entry, now)).join("\n")}>
+					<span tabIndex={0} className="self-center rounded-sm px-0.5 text-[11px] text-slate tabular-nums">
+						+{rest.length}
+					</span>
+				</Tooltip>
+			)}
+			{shown.map((entry) => (
+				<Tooltip key={entry.agent} content={readerSummary(entry, now)}>
+					<span tabIndex={0} className="rounded-[6px] animate-[fade-in_200ms_ease-out]">
+						<AgentAvatar agent={entry.agent} small />
+					</span>
+				</Tooltip>
+			))}
+		</div>
+	);
+}
+
+/** Under a message that names agents: whether each has seen it yet. */
+function MentionReceipts({
+	targets,
+	seen,
+	now,
+}: {
+	readonly targets: ReadonlyArray<{ readonly agent: string; readonly label: string | undefined }>;
+	readonly seen: ReadonlyArray<Seen> | undefined;
+	readonly now: number;
+}) {
+	return (
+		<div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[12px] text-slate">
+			{targets.map((target) => {
+				const at = seenAt(seen, target);
+				const name = target.label === undefined ? target.agent : `${target.agent}/${target.label}`;
+				return (
+					<span key={name} className="flex items-center gap-1">
+						{at === undefined ? (
+							<Circle className="size-3" aria-hidden="true" />
+						) : (
+							<CheckCheck className="size-3.5 text-leaf" aria-hidden="true" />
+						)}
+						<span className="font-medium text-ink-soft">{name}</span>
+						<span>{at === undefined ? "not seen yet" : seenText(at, now)}</span>
+					</span>
+				);
+			})}
+		</div>
+	);
+}
+
+/** Everyone who has seen a message, and the named agents who have not. */
+function SeenByButton({
+	seen,
+	missing,
+	now,
+	className,
+}: {
+	readonly seen: ReadonlyArray<Seen>;
+	readonly missing: ReadonlyArray<string>;
+	readonly now: number;
+	readonly className: string;
+}) {
+	return (
+		<Popover>
+			<Tooltip content="Seen by">
+				<PopoverTrigger asChild>
+					<button type="button" className={className} aria-label="Who has seen this message">
+						<Eye />
+					</button>
+				</PopoverTrigger>
+			</Tooltip>
+			<PopoverContent align="end" className="w-64 p-2 text-[13px]">
+				<p className="px-1.5 pb-1 text-[11.5px] font-semibold tracking-wide text-slate uppercase">Seen by</p>
+				{seen.length === 0 && <p className="px-1.5 py-1 text-slate">No one else yet.</p>}
+				<ul className="flex flex-col">
+					{seen.map((entry) => (
+						<li key={entry.agent} className="flex items-start gap-2 rounded-md px-1.5 py-1">
+							<AgentAvatar agent={entry.agent} small />
+							<div className="min-w-0 flex-1">
+								<div className="flex items-baseline justify-between gap-2">
+									<span className="truncate font-medium text-ink">{entry.agent}</span>
+									<span className="shrink-0 text-[12px] text-slate tabular-nums">{clockTime(entry.at)}</span>
+								</div>
+								{entry.readers.length > 1 && (
+									<ul className="text-[12px] text-slate">
+										{entry.readers.map((reader, index) => (
+											<li key={`${reader.label ?? ""}-${index}`} className="flex justify-between gap-2">
+												<span className="truncate">{shownLabel(reader.label) ?? "session"}</span>
+												<span className="tabular-nums">{seenText(reader.at, now)}</span>
+											</li>
+										))}
+									</ul>
+								)}
+							</div>
+						</li>
+					))}
+				</ul>
+				{missing.length > 0 && (
+					<>
+						<p className="mt-1 border-t border-rule px-1.5 pt-2 pb-1 text-[11.5px] font-semibold tracking-wide text-slate uppercase">
+							Not yet
+						</p>
+						<p className="px-1.5 pb-1 text-ink-soft">{missing.join(", ")}</p>
+					</>
+				)}
+			</PopoverContent>
+		</Popover>
+	);
+}
+
+function Actions({
+	message,
+	seen,
+	missing,
+	now,
+}: {
+	readonly message: BoardMessage;
+	readonly seen: ReadonlyArray<Seen>;
+	readonly missing: ReadonlyArray<string>;
+	readonly now: number;
+}) {
 	const bridge = useComposerBridge();
 	const [copied, setCopied] = useState(false);
 	useEffect(() => {
@@ -61,6 +211,9 @@ function Actions({ message }: { readonly message: BoardMessage }) {
 					</button>
 				</Tooltip>
 			)}
+			{(seen.length > 0 || missing.length > 0) && (
+				<SeenByButton seen={seen} missing={missing} now={now} className={button} />
+			)}
 			<Tooltip content={copied ? "Copied" : "Copy link"}>
 				<button
 					type="button"
@@ -85,6 +238,7 @@ function MessageView({
 	compact = false,
 	currentTopic,
 	highlight,
+	seen,
 }: {
 	readonly message: BoardMessage;
 	/** The list's shared clock for relative times. */
@@ -94,7 +248,16 @@ function MessageView({
 	/** The topic being viewed; its name is not repeated on each message. */
 	readonly currentTopic?: string | undefined;
 	readonly highlight?: ReadonlyArray<string>;
+	/** Who else has seen this message, one entry per agent; absent outside a topic view. */
+	readonly seen?: ReadonlyArray<Seen> | undefined;
 }) {
+	const directory = useDirectory() ?? emptyDirectory;
+	// Only a topic view polls receipts, so only it says who has not seen a mention yet.
+	const polled = seen !== undefined;
+	const targets = useMemo(
+		() => (polled ? mentionedAgents(message.body, directory) : []),
+		[polled, message.body, directory],
+	);
 	const label = authorLabel(message.meta);
 	const at = DateTime.formatIso(DateTime.makeUnsafe(message.created_at));
 	const showTopic = message.topic !== currentTopic;
@@ -160,6 +323,7 @@ function MessageView({
 				<div className="max-w-[72ch]">
 					<Markdown body={message.body} base={topicHref(message.topic)} {...(highlight ? { highlight } : {})} />
 				</div>
+				{targets.length > 0 && <MentionReceipts targets={targets} seen={seen} now={now} />}
 				{message.tags.length > 0 && (
 					<div className="mt-1.5 flex flex-wrap gap-1">
 						{message.tags.map((tag, index) => (
@@ -168,7 +332,14 @@ function MessageView({
 					</div>
 				)}
 			</div>
-			<Actions message={message} />
+			<Actions
+				message={message}
+				seen={seen ?? []}
+				missing={targets
+					.filter((target) => seenAt(seen, target) === undefined)
+					.map((target) => (target.label === undefined ? target.agent : `${target.agent}/${target.label}`))}
+				now={now}
+			/>
 		</article>
 	);
 }
@@ -189,7 +360,9 @@ const MemoMessage = memo(
 		a.now === b.now &&
 		a.compact === b.compact &&
 		a.currentTopic === b.currentTopic &&
-		a.highlight === b.highlight,
+		a.highlight === b.highlight &&
+		(a.seen === undefined) === (b.seen === undefined) &&
+		seenKey(a.seen) === seenKey(b.seen),
 );
 
 /** One message on its own (a referenced message): keeps its own clock. */
@@ -204,14 +377,27 @@ export function MessageList({
 	currentTopic,
 	highlight,
 	unreadFrom,
+	seen,
 }: {
 	readonly messages: ReadonlyArray<BoardMessage>;
 	readonly currentTopic?: string | undefined;
 	readonly highlight?: ReadonlyArray<string>;
 	/** The first unread message when the topic opened: a "New" marker sits above it. */
 	readonly unreadFrom?: number | undefined;
+	/** Read receipts for these messages, when the view polls them: avatars at each agent's read position. */
+	readonly seen?: Receipts | undefined;
 }) {
 	const now = useNow();
+	const positions = useMemo(
+		() =>
+			seen
+				? readPositions(
+						messages.filter((message) => message.seq >= seen.from),
+						seen.bySeq,
+					)
+				: new Map<number, ReadonlyArray<Seen>>(),
+		[messages, seen],
+	);
 	// Runs of three or more system events (same day, no unread marker inside) fold into one row, unless the
 	// address links to one of them (#message-N or ?message=N).
 	const location = useLocation();
@@ -268,7 +454,11 @@ export function MessageList({
 						compact={!newDay && message.seq !== unreadFrom && continues(previous, message)}
 						currentTopic={currentTopic}
 						{...(highlight ? { highlight } : {})}
+						{...(seen && message.seq >= seen.from ? { seen: seen.bySeq.get(message.seq) ?? [] } : {})}
 					/>
+				)}
+				{(positions.get(message.seq)?.length ?? 0) > 0 && (
+					<ReadPositions entries={positions.get(message.seq) ?? []} now={now} />
 				)}
 			</Fragment>,
 		);

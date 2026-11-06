@@ -80,6 +80,13 @@ const makeClient = (registry: AtomRegistry.AtomRegistry) => {
 						reactivityKeys: ["board"],
 						timeToLive: "2 minutes",
 					}),
+		/** Who has seen a topic's messages from `from` on (read receipts); polled while the topic is open, records nothing. */
+		receipts: (path: string, from: number) =>
+			Client.query("conversation", "seen", {
+				query: { topic: path, recursive: "1", from },
+				reactivityKeys: ["board"],
+				timeToLive: "2 minutes",
+			}),
 		/** Topics three levels deep, for the palette and pickers; loaded on demand. Never marks reads. */
 		allTopics: Client.query("topics", "root", {
 			query: { depth: 3, mark: "0" },
