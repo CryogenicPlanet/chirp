@@ -86,6 +86,7 @@ const program = Effect.gen(function* () {
 					yield* sql`CREATE TABLE read_idempotency(instance TEXT NOT NULL,key TEXT NOT NULL,topic TEXT NOT NULL,requested_seq INTEGER NOT NULL,effective_seq INTEGER NOT NULL,PRIMARY KEY(instance,key))`;
 					yield* sql`ALTER TABLE protected_sql_tables DROP COLUMN extension`;
 					yield* sql`ALTER TABLE protected_sql_tables DROP COLUMN migration`;
+					yield* sql`DROP TABLE seen`;
 					yield* sql`DROP TABLE IF EXISTS core_migrations`;
 					yield* sql`PRAGMA user_version = 3`;
 					yield* initialize;

@@ -49,6 +49,9 @@ export const remoteCoreSteps = (
 		reads: mysql
 			? sql`CREATE TABLE ${sql("reads")}(instance VARCHAR(256) NOT NULL,topic VARCHAR(256) NOT NULL,seq BIGINT NOT NULL,PRIMARY KEY(instance,topic)) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin`
 			: sql`CREATE TABLE ${sql("reads")}(instance TEXT NOT NULL,topic TEXT NOT NULL,seq BIGINT NOT NULL,PRIMARY KEY(instance,topic))`,
+		seen: mysql
+			? sql`CREATE TABLE seen(seq BIGINT NOT NULL,instance VARCHAR(256) NOT NULL,label VARCHAR(256) NOT NULL,agent LONGTEXT NOT NULL,seen_at BIGINT NOT NULL,PRIMARY KEY(seq,instance,label)) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin`
+			: sql`CREATE TABLE seen(seq BIGINT NOT NULL,instance TEXT NOT NULL,label TEXT NOT NULL,agent TEXT NOT NULL,seen_at BIGINT NOT NULL,PRIMARY KEY(seq,instance,label))`,
 		kv: mysql
 			? sql`CREATE TABLE kv(ns VARCHAR(256) NOT NULL,\`key\` VARCHAR(256) NOT NULL,value LONGTEXT,updated_seq BIGINT NOT NULL,previous LONGTEXT,PRIMARY KEY(ns,\`key\`)) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin`
 			: sql`CREATE TABLE kv(ns TEXT NOT NULL,key TEXT NOT NULL,value TEXT,updated_seq BIGINT NOT NULL,previous TEXT,PRIMARY KEY(ns,key))`,
@@ -312,6 +315,26 @@ export const remoteCoreSteps = (
 			],
 		},
 		{ id: 14, name: "protection_ownership", operations: [protectionOwnershipOperation(sql)] },
+		{
+			id: 15,
+			name: "seen",
+			operations: [
+				ddl(
+					"seen",
+					statements.seen,
+					tableShape(
+						sql,
+						"seen",
+						[integer("seq"), key("instance"), key("label"), text("agent"), integer("seen_at")],
+						["seq", "instance", "label"],
+						{
+							checks: [],
+							foreignKeys: [],
+						},
+					),
+				),
+			],
+		},
 	];
 };
 

@@ -19,6 +19,7 @@ import { validTopic } from "./messages.ts";
 import { waitForMessages } from "./message-wait.ts";
 import { makeMessageChanges } from "./message-changes.ts";
 import { markView } from "./read-view.ts";
+import { topicReceipts, withSeenBy } from "./read-marks.ts";
 
 const handlers = (extension: ExtensionApi) =>
 	HttpApiBuilder.group(Api, "conversation", (handlers) =>
@@ -68,14 +69,20 @@ const handlers = (extension: ExtensionApi) =>
 							};
 							// A newest read returns the top slice and skips everything earlier, and a search skips whatever
 							// doesn't match, so marking through the highest sequence either returns would clear unread
-							// messages nobody was ever shown.
+							// messages nobody was ever shown. Each returned message is still recorded as seen.
 							const view = (result: typeof Envelope.Type) =>
-								markView(
-									ctx,
-									result.items,
-									query.topic ?? "",
-									query.mark !== "0" && query.topic !== undefined && query.newest !== "1" && query.q === undefined,
-								).pipe(Effect.as(result));
+								Effect.gen(function* () {
+									yield* markView(
+										ctx,
+										result.items,
+										query.topic ?? "",
+										query.mark !== "0" && query.topic !== undefined && query.newest !== "1" && query.q === undefined,
+										query.mark !== "0",
+									);
+									return query.receipts === "1"
+										? { ...result, items: yield* withSeenBy(ctx.db, ctx, result.items) }
+										: result;
+								});
 							// Seed from the trusted fence: an invalid caller cursor must not poison the shared follower.
 							if (wait > 0) yield* changes.register(ctx.events, (yield* ctx.publicationFence).published_through);
 							const first = yield* ctx.messages.query(input);
@@ -97,6 +104,21 @@ const handlers = (extension: ExtensionApi) =>
 									{ haltStrategy: "left" },
 								).pipe(Stream.map((value) => encoder.encode(value))),
 								{ contentType: "application/json" },
+							);
+						}),
+					),
+				)
+				.handle("seen", ({ query }) =>
+					refusal(
+						Effect.gen(function* () {
+							const ctx = yield* extension.context("read");
+							if (!validTopic(query.topic)) return yield* new KernelError({ code: "query_invalid" });
+							return yield* ctx.read(() =>
+								topicReceipts(ctx.db, ctx, {
+									topic: query.topic,
+									recursive: query.recursive === "1",
+									from: query.from ?? 0,
+								}),
 							);
 						}),
 					),

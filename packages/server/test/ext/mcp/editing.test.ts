@@ -975,3 +975,33 @@ it("approves at consent the label a Claude-named client's calls carry", async (t
 	});
 	expect((await held(app, cookie)).map((item) => `${item.agent}@${item.label}`)).toEqual(["desk-bot@claude"]);
 }, 120000);
+
+it("keeps a receipt for each client label sharing a connection, and fetch reports them", async (test) => {
+	const { fixture, app, cookie } = await installed(test, false);
+	const client = await register(app, "Shared Reader");
+	const connected = await form(app, cookie, "/mcp/oauth/authorize", {
+		...client.query,
+		decision: "approve",
+		agent: "dot",
+	});
+	const access = await exchange(app, client, connected.headers.get("location"));
+	const as = (userAgent: string) => mcp(app, access, userAgent).tool;
+	const posted = decode(
+		Schema.Struct({ seq: Schema.Int }),
+		await (await app.post("/api/messages", { topic: "desk", body: "for both clients" }, cookie)).json(),
+	);
+	const id = `message:${posted.seq}`;
+	// ChatGPT reads first; Codex, on the same connection and instance, still gets its own receipt.
+	expect((await as(chatgpt)("fetch", { id })).ok).toMatchObject({ metadata: { seen_by: [] } });
+	const second = (await as(codex)("fetch", { id })).ok;
+	expect(await fixture.sql(`SELECT instance,label,agent FROM seen WHERE seq=${posted.seq} ORDER BY label`)).toEqual([
+		{ instance: `extension:mcp:${client.clientId}`, label: "chatgpt", agent: "dot" },
+		{ instance: `extension:mcp:${client.clientId}`, label: "codex", agent: "dot" },
+	]);
+	expect(second).toMatchObject({
+		metadata: { seen_by: [{ agent: "dot", label: "chatgpt", at: expect.any(Number) }] },
+	});
+	// Reading again keeps the first time and adds no row.
+	await as(chatgpt)("fetch", { id });
+	expect(await fixture.sql(`SELECT COUNT(*) AS n FROM seen WHERE seq=${posted.seq}`)).toEqual([{ n: 2 }]);
+}, 120000);

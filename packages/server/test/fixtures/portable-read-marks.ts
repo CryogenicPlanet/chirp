@@ -49,7 +49,7 @@ const main = Effect.gen(function* () {
 		engine,
 		config: process.env.COMMS_READ_MARK_CONFIG,
 		database: "comms_read_marks",
-		tables: ["reads", "outbox", "mutation_batches", "idempotency", "kernel_writer"],
+		tables: ["reads", "seen", "messages", "outbox", "mutation_batches", "idempotency", "kernel_writer"],
 	});
 	yield* Console.error("read-mark stage: tables");
 	// Supply the mutation protocol's physical preconditions; migration ladders are tested separately.
@@ -59,6 +59,10 @@ const main = Effect.gen(function* () {
 	yield* sql`CREATE TABLE mutation_batches(id VARCHAR(128) PRIMARY KEY,from_seq BIGINT,to_seq BIGINT,count BIGINT)`;
 	yield* sql`CREATE TABLE outbox(seq BIGINT PRIMARY KEY,transaction_id VARCHAR(128),event TEXT,shipped_at BIGINT)`;
 	yield* sql`CREATE TABLE idempotency(expires_at BIGINT)`;
+	// Receipts read only a message's sequence and author instance.
+	yield* sql`CREATE TABLE messages(seq BIGINT PRIMARY KEY,instance VARCHAR(256) NOT NULL)`;
+	yield* sql`INSERT INTO messages VALUES(4,'writer-session'),(9,'writer-session'),(10,'session'),(11,'writer-session'),(12,'writer-session')`;
+	yield* sql`CREATE TABLE seen(seq BIGINT NOT NULL,instance VARCHAR(256) NOT NULL,label VARCHAR(256) NOT NULL,agent TEXT NOT NULL,seen_at BIGINT NOT NULL,PRIMARY KEY(seq,instance,label))`;
 	yield* Console.error("read-mark stage: services");
 	const state = yield* Ref.make<State>("live");
 	const lifecycle = Layer.mock(Lifecycle, {
@@ -95,10 +99,22 @@ const main = Effect.gen(function* () {
 			{ instance: "session", topic: "board", seq: 9 },
 		];
 		assert.deepEqual(yield* rows, expected);
+		const seen = sql`SELECT seq,instance,agent FROM seen ORDER BY seq,instance`;
+		// Every returned message is recorded, including one outside the marked subtree; the author's own is not.
+		yield* markView(ctx, [{ ...item("board", 10), instance: "session" }], "board", false, true);
+		const receipts = [4, 9, 12].map((seq) => ({ seq, instance: "session", agent: "reader" }));
+		assert.deepEqual(yield* seen, receipts);
+		const first = yield* sql`SELECT seen_at FROM seen WHERE seq=9`;
+		yield* markView(ctx, [item("board/thread", 9)], "board", false, true);
+		assert.deepEqual(yield* sql`SELECT seen_at FROM seen WHERE seq=9`, first);
+		yield* markView(ctx, [item("board", 11)], "board", false, false);
+		assert.deepEqual(yield* seen, receipts);
 		yield* Console.error("read-mark stage: admission");
 		yield* Ref.set(state, "frozen");
 		yield* markView(ctx, [item("board", 12)], "board");
+		yield* markView(ctx, [item("board", 11)], "board");
 		assert.deepEqual(yield* rows, expected);
+		assert.deepEqual(yield* seen, receipts);
 		yield* Ref.set(state, "accepted");
 		yield* markView(ctx, [item("board", 12)], "board");
 		const accepted = [
@@ -116,6 +132,7 @@ const main = Effect.gen(function* () {
 		for (const operation of [
 			messages.mark(who, { topic: "new", seq: 12 }),
 			markView(ctx, [item("board", 12)], "board"),
+			ctx.messages.markSeen([11]),
 		]) {
 			const rejected = yield* operation.pipe(Effect.result);
 			assert.equal(rejected._tag, "Failure");
@@ -123,6 +140,7 @@ const main = Effect.gen(function* () {
 				assert.equal(Schema.is(KernelError)(rejected.failure) && rejected.failure.code, "stale_writer");
 		}
 		assert.deepEqual(yield* rows, accepted);
+		assert.deepEqual(yield* seen, receipts);
 		yield* unchangedEvents;
 	}).pipe(
 		Effect.provide(messagesLayer.pipe(Layer.provideMerge(publicationLayer))),

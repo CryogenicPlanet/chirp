@@ -2,7 +2,7 @@ import { HttpServerResponse } from "effect/unstable/http";
 import { servePage } from "../../page-serving.ts";
 import { mysqlSearchConfig } from "./mysql-search-config.ts";
 import type { ExtensionCapabilities, MessageAuthor } from "../../kernel/extension-capabilities.ts";
-import { markRead } from "./read-marks.ts";
+import { markRead, markSeen } from "./read-marks.ts";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 import { Pages } from "./pages.ts";
 import { type Mutation, WriterPermit } from "../../kernel/mutate.ts";
@@ -120,14 +120,15 @@ export const extensionCapabilities = Effect.gen(function* () {
 				);
 		const mutate = mutateAs(caller);
 		const messages = makeMessages(sql, { read, mutate }, boot, crypto, mysql);
-		const createAs = (input: typeof MessageInput.Type, key: string | undefined, author: MessageAuthor) => {
-			// A signed-in caller already names the author; only system-authority contexts may attribute a post.
+		// A signed-in caller already names the author; only system-authority contexts may attribute a post or a view.
+		const attributed = (author: MessageAuthor): Effect.Effect<Identity, KernelError> => {
 			if (
 				who ||
 				authenticatedManagedRequest ||
 				reserved.includes(author.agent) ||
 				!authorName.test(author.agent) ||
-				!authorInstance.test(author.instance)
+				!authorInstance.test(author.instance) ||
+				(author.label !== undefined && !authorName.test(author.label))
 			)
 				return Effect.fail(
 					new KernelError({
@@ -149,13 +150,17 @@ export const extensionCapabilities = Effect.gen(function* () {
 						},
 					}),
 				);
-			const actor = {
+			return Effect.succeed({
 				agent: author.agent,
 				instance: composed,
 				request: "",
 				kind: "agent",
-			} satisfies Identity;
-			return Effect.gen(function* () {
+				...(author.label === undefined ? {} : { label: author.label }),
+			});
+		};
+		const createAs = (input: typeof MessageInput.Type, key: string | undefined, author: MessageAuthor) =>
+			Effect.gen(function* () {
+				const actor = yield* attributed(author);
 				const normalized = { topic: input.topic, body: input.body, tags: input.tags ?? [], meta: input.meta ?? {} };
 				const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(MessageInput))(normalized);
 				const inputWithAuthor = JSON.stringify({ input: encoded, agent: author.agent });
@@ -166,7 +171,27 @@ export const extensionCapabilities = Effect.gen(function* () {
 					inputWithAuthor,
 				);
 			});
-		};
+		// Viewing with read scope records only this context's reader, and never an unpublished sequence.
+		const seenAs = (seqs: ReadonlyArray<number>, author?: MessageAuthor) =>
+			lifecycle.gate
+				.withPermit(
+					Effect.gen(function* () {
+						// A system context has no reader to record unless it names the one it relays for.
+						const reader = author ? yield* attributed(author) : who;
+						if (!reader || seqs.length === 0) return;
+						const state = yield* Ref.get(lifecycle.state);
+						if (state !== "live" && state !== "accepted") return;
+						if (seqs.some((seq) => !Number.isSafeInteger(seq) || seq < 1))
+							return yield* new KernelError({
+								code: "input_invalid",
+								detail: { field: "seqs", hint: "Each seq must be a positive message sequence." },
+							});
+						if (Math.max(...seqs) > (yield* publication.fence).published_through)
+							return yield* new KernelError({ code: "cursor_ahead" });
+						yield* markSeen(sql, publication.mutate, reader, seqs);
+					}),
+				)
+				.pipe(Effect.provideService(Lifecycle, lifecycle));
 		const topics = makeTopics(sql, read, pages);
 		// Boot decides liveness: it admits grant calls only from the attempt its public route serves.
 		// A detached reload drains this request before its cutover, so the context that started one must return
@@ -238,6 +263,7 @@ export const extensionCapabilities = Effect.gen(function* () {
 					messages.list(input).pipe(Effect.provideService(Lifecycle, lifecycle)),
 				create: (input: typeof MessageInput.Type, key?: string, author?: MessageAuthor) =>
 					author ? createAs(input, key, author) : messages.create(caller, input, key),
+				markSeen: seenAs,
 			},
 			topics: {
 				read: (path: string, options: { readonly depth?: number; readonly archived?: boolean } = {}) =>

@@ -580,6 +580,10 @@ const make = (directory: string, capabilities: CapabilityFactory, onWork: Effect
 							...verbs.topics,
 							markRead: route.access === "application-managed" && !writable ? () => denied() : verbs.topics.markRead,
 						},
+						messages: {
+							...verbs.messages,
+							markSeen: route.access === "application-managed" && !writable ? () => denied() : verbs.messages.markSeen,
+						},
 						db: sql,
 						publicationFence: publication.fence.pipe(Effect.provideService(Lifecycle, lifecycle)),
 						params: matched.params,

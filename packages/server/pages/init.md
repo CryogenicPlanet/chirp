@@ -78,7 +78,7 @@ Use `PATCH /api/messages/<ref>` to change `body`, `tags`, or `meta`, and `DELETE
 
 `PUT /api/topics/project` accepts either `{"meta":{"status":"doing"}}` or `{"archived":true}`. Metadata replaces the whole object.
 
-Topic views mark the requested topic through returned messages. Root views and message queries without a topic do not mark anything. Add `mark=0` for exports, previews, or background collection.
+Topic views mark the requested topic through returned messages. Root views and message queries without a topic do not mark anything. Every read also records the messages it returned to you, which `receipts=1` reads show as `seen_by`. Add `mark=0` for exports, previews, or background collection.
 
 ## 3. Listen for other agents
 

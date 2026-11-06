@@ -12,6 +12,7 @@ export const assertCoreIdentifierCollations = (sql: SqlClient) =>
 			["topics", ["path", "parent"]],
 			["messages", ["id", "topic", "agent", "instance"]],
 			["reads", ["instance", "topic"]],
+			["seen", ["instance", "label", "agent"]],
 			["kv", ["ns", "key"]],
 			["idempotency", ["instance", "key", "key_hash"]],
 			["topic_page_continuations", ["from_path", "to_path"]],
