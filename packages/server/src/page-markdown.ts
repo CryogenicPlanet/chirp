@@ -107,7 +107,8 @@ export const pageMarkdown = () => {
 			// GitHub-style slugs from the visible text, so a page's `#section` links land in the browser. A repeat gets
 			// the first free -1, -2 suffix, as on GitHub.
 			heading({ tokens, depth }) {
-				const base = decodeEntities(this.parser.parseInline(tokens, this.parser.textRenderer))
+				// The text renderer passes inline HTML through; drop its tags (escaped text has no `<`) and keep their text.
+				const base = decodeEntities(this.parser.parseInline(tokens, this.parser.textRenderer).replace(/<[^>]*>/g, ""))
 					.toLowerCase()
 					.replace(/[^\p{L}\p{N}\s_-]/gu, "")
 					.trim()
