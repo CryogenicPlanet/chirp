@@ -91,7 +91,7 @@ export const pageMarkdown = () => {
 		gfm: true,
 		breaks: false,
 		renderer: {
-			// GitHub-style ids, so a page's `#section` links land in the browser as they do on GitHub.
+			// GitHub-style slugs, so a page's `#section` links land in the browser. Repeated headings share an id.
 			heading({ tokens, depth, text }) {
 				const id = text
 					.toLowerCase()
