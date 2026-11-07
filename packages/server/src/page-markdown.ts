@@ -82,15 +82,42 @@ export const pageDocument = (
 ${options.assets ?? ""}<style>${pageStyle}</style></head><body><div class="wrap"><nav><span>${pageCrumbs(name, mount)}</span>${options.chrome?.search ? `<span>${options.chrome.search}${raw}</span>` : raw}</nav><article class="markdown-body">${body}</article></div>${options.chrome?.scripts ?? ""}</body></html>`;
 };
 
+const namedEntities: Readonly<Record<string, string>> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+/** Decode character references as the browser shows them, so `&#65;pproval` slugs like `Approval`. Unknown names drop. */
+const decodeEntities = (text: string) =>
+	text.replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z][a-z0-9]*);/gi, (_match, ref: string) => {
+		if (ref[0] !== "#") return namedEntities[ref.toLowerCase()] ?? "";
+		const code =
+			ref[1] === "x" || ref[1] === "X" ? Number.parseInt(ref.slice(2), 16) : Number.parseInt(ref.slice(1), 10);
+		return Number.isInteger(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "";
+	});
+
 /** Each Pages instance owns its parser and highlighter; never change package defaults. */
 export const pageMarkdown = () => {
 	const highlighter = highlight.newInstance();
 	for (const [name, language] of Object.entries({ javascript, typescript, json, bash, python, xml, css, sql, yaml }))
 		highlighter.registerLanguage(name, language);
+	// Heading ids used on the page being rendered. Owned by this Pages instance and cleared before each synchronous
+	// parse, so pages never share it.
+	const used = new Set<string>();
 	const parser = new Marked({
 		gfm: true,
 		breaks: false,
 		renderer: {
+			// GitHub-style slugs from the visible text, so a page's `#section` links land in the browser. A repeat gets
+			// the first free -1, -2 suffix, as on GitHub.
+			heading({ tokens, depth }) {
+				// The text renderer passes inline HTML through; drop its tags (escaped text has no `<`) and keep their text.
+				const base = decodeEntities(this.parser.parseInline(tokens, this.parser.textRenderer).replace(/<[^>]*>/g, ""))
+					.toLowerCase()
+					.replace(/[^\p{L}\p{N}\s_-]/gu, "")
+					.trim()
+					.replace(/\s/g, "-");
+				let id = base;
+				for (let n = 1; base && used.has(id); n++) id = `${base}-${n}`;
+				used.add(id);
+				return `<h${depth}${id ? ` id="${escapeHtml(id)}"` : ""}>${this.parser.parseInline(tokens)}</h${depth}>\n`;
+			},
 			code({ text, lang }) {
 				const language = lang?.split(/\s+/)[0] ?? "";
 				if (language === "mermaid") return `<pre class="mermaid">${escapeHtml(text)}</pre>`;
@@ -113,6 +140,9 @@ export const pageMarkdown = () => {
 	) => {
 		const matched = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
 		const frontmatter = matched?.[1] ?? "";
+		used.clear();
+		// Ids the page's own chrome uses, so a heading can't take them.
+		used.add("chirp-palette");
 		const body = parser.parse(matched ? text.slice(matched[0].length) : text, { async: false });
 		const tailwind = /<!--\s*tailwind\s*-->/i.test(text) || /^tailwind:[ \t]*true[ \t]*$/m.test(frontmatter);
 		const assets = `<link rel="stylesheet" href="/page-assets/markdown.css">${body.includes('class="hljs') ? '<link rel="stylesheet" href="/page-assets/highlight.css">' : ""}${body.includes('class="mermaid"') ? '<script defer src="/page-assets/mermaid.js"></script><script defer src="/page-assets/mermaid-init.js"></script>' : ""}${tailwind ? '<style type="text/tailwindcss">@layer theme, utilities; @import "tailwindcss/theme" layer(theme); @import "tailwindcss/utilities" layer(utilities);</style><script defer src="/page-assets/tailwind.js"></script>' : ""}`;
