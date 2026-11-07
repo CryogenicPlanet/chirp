@@ -32,7 +32,7 @@ it("keeps legacy opted-in page topics private and serves complete authenticated 
 	expect((await fetch(app.url + "/p/guide/readme.md")).status).toBe(401);
 	const response = await fetch(app.url + "/p/guide/readme.md", { headers: { cookie } });
 	expect(response.status).toBe(200);
-	expect(await response.text()).toContain("<h1>guide</h1>");
+	expect(await response.text()).toContain(`<h1 id="guide">guide</h1>`);
 	expect(await (await fetch(app.url + "/p/guide/readme.md?raw=1", { headers: { cookie } })).text()).toBe("# guide");
 	const head = await fetch(app.url + "/p/guide/readme.md", { method: "HEAD", headers: { cookie } });
 	expect(head.status).toBe(200);
@@ -57,7 +57,9 @@ it("keeps legacy opted-in page topics private and serves complete authenticated 
 		401,
 	);
 	await writeFile(join(fixture.root, "pages", "guide", "index.md"), "# Public index");
-	expect(await (await fetch(app.url + "/p/guide/", { headers: { cookie } })).text()).toContain("<h1>Public index</h1>");
+	expect(await (await fetch(app.url + "/p/guide/", { headers: { cookie } })).text()).toContain(
+		`<h1 id="public-index">Public index</h1>`,
+	);
 	await metadata("guide", { public: false });
 	expect((await fetch(app.url + "/p/guide/readme.md")).status).toBe(401);
 	expect((await fetch(app.url + "/p/guide/yes/readme.md")).status).toBe(401);

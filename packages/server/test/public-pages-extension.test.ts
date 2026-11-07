@@ -59,11 +59,11 @@ it("publishes only its subtree, with mount-relative navigation, rendered/raw con
 	expect(rendered.status).toBe(200);
 	expect(rendered.headers.get("content-security-policy")).toContain("default-src 'none'");
 	const body = await rendered.text();
-	expect(body).toContain("<h1>Public guide</h1>");
+	expect(body).toContain(`<h1 id="public-guide">Public guide</h1>`);
 	expect(body).toContain('href="/public/guide.md?raw=1"');
 	expect(body).not.toContain('href="/p/');
 	expect(body).not.toContain('href="/"');
-	expect(await (await fetch(app.url + "/public/nested/")).text()).toContain("<h1>Nested</h1>");
+	expect(await (await fetch(app.url + "/public/nested/")).text()).toContain(`<h1 id="nested">Nested</h1>`);
 	expect(await (await fetch(app.url + "/public/guide.md?raw=1")).text()).toBe("# Public guide\n\n[asset](asset.bin)\n");
 	expect(Buffer.from(await (await fetch(app.url + "/public/asset.bin")).arrayBuffer())).toEqual(binary);
 	for (const path of ["/public", "/public/", "/public/guide.md", "/public/asset.bin"]) {
@@ -118,7 +118,7 @@ it("keeps a pending move confined to its subtree under the public mount", async 
 	);
 	const unaffected = await fetch(app.url + "/public/guide.md");
 	expect(unaffected.status).toBe(200);
-	expect(await unaffected.text()).toContain("<h1>Public guide</h1>");
+	expect(await unaffected.text()).toContain(`<h1 id="public-guide">Public guide</h1>`);
 	for (const path of ["/public/moving/guide.md", "/public/moved/guide.md", "/public/"]) {
 		const response = await fetch(app.url + path);
 		expect(response.status, path).toBe(503);

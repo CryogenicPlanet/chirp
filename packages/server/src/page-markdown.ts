@@ -91,6 +91,15 @@ export const pageMarkdown = () => {
 		gfm: true,
 		breaks: false,
 		renderer: {
+			// GitHub-style ids, so a page's `#section` links land in the browser as they do on GitHub.
+			heading({ tokens, depth, text }) {
+				const id = text
+					.toLowerCase()
+					.replace(/[^\p{L}\p{N}\s_-]/gu, "")
+					.trim()
+					.replace(/\s/g, "-");
+				return `<h${depth}${id ? ` id="${escapeHtml(id)}"` : ""}>${this.parser.parseInline(tokens)}</h${depth}>\n`;
+			},
 			code({ text, lang }) {
 				const language = lang?.split(/\s+/)[0] ?? "";
 				if (language === "mermaid") return `<pre class="mermaid">${escapeHtml(text)}</pre>`;
