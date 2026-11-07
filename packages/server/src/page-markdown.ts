@@ -82,6 +82,16 @@ export const pageDocument = (
 ${options.assets ?? ""}<style>${pageStyle}</style></head><body><div class="wrap"><nav><span>${pageCrumbs(name, mount)}</span>${options.chrome?.search ? `<span>${options.chrome.search}${raw}</span>` : raw}</nav><article class="markdown-body">${body}</article></div>${options.chrome?.scripts ?? ""}</body></html>`;
 };
 
+const namedEntities: Readonly<Record<string, string>> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+/** Decode character references as the browser shows them, so `&#65;pproval` slugs like `Approval`. Unknown names drop. */
+const decodeEntities = (text: string) =>
+	text.replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z][a-z0-9]*);/gi, (_match, ref: string) => {
+		if (ref[0] !== "#") return namedEntities[ref.toLowerCase()] ?? "";
+		const code =
+			ref[1] === "x" || ref[1] === "X" ? Number.parseInt(ref.slice(2), 16) : Number.parseInt(ref.slice(1), 10);
+		return Number.isInteger(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "";
+	});
+
 /** Each Pages instance owns its parser and highlighter; never change package defaults. */
 export const pageMarkdown = () => {
 	const highlighter = highlight.newInstance();
@@ -97,9 +107,7 @@ export const pageMarkdown = () => {
 			// GitHub-style slugs from the visible text, so a page's `#section` links land in the browser. A repeat gets
 			// the first free -1, -2 suffix, as on GitHub.
 			heading({ tokens, depth }) {
-				const base = this.parser
-					.parseInline(tokens, this.parser.textRenderer)
-					.replace(/&[a-z0-9#]+;/gi, "")
+				const base = decodeEntities(this.parser.parseInline(tokens, this.parser.textRenderer))
 					.toLowerCase()
 					.replace(/[^\p{L}\p{N}\s_-]/gu, "")
 					.trim()

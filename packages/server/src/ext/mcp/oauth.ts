@@ -831,7 +831,7 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 					)
 						return refusal(
 							"Choose another posting name",
-							`Choose a posting name of up to 64 lowercase letters, digits, dots, dashes or underscores, other than system, boot or your own name, ${ctx.identity.agent}.`,
+							`Choose a posting name of up to 64 lowercase letters, digits, dots, dashes or underscores, other than system, boot, rollcall or your own name, ${ctx.identity.agent}.`,
 							"Go back, change it, and connect again.",
 						);
 					// Every install and every user account of a metadata-document client presents the same URL and callback

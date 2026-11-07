@@ -187,12 +187,14 @@ function Listening({
 		// A listening agent answers within seconds; reload twice so a quick pong and a slower one both show.
 		void Effect.runPromise(
 			Effect.result(accountPost(`/api/rollcall/test?${target}`, {}, undefined, crypto.randomUUID())).pipe(
-				Effect.tap((result) =>
-					result._tag === "Failure" ? Effect.sync(() => setRefused(result.failure.message)) : Effect.void,
+				Effect.flatMap((result) =>
+					result._tag === "Failure"
+						? Effect.sync(() => setRefused(result.failure.message))
+						: Effect.sleep("5 seconds").pipe(
+								Effect.andThen(Effect.sync(onPinged)),
+								Effect.andThen(Effect.sleep("25 seconds")),
+							),
 				),
-				Effect.andThen(Effect.sleep("5 seconds")),
-				Effect.andThen(Effect.sync(onPinged)),
-				Effect.andThen(Effect.sleep("25 seconds")),
 			),
 		).then(() => {
 			setBusy(false);
