@@ -58,11 +58,22 @@ const duration = (ms: number) =>
  */
 const mentionFor = (message: Message) => {
 	const bare = `@${message.agent}`;
-	if (message.instance.startsWith("extension:mcp:")) return bare;
+	if (instanceOf(message).startsWith("extension:mcp:")) return bare;
 	const own = [...message.body.matchAll(mentionPattern)]
 		.map((match) => match[0].replace(/[._-]+$/u, ""))
 		.filter((target) => target === bare || target.startsWith(`${bare}/`));
 	return own.find((target) => target.includes("/")) ?? bare;
+};
+/**
+ * The instance a check belongs to. An MCP connection with an editing grant posts through the grant's token family, so
+ * those posts are counted under the connection they came from (`meta.mcp_client_id`). The meta is the author's own
+ * claim, but it only ever moves a post between instances of the same agent.
+ */
+const instanceOf = (message: Message) => {
+	const client = message.meta.mcp_client_id;
+	return typeof client === "string" && client !== "" && !message.instance.startsWith("extension:")
+		? `extension:mcp:${client}`
+		: message.instance;
 };
 const withinFor = (message: Message) => {
 	const value = message.meta.answer_within;
@@ -84,11 +95,14 @@ const find = (ctx: Store, agent: string, instance: string) =>
 			Effect.flatMap(decodeChecks),
 			Effect.map((rows) => rows[0]),
 		);
-/** A new announcement supersedes whatever this instance had. */
+/**
+ * A new announcement supersedes whatever this instance had, and any other instance of the agent with the same mention:
+ * a re-enrolled agent or a reconnected MCP client leaves a row that would otherwise fail forever.
+ */
 const replace = (ctx: Store, check: Check) =>
 	ctx.mutate(
 		Effect.gen(function* () {
-			yield* ctx.db`DELETE FROM rollcall_checks WHERE agent=${check.agent} AND instance=${check.instance}`;
+			yield* ctx.db`DELETE FROM rollcall_checks WHERE agent=${check.agent} AND (instance=${check.instance} OR mention=${check.mention})`;
 			yield* ctx.db`INSERT INTO rollcall_checks ${ctx.db.insert({ ...check })}`;
 		}),
 	);
@@ -135,14 +149,14 @@ const ping = (ctx: BackgroundContext, check: Check) =>
 const announce = (ctx: BackgroundContext, message: Message) =>
 	Effect.gen(function* () {
 		// A replay after a restart must not undo what happened since: a re-test or a newer announcement wins.
-		const current = yield* find(ctx, message.agent, message.instance);
+		const current = yield* find(ctx, message.agent, instanceOf(message));
 		if (current && current.announce_seq >= message.seq) return;
 		yield* announceNew(ctx, message);
 	});
 const announceNew = (ctx: BackgroundContext, message: Message) => {
 	const check: Check = {
 		agent: message.agent,
-		instance: message.instance,
+		instance: instanceOf(message),
 		mention: mentionFor(message),
 		announce_seq: message.seq,
 		nonce: `rc${message.seq.toString(36)}`,
@@ -174,14 +188,15 @@ const pong = (ctx: BackgroundContext, message: Message, nonce: string) =>
 			message.agent !== check.agent
 		)
 			return;
-		const answeredBy = `${message.agent} ${message.instance}`;
+		const instance = instanceOf(message);
+		const answeredBy = `${message.agent} ${instance}`;
 		// Another instance answering shows the mention is shared, even after the intended instance already passed.
-		if (message.instance !== check.instance) {
+		if (instance !== check.instance) {
 			if (check.status === "shared" || check.status === "requested" || check.status === "when_asked") return;
 			yield* reply(
 				ctx,
 				message,
-				`Another ${message.agent} instance answered ${shown(check)}'s ping, so that mention reaches more than one agent. Give each instance its own label, then announce again.`,
+				`Another ${message.agent} instance answered ${shown(check)}'s ping, so that mention reaches more than one agent. ${check.mention.includes("/") ? "Give each instance its own label, then announce again." : `Announce again with each instance's full \`@${check.agent}/<label>\` in its post.`}`,
 				"shared",
 				nonce,
 			);
@@ -216,12 +231,12 @@ const pong = (ctx: BackgroundContext, message: Message, nonce: string) =>
 /** Remind an agent that failed its ping, once per failed ping, under the first post it makes anywhere. */
 const nudge = (ctx: BackgroundContext, message: Message) =>
 	Effect.gen(function* () {
-		const check = yield* find(ctx, message.agent, message.instance);
+		const check = yield* find(ctx, message.agent, instanceOf(message));
 		if (!check || check.status !== "no_answer" || check.nudged_nonce === check.nonce) return;
 		yield* reply(
 			ctx,
 			message,
-			`${check.mention} your listener failed the roll call: it didn't answer ping #${check.ping_seq} within ${duration(check.answer_within * 1000)}. Restart it, then test it again with \`POST /api/rollcall/test\`, or over MCP by posting a new \`roll-call\` announcement in \`agents\`.`,
+			`${check.mention} your listener failed the roll call: it didn't answer ping #${check.ping_seq} within ${duration(check.answer_within * 1000)}. Restart it, make sure it watches \`${check.mention}\` exactly, then test it again with \`POST /api/rollcall/test\`, or over MCP by posting a new \`roll-call\` announcement in \`agents\`.`,
 			"nudge",
 			check.nonce,
 		);
@@ -236,32 +251,60 @@ const handle = (ctx: BackgroundContext, message: Message) => {
 	return nudge(ctx, message);
 };
 
-const sweep = (ctx: BackgroundContext) =>
+/** A failing ping or verdict waits this long, doubling from a second, before its next try. */
+const backoff = (count: number) => Math.min(600_000, 1000 * 2 ** count);
+/** Slack for a pong posted just before the page was read but committed after it. */
+const settle = 5000;
+type Retries = Map<string, { readonly count: number; readonly at: number }>;
+
+/**
+ * Ping requested checks and mark overdue ones missed. `caughtUp` is a time every message posted before it has been
+ * handled, so a pong still in an unread page is never marked missed. A check that fails (its topic archived, say) backs
+ * off, so the log events its failures raise cannot spin the loop.
+ */
+const sweep = (ctx: BackgroundContext, retries: Retries, caughtUp: number | null) =>
 	Effect.gen(function* () {
-		for (const check of yield* select(ctx, "requested"))
-			yield* ping(ctx, check).pipe(
-				Effect.catchCause((cause) => ctx.log("rollcall.failed", { error: Cause.pretty(cause) })),
-			);
 		const at = yield* now;
+		const attempt = (check: Check, work: Effect.Effect<void, unknown>) => {
+			const retry = retries.get(check.nonce);
+			if (retry && retry.at > at) return Effect.void;
+			return work.pipe(
+				Effect.andThen(Effect.sync(() => retries.delete(check.nonce))),
+				Effect.catchCause((cause) =>
+					Effect.sync(() => {
+						const count = (retry?.count ?? 0) + 1;
+						retries.set(check.nonce, { count, at: at + backoff(count) });
+						return count;
+					}).pipe(
+						Effect.flatMap((count) =>
+							ctx.log("rollcall.failed", { nonce: check.nonce, attempt: count, error: Cause.pretty(cause) }),
+						),
+					),
+				),
+			);
+		};
+		for (const check of yield* select(ctx, "requested")) yield* attempt(check, ping(ctx, check));
+		if (caughtUp === null) return;
 		for (const check of yield* select(ctx, "pending")) {
-			if (check.deadline > at || check.ping_seq === null) continue;
-			yield* reply(
-				ctx,
-				{ seq: check.ping_seq, topic },
-				`${shown(check)} didn't answer within ${duration(check.answer_within * 1000)}, so its listener isn't waking it. It will be reminded under the next thing it posts.`,
-				"missed",
-				check.nonce,
-			).pipe(
-				Effect.andThen(transition(ctx, check, { ...check, status: "no_answer" })),
-				Effect.catchCause((cause) => ctx.log("rollcall.failed", { error: Cause.pretty(cause) })),
+			if (check.deadline + settle > caughtUp || check.ping_seq === null) continue;
+			yield* attempt(
+				check,
+				reply(
+					ctx,
+					{ seq: check.ping_seq, topic },
+					`${shown(check)} didn't answer within ${duration(check.answer_within * 1000)}, so its listener isn't waking it. It will be reminded under the next thing it posts.`,
+					"missed",
+					check.nonce,
+				).pipe(Effect.andThen(transition(ctx, check, { ...check, status: "no_answer" }))),
 			);
 		}
 	});
 
 const run = (ctx: BackgroundContext) =>
 	Effect.gen(function* () {
-		// Function-local: counts consecutive failures of the message the cursor is stuck on.
+		// Function-local: counts consecutive failures of the message the cursor is stuck on, and of each check's ping.
 		const failures = new Map<number, number>();
+		const retries: Retries = new Map();
 		while (true) {
 			const cycle = yield* Effect.gen(function* () {
 				const rows = yield* ctx
@@ -269,6 +312,7 @@ const run = (ctx: BackgroundContext) =>
 					.pipe(Effect.flatMap(decodeCursor));
 				// A new install starts at the present: announcements from before it existed are not pinged.
 				const since = rows[0]?.seq ?? (yield* ctx.publicationFence).published_through;
+				const queried = yield* now;
 				const page = yield* ctx.messages.query({ since, limit: 64 });
 				let through = since;
 				let stopped = false;
@@ -297,7 +341,7 @@ const run = (ctx: BackgroundContext) =>
 							mysql: () => ctx.db`AS incoming ON DUPLICATE KEY UPDATE seq=incoming.seq`,
 						})}`.pipe(Effect.asVoid),
 					);
-				yield* sweep(ctx);
+				yield* sweep(ctx, retries, !stopped && page.items.length < 64 ? queried : null);
 				// Wake for new messages, or every few seconds for deadlines and requested re-tests.
 				if (page.items.length < 64 && through >= page.cursor)
 					yield* ctx.events

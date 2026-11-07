@@ -109,6 +109,8 @@ const latest = (values: ReadonlyArray<number | null>) =>
 		null,
 	);
 
+const boardVoices: ReadonlySet<string> = new Set(["rollcall", "rollcall-board"]);
+
 /** One row per agent name: token families say when it joined and last authenticated; messages say how much it posts. */
 const rows = (
 	families: FamilyList["items"],
@@ -122,27 +124,36 @@ const rows = (
 		...activity.map((item) => item.agent),
 		...checks.map((check) => check.agent),
 	]);
-	return [...names]
-		.filter((agent) => !hidden.has(agent))
-		.map((agent) => {
-			const owned = families.filter((family) => family.agent === agent);
-			const posted = activity.find((item) => item.agent === agent);
-			return {
-				agent,
-				labels: [...new Set(owned.map((family) => family.label))],
-				joined: owned.length === 0 ? null : Math.min(...owned.map((family) => family.created_at)),
-				lastActive: latest([...owned.map((family) => family.last_used_at), posted?.last_post_at ?? null]),
-				connected: owned.some(
-					(family) => !family.revoked && (family.refresh_expires_at === null || family.refresh_expires_at > now),
-				),
-				mcp: posted?.mcp ?? false,
-				posts: posted?.posts ?? 0,
-				posts24h: posted?.posts_24h ?? 0,
-				posts7d: posted?.posts_7d ?? 0,
-				checks: checks.filter((check) => check.agent === agent),
-			};
-		})
-		.sort((a, b) => (b.lastActive ?? 0) - (a.lastActive ?? 0));
+	return (
+		[...names]
+			.filter((agent) => !hidden.has(agent))
+			// The roll-call extension's own voice; an agent that enrolled or connected under either name still shows.
+			.filter(
+				(agent) =>
+					!boardVoices.has(agent) ||
+					families.some((family) => family.agent === agent) ||
+					activity.some((item) => item.agent === agent && item.mcp),
+			)
+			.map((agent) => {
+				const owned = families.filter((family) => family.agent === agent);
+				const posted = activity.find((item) => item.agent === agent);
+				return {
+					agent,
+					labels: [...new Set(owned.map((family) => family.label))],
+					joined: owned.length === 0 ? null : Math.min(...owned.map((family) => family.created_at)),
+					lastActive: latest([...owned.map((family) => family.last_used_at), posted?.last_post_at ?? null]),
+					connected: owned.some(
+						(family) => !family.revoked && (family.refresh_expires_at === null || family.refresh_expires_at > now),
+					),
+					mcp: posted?.mcp ?? false,
+					posts: posted?.posts ?? 0,
+					posts24h: posted?.posts_24h ?? 0,
+					posts7d: posted?.posts_7d ?? 0,
+					checks: checks.filter((check) => check.agent === agent),
+				};
+			})
+			.sort((a, b) => (b.lastActive ?? 0) - (a.lastActive ?? 0))
+	);
 };
 
 const ago = (at: number | null, now: number) => {
@@ -189,7 +200,7 @@ function Listening({
 			Effect.result(accountPost(`/api/rollcall/test?${target}`, {}, undefined, crypto.randomUUID())).pipe(
 				Effect.flatMap((result) =>
 					result._tag === "Failure"
-						? Effect.sync(() => setRefused(result.failure.message))
+						? Effect.sync(() => setRefused(result.failure.detail ?? result.failure.message))
 						: Effect.sleep("5 seconds").pipe(
 								Effect.andThen(Effect.sync(onPinged)),
 								Effect.andThen(Effect.sleep("25 seconds")),
@@ -256,12 +267,7 @@ export function Agents() {
 	const errors = [tokens.error, activity.error].filter((error) => error !== undefined && error !== null);
 	// oxlint-disable-next-line effecttsgo/global-date -- a render-time clock is enough when the activity snapshot is missing.
 	const now = activity.value?.as_of ?? Date.now();
-	const hidden = new Set([
-		"system",
-		"rollcall",
-		"rollcall-board",
-		...(me.value?.kind === "human" ? [me.value.agent] : []),
-	]);
+	const hidden = new Set(["system", ...(me.value?.kind === "human" ? [me.value.agent] : [])]);
 	const agents =
 		settled && (tokens.value || activity.value)
 			? rows(tokens.value?.items ?? [], activity.value?.items ?? [], rollcall.value ?? [], now, hidden)

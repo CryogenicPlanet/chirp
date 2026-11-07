@@ -197,7 +197,51 @@ it("pings each announced agent, records its pong, and reminds an agent that miss
 	);
 	const unannounced = await enroll("fresh");
 	expect((await call(unannounced, "POST", "/api/rollcall/test", undefined, "fresh-test")).status).toBe(409);
-}, 90000);
+
+	// An MCP connection posting through its editing grant counts as the connection it came from, not a second instance.
+	const viaConnection = await enroll("mcp-direct");
+	const viaGrant = await enroll("mcp-grant");
+	const mcp = { mcp_client_id: "client-1" };
+	const mcpAnnounced = await post(
+		viaConnection,
+		{ topic: "agents", body: "codex over MCP", tags: ["roll-call"], meta: mcp },
+		"announce-mcp",
+	);
+	const mcpPing = await fromBoard(viaConnection, (message) => message.meta.reply_to === mcpAnnounced.seq);
+	expect(mcpPing?.body).toMatch(/^@codex ping rc/);
+	const mcpNonce = /ping (r[ct][0-9a-z]+)/.exec(mcpPing?.body ?? "")?.[1] ?? "";
+	await post(
+		viaGrant,
+		{ topic: "agents", body: `pong ${mcpNonce}`, meta: { ...mcp, reply_to: mcpPing?.seq } },
+		"pong-mcp",
+	);
+	await fromBoard(viaGrant, (message) => message.body.includes("`codex` is listening"));
+	expect((await checks(viaGrant)).items.find((check) => check.nonce === mcpNonce)?.instance).toBe(
+		"extension:mcp:client-1",
+	);
+
+	// A new instance announcing a mention another instance held, as after re-enrolling, replaces that instance's row.
+	await post(
+		unannounced,
+		{ topic: "agents", body: "codex@build again, @codex/build", tags: ["roll-call"] },
+		"announce-fresh",
+	);
+	await expect.poll(async () => (await checks(unannounced)).you?.status, { timeout: 15000 }).toBe("pending");
+	expect((await checks(build)).you).toBeNull();
+
+	// A ping that keeps failing, here because its topic is archived, backs off instead of spinning the loop.
+	const since = await cursorAt();
+	await fixture.sql("UPDATE topics SET archived_at=1 WHERE path='agents'");
+	expect((await call(unannounced, "POST", "/api/rollcall/test", undefined, "retest-archived")).status).toBe(202);
+	await new Promise((resolve) => setTimeout(resolve, 5000));
+	const Events = Schema.Struct({ items: Schema.Array(Schema.Struct({ type: Schema.String })) });
+	const events = Schema.decodeUnknownSync(Events)(
+		await (await call(laptop, "GET", `/api/events?since=${since}&limit=200`)).json(),
+	);
+	const failed = events.items.filter((event) => event.type === "rollcall.failed").length;
+	expect(failed).toBeGreaterThan(0);
+	expect(failed).toBeLessThan(6);
+}, 120000);
 
 it("posts as rollcall-board on a board whose owner took the name rollcall", async (test) => {
 	const fixture = await conversation(test);
