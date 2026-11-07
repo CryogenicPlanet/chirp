@@ -10,6 +10,7 @@ import { initialize } from "../../src/ext/core/schema.ts";
 import { BootChannel } from "../../src/kernel/boot-channel.ts";
 import { makeExtensionMigrate } from "../../src/kernel/extension-migrations.ts";
 import { migrate } from "../../src/kernel/migrations.ts";
+import rollcall from "../../src/ext/rollcall.ts";
 import system from "../../src/ext/system.ts";
 import subscriptions from "../../src/ext/subscriptions/index.ts";
 import type { Api } from "../../src/kernel/extension-api.ts";
@@ -119,6 +120,7 @@ const main = Effect.gen(function* () {
 		yield* initialize;
 		assert.deepEqual(yield* sql`SELECT migration_id,name FROM core_migrations ORDER BY migration_id`, names(coreNames));
 		for (const [name, load] of [
+			["rollcall.ts", rollcall],
 			["system.ts", system],
 			["subscriptions", subscriptions],
 		] as const)
@@ -127,6 +129,8 @@ const main = Effect.gen(function* () {
 		assert.deepEqual(
 			extensions.map(({ extension, name }) => ({ extension, name })),
 			[
+				{ extension: "rollcall.ts", name: "rollcall_checks" },
+				{ extension: "rollcall.ts", name: "rollcall_cursor" },
 				{ extension: "subscriptions", name: "webhook_subscriptions" },
 				{ extension: "system.ts", name: "system_cursor" },
 			],
@@ -134,6 +138,7 @@ const main = Effect.gen(function* () {
 		assert.ok(extensions.every((row) => typeof row.checksum === "string" && /^[a-f0-9]{64}$/.test(row.checksum)));
 		yield* sql`INSERT INTO topics(path,name,meta,last_seq,created_at) VALUES('retained','Retained','{}',1,1)`;
 		yield* sql`INSERT INTO system_cursor(id,seq) VALUES(1,42)`;
+		yield* sql`INSERT INTO rollcall_cursor(id,seq) VALUES(1,3000000100)`;
 		// Execute every checked-in editable module; the directory currently contains README only.
 		const fs = yield* FileSystem.FileSystem;
 		const directory = `${import.meta.dirname}/../../src/migrations`;
@@ -146,6 +151,7 @@ const main = Effect.gen(function* () {
 		yield* initializeRemoteKernelSchema(sql, "ladder");
 		yield* initialize;
 		for (const [name, load] of [
+			["rollcall.ts", rollcall],
 			["system.ts", system],
 			["subscriptions", subscriptions],
 		] as const)
@@ -158,6 +164,7 @@ const main = Effect.gen(function* () {
 		);
 		assert.deepEqual(yield* sql`SELECT name FROM topics WHERE path='retained'`, [{ name: "Retained" }]);
 		assert.deepEqual(yield* sql`SELECT seq FROM system_cursor`, [{ seq: 42 }]);
+		assert.deepEqual(yield* sql`SELECT seq FROM rollcall_cursor`, [{ seq: 3_000_000_100 }]);
 		assert.deepEqual(yield* sql`SELECT name FROM protected_sql_tables ORDER BY name`, [
 			{ name: "topic_page_continuations" },
 			{ name: "webhook_subscriptions" },

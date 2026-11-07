@@ -91,9 +91,11 @@ export const pageMarkdown = () => {
 		gfm: true,
 		breaks: false,
 		renderer: {
-			// GitHub-style slugs, so a page's `#section` links land in the browser. Repeated headings share an id.
-			heading({ tokens, depth, text }) {
-				const id = text
+			// GitHub-style slugs from the visible text, so a page's `#section` links land in the browser.
+			heading({ tokens, depth }) {
+				const id = this.parser
+					.parseInline(tokens, this.parser.textRenderer)
+					.replace(/&[a-z0-9#]+;/gi, "")
 					.toLowerCase()
 					.replace(/[^\p{L}\p{N}\s_-]/gu, "")
 					.trim()
@@ -122,7 +124,15 @@ export const pageMarkdown = () => {
 	) => {
 		const matched = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
 		const frontmatter = matched?.[1] ?? "";
-		const body = parser.parse(matched ? text.slice(matched[0].length) : text, { async: false });
+		// Repeated headings get GitHub's -1, -2 suffixes, counted per page.
+		const seen = new Map<string, number>();
+		const body = parser
+			.parse(matched ? text.slice(matched[0].length) : text, { async: false })
+			.replace(/<h([1-6]) id="([^"]+)">/g, (_tag, depth: string, id: string) => {
+				const count = seen.get(id) ?? 0;
+				seen.set(id, count + 1);
+				return `<h${depth} id="${count === 0 ? id : `${id}-${count}`}">`;
+			});
 		const tailwind = /<!--\s*tailwind\s*-->/i.test(text) || /^tailwind:[ \t]*true[ \t]*$/m.test(frontmatter);
 		const assets = `<link rel="stylesheet" href="/page-assets/markdown.css">${body.includes('class="hljs') ? '<link rel="stylesheet" href="/page-assets/highlight.css">' : ""}${body.includes('class="mermaid"') ? '<script defer src="/page-assets/mermaid.js"></script><script defer src="/page-assets/mermaid-init.js"></script>' : ""}${tailwind ? '<style type="text/tailwindcss">@layer theme, utilities; @import "tailwindcss/theme" layer(theme); @import "tailwindcss/utilities" layer(utilities);</style><script defer src="/page-assets/tailwind.js"></script>' : ""}`;
 		return pageDocument(name, body, { title: text.match(/^#\s+(.+)$/m)?.[1] ?? name, raw: name, ...options, assets });

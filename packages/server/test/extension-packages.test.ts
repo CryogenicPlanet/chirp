@@ -70,6 +70,7 @@ export default api=>{
 		"mcp",
 		"missing",
 		"partial",
+		"rollcall.ts",
 		"standup.ts",
 		"subscriptions",
 		"system.ts",
