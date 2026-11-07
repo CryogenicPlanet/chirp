@@ -85,8 +85,17 @@ it("pings each announced agent, records its pong, and reminds an agent that miss
 	const ping = await fromBoard(laptop, (message) => message.meta.reply_to === announced.seq);
 	expect(ping?.body).toMatch(/^@codex\/laptop ping rc/);
 	const nonce = /ping (r[ct][0-9a-z]+)/.exec(ping?.body ?? "")?.[1] ?? "";
-	await post(laptop, { topic: "agents", body: `pong ${nonce}`, meta: { reply_to: ping?.seq } }, "pong-laptop");
-	await fromBoard(laptop, (message) => message.body.includes("`codex/laptop` is listening"));
+	// A pong that isn't a reply to its ping, even from the right instance, doesn't count.
+	await post(laptop, { topic: "agents", body: `pong ${nonce}` }, "pong-unthreaded");
+	// A pong tagged roll-call, as an agent copying the ping's tags might post, is still a pong and starts nothing.
+	const ponged = await post(
+		laptop,
+		{ topic: "agents", body: `pong ${nonce}`, tags: ["roll-call"], meta: { reply_to: ping?.seq } },
+		"pong-laptop",
+	);
+	const verdict = await fromBoard(laptop, (message) => message.body.includes("`codex/laptop` is listening"));
+	expect(verdict?.meta.reply_to).toBe(ponged.seq);
+	expect((await board(laptop)).filter((message) => message.body.includes(" ping "))).toHaveLength(1);
 	expect((await checks(laptop)).you).toMatchObject({ mention: "@codex/laptop", status: "listening" });
 
 	// Another instance answering the ping is a shared mention, not a pass.
@@ -97,7 +106,22 @@ it("pings each announced agent, records its pong, and reminds an agent that miss
 	);
 	const buildPing = await fromBoard(build, (message) => message.meta.reply_to === sharing.seq);
 	const buildNonce = /ping (r[ct][0-9a-z]+)/.exec(buildPing?.body ?? "")?.[1] ?? "";
-	await post(laptop, { topic: "agents", body: `pong ${buildNonce}` }, "pong-wrong-instance");
+	// A human quoting the nonce is ignored; another instance of the same agent answering means a shared mention.
+	expect(
+		(
+			await app.post(
+				"/api/messages",
+				{ topic: "agents", body: `pong ${buildNonce}`, meta: { reply_to: buildPing?.seq } },
+				cookie,
+				"pong-human",
+			)
+		).status,
+	).toBe(200);
+	await post(
+		laptop,
+		{ topic: "agents", body: `pong ${buildNonce}`, meta: { reply_to: buildPing?.seq } },
+		"pong-wrong-instance",
+	);
 	await fromBoard(build, (message) => message.body.includes("reaches more than one agent"));
 	expect((await checks(build)).you?.status).toBe("shared");
 
@@ -112,9 +136,26 @@ it("pings each announced agent, records its pong, and reminds an agent that miss
 	expect(nudge).toMatchObject({ topic: "project" });
 	expect(nudge?.body).toMatch(/^@codex\/build your listener failed the roll call/);
 	const more = await post(build, { topic: "project", body: "Still building." }, "work-2");
-	await post(laptop, { topic: "project", body: "Unrelated." }, "work-3");
-	await expect.poll(async () => (await checks(build)).you?.status, { timeout: 5000 }).toBe("no_answer");
+	// The loop handles messages in order, so once it has pinged a later announcement it has passed work-2.
+	const later = await post(
+		laptop,
+		{ topic: "agents", body: "codex@laptop again, @codex/laptop", tags: ["roll-call"] },
+		"reannounce-laptop",
+	);
+	await fromBoard(laptop, (message) => message.meta.reply_to === later.seq);
 	expect((await board(build)).filter((message) => message.meta.reply_to === more.seq)).toEqual([]);
+	expect((await checks(build)).you?.status).toBe("no_answer");
+
+	// An agent that answers only when asked is never pinged and can't be re-tested.
+	const asked = await enroll("phone");
+	const quiet = await post(
+		asked,
+		{ topic: "agents", body: "codex@phone, checks when asked", tags: ["roll-call", "when-asked"] },
+		"announce-phone",
+	);
+	await expect.poll(async () => (await checks(asked)).you?.status, { timeout: 15000 }).toBe("when_asked");
+	expect((await board(asked)).filter((message) => message.meta.reply_to === quiet.seq)).toEqual([]);
+	expect((await call(asked, "POST", "/api/rollcall/test", undefined, "phone-test")).status).toBe(409);
 
 	// Agents can test only themselves; the human can test anyone who announced.
 	const other = `/api/rollcall/test?agent=codex&instance=${encodeURIComponent((await checks(laptop)).you?.instance ?? "")}`;

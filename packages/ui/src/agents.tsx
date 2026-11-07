@@ -170,18 +170,29 @@ function Listening({
 	readonly onPinged: () => void;
 }) {
 	const [busy, setBusy] = useState(false);
-	const where = check.mention.includes("/") ? check.mention.slice(check.mention.indexOf("/") + 1) : "MCP";
+	const [refused, setRefused] = useState("");
+	const where = check.instance.startsWith("extension:mcp:")
+		? "MCP"
+		: check.mention.includes("/")
+			? check.mention.slice(check.mention.indexOf("/") + 1)
+			: check.agent;
 	const took =
 		check.status === "listening" && check.pinged_at !== null && check.answered_at !== null
 			? ` · ${Math.max(1, Math.round((check.answered_at - check.pinged_at) / 1000))}s`
 			: "";
 	const ping = () => {
 		setBusy(true);
+		setRefused("");
 		const target = new URLSearchParams({ agent: check.agent, instance: check.instance });
-		// The board pings within seconds; reload after the pong has had a moment to land.
+		// A listening agent answers within seconds; reload twice so a quick pong and a slower one both show.
 		void Effect.runPromise(
 			Effect.result(accountPost(`/api/rollcall/test?${target}`, {}, undefined, crypto.randomUUID())).pipe(
-				Effect.andThen(Effect.sleep("4 seconds")),
+				Effect.tap((result) =>
+					result._tag === "Failure" ? Effect.sync(() => setRefused(result.failure.message)) : Effect.void,
+				),
+				Effect.andThen(Effect.sleep("5 seconds")),
+				Effect.andThen(Effect.sync(onPinged)),
+				Effect.andThen(Effect.sleep("25 seconds")),
 			),
 		).then(() => {
 			setBusy(false);
@@ -208,6 +219,7 @@ function Listening({
 					Ping
 				</Button>
 			)}
+			{refused && <span className="text-[12px] text-danger">{refused}</span>}
 		</span>
 	);
 }

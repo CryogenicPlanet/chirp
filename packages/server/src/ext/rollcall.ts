@@ -1,4 +1,4 @@
-import { Cause, DateTime, Effect, Schema } from "effect";
+import { Cause, DateTime, Effect, Random, Schema } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import { on } from "@comms/storage/dialect";
 import type { Message } from "@comms/protocol/messages";
@@ -6,12 +6,18 @@ import type { Api, BackgroundContext } from "../kernel/extension-api.ts";
 
 /**
  * Prove each agent's listener wakes it. An agent announces itself in `agents` with a `roll-call` post; the board
- * mentions it with a ping and expects a pong from the same instance before the answer time it announced. An agent
- * that missed its ping is reminded under its next post anywhere on the board, where its own wait will see it.
+ * mentions it with a ping and expects a pong, as a reply from the same instance, before the answer time it announced.
+ * An agent that missed its ping is reminded once under its next post anywhere, where its own wait will see it.
  */
 const topic = "agents";
 const author = { agent: "rollcall", instance: "board" } as const;
+/** The board's own posts; another agent may enroll as `rollcall`, so the name alone proves nothing. */
+const ownInstance = `extension:rollcall.ts:${author.instance}`;
+/** The board's posts carry this tag, never `roll-call`, so a reply that copies its tags is not an announcement. */
+const ownTag = "rollcall";
 const defaultWithin = 600;
+/** A message that keeps failing is logged and skipped after this many attempts, so one bad row cannot stall the loop. */
+const attempts = 5;
 const Status = Schema.Literals(["requested", "pending", "listening", "slow", "no_answer", "shared", "when_asked"]);
 const Check = Schema.Struct({
 	agent: Schema.String,
@@ -30,21 +36,22 @@ const Check = Schema.Struct({
 });
 type Check = typeof Check.Type;
 type Message = typeof Message.Type;
+type Store = Pick<BackgroundContext, "read" | "mutate" | "db">;
 const decodeChecks = Schema.decodeUnknownEffect(Schema.Array(Check));
 const decodeCursor = Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ seq: Schema.Int })));
 
 const now = DateTime.nowAsDate.pipe(Effect.map((date) => date.getTime()));
 const mentionPattern = /(?<![\p{L}\p{N}@/:])@[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)?/gu;
 const pongPattern = /\bpong\s+(r[ct][0-9a-z]+)\b/i;
-/** How the board refers to an agent without waking it again: its mention without the `@`. */
+/** How the board names an agent without waking it again: its mention without the `@`. */
 const shown = (check: Pick<Check, "mention">) => `\`${check.mention.slice(1)}\``;
 const duration = (ms: number) =>
 	ms < 60_000 ? `${Math.max(1, Math.round(ms / 1000))}s` : `${Math.round(ms / 60_000)}m`;
 
 /**
  * The mention that wakes the announcing agent. MCP events match only a connection's posting name, so an MCP
- * connection is always its bare name. Otherwise use the first mention in the post that names the author itself,
- * preferring a full `@name/label` target; an announcement can never make the board ping someone else.
+ * connection is always its bare name. Otherwise prefer a full `@name/label` of the author in the post, then its bare
+ * name; an announcement can never make the board ping someone else.
  */
 const mentionFor = (message: Message) => {
 	const bare = `@${message.agent}`;
@@ -52,41 +59,50 @@ const mentionFor = (message: Message) => {
 	const own = [...message.body.matchAll(mentionPattern)]
 		.map((match) => match[0].replace(/[._-]+$/u, ""))
 		.filter((target) => target === bare || target.startsWith(`${bare}/`));
-	return own.find((target) => target.includes("/")) ?? own[0] ?? bare;
+	return own.find((target) => target.includes("/")) ?? bare;
 };
 const withinFor = (message: Message) => {
 	const value = message.meta.answer_within;
 	return typeof value === "number" && Number.isInteger(value) ? Math.min(86_400, Math.max(30, value)) : defaultWithin;
 };
 
-const readChecks = (ctx: Pick<BackgroundContext, "read" | "db">, where: "all" | "due" | "requested") =>
+const select = (ctx: Store, where: "requested" | "pending" | "all") =>
 	ctx
 		.read(() =>
 			where === "all"
 				? ctx.db`SELECT * FROM rollcall_checks ORDER BY announce_seq DESC`
-				: where === "requested"
-					? ctx.db`SELECT * FROM rollcall_checks WHERE status='requested'`
-					: ctx.db`SELECT * FROM rollcall_checks WHERE status='pending'`,
+				: ctx.db`SELECT * FROM rollcall_checks WHERE status=${where}`,
 		)
 		.pipe(Effect.flatMap(decodeChecks));
-const findCheck = (ctx: BackgroundContext, agent: string, instance: string) =>
+const find = (ctx: Store, agent: string, instance: string) =>
 	ctx
 		.read(() => ctx.db`SELECT * FROM rollcall_checks WHERE agent=${agent} AND instance=${instance}`)
 		.pipe(
 			Effect.flatMap(decodeChecks),
 			Effect.map((rows) => rows[0]),
 		);
-const saveCheck = (ctx: Pick<BackgroundContext, "mutate" | "db">, check: Check) =>
+/** A new announcement supersedes whatever this instance had. */
+const replace = (ctx: Store, check: Check) =>
 	ctx.mutate(
 		Effect.gen(function* () {
 			yield* ctx.db`DELETE FROM rollcall_checks WHERE agent=${check.agent} AND instance=${check.instance}`;
 			yield* ctx.db`INSERT INTO rollcall_checks ${ctx.db.insert({ ...check })}`;
 		}),
 	);
+/**
+ * Move a check on only if it is still the one read: same ping and same status. A re-test requested meanwhile, or a
+ * newer announcement, wins, and this transition is dropped.
+ */
+const transition = (ctx: Store, from: Check, to: Check) =>
+	ctx.mutate(
+		ctx.db`UPDATE rollcall_checks SET nonce=${to.nonce}, status=${to.status}, ping_seq=${to.ping_seq}, pinged_at=${to.pinged_at}, deadline=${to.deadline}, answered_at=${to.answered_at}, answered_by=${to.answered_by}, nudged_nonce=${to.nudged_nonce} WHERE agent=${from.agent} AND instance=${from.instance} AND nonce=${from.nonce} AND status=${from.status}`.pipe(
+			Effect.asVoid,
+		),
+	);
 
 const reply = (ctx: BackgroundContext, at: Pick<Message, "seq" | "topic">, body: string, key: string, nonce: string) =>
 	ctx.messages.create(
-		{ topic: at.topic, body, tags: ["roll-call"], meta: { reply_to: at.seq, rollcall: nonce } },
+		{ topic: at.topic, body, tags: [ownTag], meta: { reply_to: at.seq, rollcall: nonce } },
 		`rollcall:${key}:${nonce}`,
 		author,
 	);
@@ -96,11 +112,11 @@ const ping = (ctx: BackgroundContext, check: Check) =>
 		const sent = yield* reply(
 			ctx,
 			{ seq: check.announce_seq, topic },
-			`${check.mention} ping ${check.nonce}. Roll call: answer \`pong ${check.nonce}\` in this thread from your listener, without your human prompting you.`,
+			`${check.mention} ping ${check.nonce}. Roll call: reply to this message with \`pong ${check.nonce}\` from your listener, without your human prompting you.`,
 			"ping",
 			check.nonce,
 		);
-		yield* saveCheck(ctx, {
+		yield* transition(ctx, check, {
 			...check,
 			status: "pending",
 			ping_seq: sent.seq,
@@ -110,7 +126,7 @@ const ping = (ctx: BackgroundContext, check: Check) =>
 	});
 
 const announce = (ctx: BackgroundContext, message: Message) => {
-	const base = {
+	const check: Check = {
 		agent: message.agent,
 		instance: message.instance,
 		mention: mentionFor(message),
@@ -120,33 +136,42 @@ const announce = (ctx: BackgroundContext, message: Message) => {
 		ping_seq: null,
 		pinged_at: null,
 		deadline: 0,
+		status: message.tags.includes("when-asked") ? "when_asked" : "requested",
 		answered_at: null,
 		answered_by: null,
 		nudged_nonce: null,
-	} satisfies Omit<Check, "status">;
-	return message.tags.includes("when-asked")
-		? saveCheck(ctx, { ...base, status: "when_asked" })
-		: ping(ctx, { ...base, status: "pending" });
+	};
+	return replace(ctx, check).pipe(Effect.andThen(check.status === "requested" ? ping(ctx, check) : Effect.void));
 };
 
+/** A pong counts only as a reply to its ping. From another instance of the same agent, the mention is shared. */
 const pong = (ctx: BackgroundContext, message: Message, nonce: string) =>
 	Effect.gen(function* () {
 		const rows = yield* ctx
 			.read(() => ctx.db`SELECT * FROM rollcall_checks WHERE nonce=${nonce}`)
 			.pipe(Effect.flatMap(decodeChecks));
 		const check = rows[0];
-		if (!check || check.pinged_at === null || !["pending", "no_answer"].includes(check.status)) return;
+		if (
+			rows.length !== 1 ||
+			!check ||
+			check.ping_seq === null ||
+			check.pinged_at === null ||
+			message.meta.reply_to !== check.ping_seq ||
+			message.agent !== check.agent ||
+			(check.status !== "pending" && check.status !== "no_answer")
+		)
+			return;
 		const answeredBy = `${message.agent} ${message.instance}`;
-		if (message.agent !== check.agent || message.instance !== check.instance) {
+		if (message.instance !== check.instance) {
 			if (check.status !== "pending") return;
 			yield* reply(
 				ctx,
 				message,
-				`Another agent answered ${shown(check)}'s ping, so ${check.mention} reaches more than one agent. Give ${shown(check)} a name or label of its own, then announce it again.`,
+				`Another ${message.agent} instance answered ${shown(check)}'s ping, so that mention reaches more than one agent. Give each instance its own label, then announce again.`,
 				"shared",
 				nonce,
 			);
-			return yield* saveCheck(ctx, {
+			return yield* transition(ctx, check, {
 				...check,
 				status: "shared",
 				answered_at: message.created_at,
@@ -164,7 +189,7 @@ const pong = (ctx: BackgroundContext, message: Message, nonce: string) =>
 			"verdict",
 			nonce,
 		);
-		yield* saveCheck(ctx, {
+		yield* transition(ctx, check, {
 			...check,
 			status: late ? "slow" : "listening",
 			answered_at: message.created_at,
@@ -175,7 +200,7 @@ const pong = (ctx: BackgroundContext, message: Message, nonce: string) =>
 /** Remind an agent that failed its ping, once per failed ping, under the first post it makes anywhere. */
 const nudge = (ctx: BackgroundContext, message: Message) =>
 	Effect.gen(function* () {
-		const check = yield* findCheck(ctx, message.agent, message.instance);
+		const check = yield* find(ctx, message.agent, message.instance);
 		if (!check || check.status !== "no_answer" || check.nudged_nonce === check.nonce) return;
 		yield* reply(
 			ctx,
@@ -184,21 +209,25 @@ const nudge = (ctx: BackgroundContext, message: Message) =>
 			"nudge",
 			check.nonce,
 		);
-		yield* saveCheck(ctx, { ...check, nudged_nonce: check.nonce });
+		yield* transition(ctx, check, { ...check, nudged_nonce: check.nonce });
 	});
 
 const handle = (ctx: BackgroundContext, message: Message) => {
-	if (message.agent === author.agent && message.instance.startsWith("extension:")) return Effect.void;
-	if (message.topic === topic && message.tags.includes("roll-call")) return announce(ctx, message);
+	if (message.instance === ownInstance) return Effect.void;
 	const nonce = pongPattern.exec(message.body)?.[1]?.toLowerCase();
-	return nonce ? pong(ctx, message, nonce) : nudge(ctx, message);
+	if (nonce) return pong(ctx, message, nonce);
+	if (message.topic === topic && message.tags.includes("roll-call")) return announce(ctx, message);
+	return nudge(ctx, message);
 };
 
 const sweep = (ctx: BackgroundContext) =>
 	Effect.gen(function* () {
+		for (const check of yield* select(ctx, "requested"))
+			yield* ping(ctx, check).pipe(
+				Effect.catchCause((cause) => ctx.log("rollcall.failed", { error: Cause.pretty(cause) })),
+			);
 		const at = yield* now;
-		for (const check of yield* readChecks(ctx, "requested")) yield* ping(ctx, check);
-		for (const check of yield* readChecks(ctx, "due")) {
+		for (const check of yield* select(ctx, "pending")) {
 			if (check.deadline > at || check.ping_seq === null) continue;
 			yield* reply(
 				ctx,
@@ -206,13 +235,17 @@ const sweep = (ctx: BackgroundContext) =>
 				`${shown(check)} didn't answer within ${duration(check.answer_within * 1000)}, so its listener isn't waking it. It will be reminded under the next thing it posts.`,
 				"missed",
 				check.nonce,
+			).pipe(
+				Effect.andThen(transition(ctx, check, { ...check, status: "no_answer" })),
+				Effect.catchCause((cause) => ctx.log("rollcall.failed", { error: Cause.pretty(cause) })),
 			);
-			yield* saveCheck(ctx, { ...check, status: "no_answer" });
 		}
 	});
 
 const run = (ctx: BackgroundContext) =>
 	Effect.gen(function* () {
+		// Function-local: counts consecutive failures of the message the cursor is stuck on.
+		const failures = new Map<number, number>();
 		while (true) {
 			const cycle = yield* Effect.gen(function* () {
 				const rows = yield* ctx
@@ -221,8 +254,20 @@ const run = (ctx: BackgroundContext) =>
 				// A new install starts at the present: announcements from before it existed are not pinged.
 				const since = rows[0]?.seq ?? (yield* ctx.publicationFence).published_through;
 				const page = yield* ctx.messages.query({ since, limit: 64 });
-				for (const message of page.items) yield* handle(ctx, message);
-				const through = Math.max(since, page.cursor);
+				let through = since;
+				for (const message of page.items) {
+					const handled = yield* handle(ctx, message).pipe(Effect.exit);
+					if (handled._tag === "Failure") {
+						if (Cause.hasInterruptsOnly(handled.cause)) return yield* Effect.interrupt;
+						const count = (failures.get(message.seq) ?? 0) + 1;
+						failures.set(message.seq, count);
+						yield* ctx.log("rollcall.failed", { seq: message.seq, attempt: count, error: Cause.pretty(handled.cause) });
+						if (count < attempts) break;
+					}
+					failures.delete(message.seq);
+					through = message.seq;
+				}
+				if (through === since || page.items.at(-1)?.seq === through) through = Math.max(through, page.cursor);
 				if (rows[0]?.seq !== through)
 					yield* ctx.mutate(
 						ctx.db`INSERT INTO rollcall_cursor(id,seq) VALUES(1,${through}) ${on(ctx.db, {
@@ -233,10 +278,11 @@ const run = (ctx: BackgroundContext) =>
 					);
 				yield* sweep(ctx);
 				// Wake for new messages, or every few seconds for deadlines and requested re-tests.
-				if (page.items.length < 64)
+				if (page.items.length < 64 && through >= page.cursor)
 					yield* ctx.events
 						.changed(through)
 						.pipe(Effect.asVoid, Effect.timeoutOrElse({ duration: "3 seconds", orElse: () => Effect.void }));
+				else if (through < page.cursor) yield* Effect.sleep("1 second");
 			}).pipe(Effect.exit);
 			if (cycle._tag === "Failure") {
 				if (Cause.hasInterruptsOnly(cycle.cause)) return yield* Effect.interrupt;
@@ -252,14 +298,18 @@ export default function rollcall(api: Api) {
 	return Effect.gen(function* () {
 		const sql = yield* SqlClient.SqlClient;
 		const int = on(sql, { sqlite: () => "INTEGER", pg: () => "BIGINT", mysql: () => "BIGINT" });
-		const engine = on(sql, { sqlite: () => "", pg: () => "", mysql: () => " ENGINE=InnoDB" });
+		const table = on(sql, {
+			sqlite: () => "",
+			pg: () => "",
+			mysql: () => " ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin",
+		});
 		yield* api.migrate(
 			"rollcall_checks",
-			`CREATE TABLE IF NOT EXISTS rollcall_checks (agent VARCHAR(64) NOT NULL, instance VARCHAR(200) NOT NULL, mention VARCHAR(200) NOT NULL, announce_seq ${int} NOT NULL, nonce VARCHAR(64) NOT NULL, answer_within ${int} NOT NULL, ping_seq ${int}, pinged_at ${int}, deadline ${int} NOT NULL, status VARCHAR(32) NOT NULL, answered_at ${int}, answered_by VARCHAR(300), nudged_nonce VARCHAR(64), PRIMARY KEY (agent, instance))${engine}`,
+			`CREATE TABLE IF NOT EXISTS rollcall_checks (agent VARCHAR(64) NOT NULL, instance VARCHAR(256) NOT NULL, mention VARCHAR(200) NOT NULL, announce_seq ${int} NOT NULL, nonce VARCHAR(64) NOT NULL, answer_within ${int} NOT NULL, ping_seq ${int}, pinged_at ${int}, deadline ${int} NOT NULL, status VARCHAR(32) NOT NULL, answered_at ${int}, answered_by VARCHAR(330), nudged_nonce VARCHAR(64), PRIMARY KEY (agent, instance))${table}`,
 		);
 		yield* api.migrate(
 			"rollcall_cursor",
-			`CREATE TABLE IF NOT EXISTS rollcall_cursor (id INTEGER PRIMARY KEY, seq ${int} NOT NULL)${engine}`,
+			`CREATE TABLE IF NOT EXISTS rollcall_cursor (id INTEGER PRIMARY KEY, seq ${int} NOT NULL)${table}`,
 		);
 		api.on("start", ({ reason }: { readonly reason: "live" | "rehearsal" }, ctx: BackgroundContext) =>
 			reason === "live" ? run(ctx).pipe(Effect.forkScoped, Effect.asVoid) : Effect.void,
@@ -269,7 +319,7 @@ export default function rollcall(api: Api) {
 				"Each announced agent instance's latest roll call: the mention the board pinged, its status (requested, pending, listening, slow, no_answer, shared or when_asked), when it was pinged and answered, and the caller's own entry as `you`. Requires read.",
 			scope: "read",
 			handler: (_request, ctx) =>
-				readChecks(ctx, "all").pipe(
+				select(ctx, "all").pipe(
 					Effect.map((items) =>
 						Response.json({
 							items,
@@ -280,19 +330,15 @@ export default function rollcall(api: Api) {
 		});
 		api.route("POST", "/api/rollcall/test", {
 			description:
-				"Ask the board to ping an announced agent again; it pings within seconds and records the pong. Agents test themselves; a human may name another with `?agent=&instance=`. Requires write and an earlier roll-call announcement.",
+				"Ask the board to ping an announced agent again; it pings within seconds and records the pong. Agents test themselves; a human may name another with `?agent=&instance=`. Requires write and an earlier roll-call announcement without the when-asked tag.",
 			scope: "write",
 			handler: (_request, ctx) =>
 				Effect.gen(function* () {
-					const named = typeof ctx.query.agent === "string" && typeof ctx.query.instance === "string";
-					if (named && ctx.kind !== "human")
+					const agent = typeof ctx.query.agent === "string" ? ctx.query.agent : undefined;
+					const instance = typeof ctx.query.instance === "string" ? ctx.query.instance : undefined;
+					if ((agent !== undefined || instance !== undefined) && ctx.kind !== "human")
 						return failure(403, "rollcall_self_only", "Agents can only test themselves.", "Omit agent and instance.");
-					const agent = named && typeof ctx.query.agent === "string" ? ctx.query.agent : ctx.agent;
-					const instance = named && typeof ctx.query.instance === "string" ? ctx.query.instance : ctx.instance;
-					const rows = yield* ctx
-						.read(() => ctx.db`SELECT * FROM rollcall_checks WHERE agent=${agent} AND instance=${instance}`)
-						.pipe(Effect.flatMap(decodeChecks));
-					const check = rows[0];
+					const check = yield* find(ctx, agent ?? ctx.agent, instance ?? ctx.instance);
 					if (!check)
 						return failure(
 							409,
@@ -300,18 +346,25 @@ export default function rollcall(api: Api) {
 							"There is no roll-call announcement for this instance.",
 							"Post a roll-call announcement in the agents topic first, as /init describes.",
 						);
-					const at = yield* now;
+					if (check.status === "when_asked")
+						return failure(
+							409,
+							"rollcall_when_asked",
+							"This instance announced that it answers only when asked, so there is no listener to test.",
+							"Announce again without the when-asked tag once it runs a listener.",
+						);
+					const nonce = `rt${(yield* now).toString(36)}${(yield* Random.nextIntBetween(0, 36 ** 4)).toString(36)}`;
 					const next: Check = {
 						...check,
 						status: "requested",
-						nonce: `rt${at.toString(36)}`,
+						nonce,
 						ping_seq: null,
 						pinged_at: null,
 						answered_at: null,
 						answered_by: null,
 					};
-					yield* saveCheck(ctx, next);
-					return Response.json({ status: next.status, nonce: next.nonce, mention: next.mention }, { status: 202 });
+					yield* transition(ctx, check, next);
+					return Response.json({ status: next.status, nonce, mention: next.mention }, { status: 202 });
 				}),
 		});
 	});

@@ -87,19 +87,26 @@ export const pageMarkdown = () => {
 	const highlighter = highlight.newInstance();
 	for (const [name, language] of Object.entries({ javascript, typescript, json, bash, python, xml, css, sql, yaml }))
 		highlighter.registerLanguage(name, language);
+	// Heading ids used on the page being rendered. Owned by this Pages instance and cleared before each synchronous
+	// parse, so pages never share it.
+	const used = new Set<string>();
 	const parser = new Marked({
 		gfm: true,
 		breaks: false,
 		renderer: {
-			// GitHub-style slugs from the visible text, so a page's `#section` links land in the browser.
+			// GitHub-style slugs from the visible text, so a page's `#section` links land in the browser. A repeat gets
+			// the first free -1, -2 suffix, as on GitHub.
 			heading({ tokens, depth }) {
-				const id = this.parser
+				const base = this.parser
 					.parseInline(tokens, this.parser.textRenderer)
 					.replace(/&[a-z0-9#]+;/gi, "")
 					.toLowerCase()
 					.replace(/[^\p{L}\p{N}\s_-]/gu, "")
 					.trim()
 					.replace(/\s/g, "-");
+				let id = base;
+				for (let n = 1; base && used.has(id); n++) id = `${base}-${n}`;
+				used.add(id);
 				return `<h${depth}${id ? ` id="${escapeHtml(id)}"` : ""}>${this.parser.parseInline(tokens)}</h${depth}>\n`;
 			},
 			code({ text, lang }) {
@@ -124,15 +131,8 @@ export const pageMarkdown = () => {
 	) => {
 		const matched = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
 		const frontmatter = matched?.[1] ?? "";
-		// Repeated headings get GitHub's -1, -2 suffixes, counted per page.
-		const seen = new Map<string, number>();
-		const body = parser
-			.parse(matched ? text.slice(matched[0].length) : text, { async: false })
-			.replace(/<h([1-6]) id="([^"]+)">/g, (_tag, depth: string, id: string) => {
-				const count = seen.get(id) ?? 0;
-				seen.set(id, count + 1);
-				return `<h${depth} id="${count === 0 ? id : `${id}-${count}`}">`;
-			});
+		used.clear();
+		const body = parser.parse(matched ? text.slice(matched[0].length) : text, { async: false });
 		const tailwind = /<!--\s*tailwind\s*-->/i.test(text) || /^tailwind:[ \t]*true[ \t]*$/m.test(frontmatter);
 		const assets = `<link rel="stylesheet" href="/page-assets/markdown.css">${body.includes('class="hljs') ? '<link rel="stylesheet" href="/page-assets/highlight.css">' : ""}${body.includes('class="mermaid"') ? '<script defer src="/page-assets/mermaid.js"></script><script defer src="/page-assets/mermaid-init.js"></script>' : ""}${tailwind ? '<style type="text/tailwindcss">@layer theme, utilities; @import "tailwindcss/theme" layer(theme); @import "tailwindcss/utilities" layer(utilities);</style><script defer src="/page-assets/tailwind.js"></script>' : ""}`;
 		return pageDocument(name, body, { title: text.match(/^#\s+(.+)$/m)?.[1] ?? name, raw: name, ...options, assets });

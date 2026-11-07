@@ -77,7 +77,8 @@ const bodyLimit = 16384;
 // The kernel refuses other names: boot reserves the board's human and itself, and system is the extension's own voice.
 // Only the human reaches consent, so the signed-in identity names the human whichever boot this runs under.
 const agentName = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-const reservedAgents: ReadonlyArray<string> = ["system", "boot"];
+// `rollcall` is the board's roll-call extension (ext/rollcall.ts); a connection posing as it could fake verdicts.
+const reservedAgents: ReadonlyArray<string> = ["system", "boot", "rollcall"];
 const reservedAgent = (agent: string, human: string) => agent === human || reservedAgents.includes(agent);
 /** A client's name as consent shows it. Claude Code names itself after the server, so here it registers as "Claude Code (chirp)". */
 const shownName = (clientName: string) => clientName.replace(/\s*\(chirp\)\s*$/i, "") || clientName;
