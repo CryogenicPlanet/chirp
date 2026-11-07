@@ -84,11 +84,11 @@ export async function conversation(test: TestContext) {
 			if (!cookie) throw Error("Missing cookie");
 			return cookie;
 		};
-		const setup = async () => {
+		const setup = async (name = "rahul") => {
 			await expect.poll(() => /\/setup is open, code ([A-F0-9]+)/.exec(output)?.[1]).toBeTruthy();
 			const code = /\/setup is open, code ([A-F0-9]+)/.exec(output)?.[1];
 			const options = Schema.decodeUnknownSync(ceremony)(
-				await (await post("/_boot/auth/setup/options", { code, name: "rahul" })).json(),
+				await (await post("/_boot/auth/setup/options", { code, name })).json(),
 			);
 			expect(
 				(

@@ -256,7 +256,12 @@ export function Agents() {
 	const errors = [tokens.error, activity.error].filter((error) => error !== undefined && error !== null);
 	// oxlint-disable-next-line effecttsgo/global-date -- a render-time clock is enough when the activity snapshot is missing.
 	const now = activity.value?.as_of ?? Date.now();
-	const hidden = new Set(["system", "rollcall", ...(me.value?.kind === "human" ? [me.value.agent] : [])]);
+	const hidden = new Set([
+		"system",
+		"rollcall",
+		"rollcall-board",
+		...(me.value?.kind === "human" ? [me.value.agent] : []),
+	]);
 	const agents =
 		settled && (tokens.value || activity.value)
 			? rows(tokens.value?.items ?? [], activity.value?.items ?? [], rollcall.value ?? [], now, hidden)

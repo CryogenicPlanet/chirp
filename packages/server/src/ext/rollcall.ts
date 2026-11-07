@@ -3,6 +3,7 @@ import { SqlClient } from "effect/unstable/sql";
 import { on } from "@comms/storage/dialect";
 import type { Message } from "@comms/protocol/messages";
 import type { Api, BackgroundContext } from "../kernel/extension-api.ts";
+import { boardOwner } from "../kernel/board-settings.ts";
 
 /**
  * Prove each agent's listener wakes it. An agent announces itself in `agents` with a `roll-call` post; the board
@@ -11,6 +12,8 @@ import type { Api, BackgroundContext } from "../kernel/extension-api.ts";
  */
 const topic = "agents";
 const author = { agent: "rollcall", instance: "board" } as const;
+/** Posting as the board's human is refused, so on a board whose owner took `rollcall` the board posts under this. */
+const fallbackAgent = "rollcall-board";
 /** The board's own posts; another agent may enroll as `rollcall`, so the name alone proves nothing. */
 const ownInstance = `extension:rollcall.ts:${author.instance}`;
 /** The board's posts carry this tag, never `roll-call`, so a reply that copies its tags is not an announcement. */
@@ -101,11 +104,15 @@ const transition = (ctx: Store, from: Check, to: Check) =>
 	);
 
 const reply = (ctx: BackgroundContext, at: Pick<Message, "seq" | "topic">, body: string, key: string, nonce: string) =>
-	ctx.messages.create(
-		{ topic: at.topic, body, tags: [ownTag], meta: { reply_to: at.seq, rollcall: nonce } },
-		`rollcall:${key}:${nonce}`,
-		author,
-	);
+	Effect.gen(function* () {
+		// Read each time: boot names the owner from the launch after setup.
+		const owner = yield* boardOwner.pipe(Effect.orElseSucceed(() => null));
+		return yield* ctx.messages.create(
+			{ topic: at.topic, body, tags: [ownTag], meta: { reply_to: at.seq, rollcall: nonce } },
+			`rollcall:${key}:${nonce}`,
+			owner === author.agent ? { ...author, agent: fallbackAgent } : author,
+		);
+	});
 
 const ping = (ctx: BackgroundContext, check: Check) =>
 	Effect.gen(function* () {
@@ -125,7 +132,14 @@ const ping = (ctx: BackgroundContext, check: Check) =>
 		});
 	});
 
-const announce = (ctx: BackgroundContext, message: Message) => {
+const announce = (ctx: BackgroundContext, message: Message) =>
+	Effect.gen(function* () {
+		// A replay after a restart must not undo what happened since: a re-test or a newer announcement wins.
+		const current = yield* find(ctx, message.agent, message.instance);
+		if (current && current.announce_seq >= message.seq) return;
+		yield* announceNew(ctx, message);
+	});
+const announceNew = (ctx: BackgroundContext, message: Message) => {
 	const check: Check = {
 		agent: message.agent,
 		instance: message.instance,

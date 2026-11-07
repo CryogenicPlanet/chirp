@@ -20,6 +20,7 @@ const Check = Schema.Struct({
 	ping_seq: Schema.NullOr(Schema.Int),
 });
 const Checks = Schema.Struct({ items: Schema.Array(Check), you: Schema.NullOr(Check) });
+const Cursor = Schema.Array(Schema.Struct({ seq: Schema.Int }));
 
 it("pings each announced agent, records its pong, and reminds an agent that missed it under its next post", async (test) => {
 	const fixture = await conversation(test);
@@ -171,6 +172,18 @@ it("pings each announced agent, records its pong, and reminds an agent that miss
 	await fixture.sql("ALTER TABLE rollcall_checks_away RENAME TO rollcall_checks");
 	await fromBoard(laptop, (message) => message.meta.reply_to === retried.seq);
 
+	// A replay from an older cursor, as after a restart before the cursor was saved, keeps a newer re-test.
+	expect((await call(laptop, "POST", "/api/rollcall/test", undefined, "retest-laptop")).status).toBe(202);
+	await expect.poll(async () => (await checks(laptop)).you?.status, { timeout: 15000 }).toBe("pending");
+	const retest = (await checks(laptop)).you?.nonce ?? "";
+	expect(retest).toMatch(/^rt/);
+	const cursorAt = async () =>
+		Schema.decodeUnknownSync(Cursor)(await fixture.sql("SELECT seq FROM rollcall_cursor WHERE id=1"))[0]?.seq ?? 0;
+	const cursor = await cursorAt();
+	await fixture.sql(`UPDATE rollcall_cursor SET seq=${announced.seq - 1} WHERE id=1`);
+	await expect.poll(cursorAt, { timeout: 15000 }).toBeGreaterThanOrEqual(cursor);
+	expect((await checks(laptop)).you).toMatchObject({ nonce: retest, status: "pending" });
+
 	// Agents can test only themselves; the human can test anyone who announced.
 	const other = `/api/rollcall/test?agent=codex&instance=${encodeURIComponent((await checks(laptop)).you?.instance ?? "")}`;
 	expect((await call(build, "POST", other, undefined, "cross-test")).status).toBe(403);
@@ -185,3 +198,47 @@ it("pings each announced agent, records its pong, and reminds an agent that miss
 	const unannounced = await enroll("fresh");
 	expect((await call(unannounced, "POST", "/api/rollcall/test", undefined, "fresh-test")).status).toBe(409);
 }, 90000);
+
+it("posts as rollcall-board on a board whose owner took the name rollcall", async (test) => {
+	const fixture = await conversation(test);
+	const first = await fixture.launch();
+	await first.setup("rollcall");
+	await first.ready(await first.login());
+	await first.stop();
+	// Boot names the owner to the app from the launch after setup.
+	const app = await fixture.launch();
+	const cookie = await app.login();
+	await app.ready(cookie);
+	const enrolled = await (await app.post("/auth/enroll", { name: "codex", kind: "codex", host: "laptop" })).json();
+	const scopes = ["read", "write"];
+	const proof = await app.assertion({ id: enrolled.id, decision: "approve", scopes, long_lived: false });
+	expect(
+		(
+			await fetch(`${app.url}/_boot/enroll/${enrolled.id}/approve`, {
+				method: "POST",
+				headers: { origin: "https://comms.test", "content-type": "application/json", [assertionHeader]: proof },
+				body: JSON.stringify({ decision: "approve", scopes, long_lived: false }),
+			})
+		).status,
+	).toBe(200);
+	const token = String(
+		(await (await app.post(`/auth/enroll/${enrolled.id}`, { device_secret: enrolled.device_secret })).json()).access,
+	);
+	const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+	const posted = await fetch(`${app.url}/api/messages`, {
+		method: "POST",
+		headers: { ...headers, "idempotency-key": "announce" },
+		body: JSON.stringify({ topic: "agents", body: "codex@laptop, @codex/laptop", tags: ["roll-call"] }),
+	});
+	expect(posted.status).toBe(200);
+	const announced = Schema.decodeUnknownSync(Item)(await posted.json());
+	await expect
+		.poll(
+			async () =>
+				Schema.decodeUnknownSync(Page)(
+					await (await fetch(`${app.url}/api/messages?topic=agents&newest=1&limit=50&mark=0`, { headers })).json(),
+				).items.find((message) => message.meta.reply_to === announced.seq)?.agent,
+			{ timeout: 15000 },
+		)
+		.toBe("rollcall-board");
+}, 60000);
