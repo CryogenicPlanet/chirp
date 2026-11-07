@@ -150,7 +150,7 @@ it("serves editable public orientation with negotiated HTML, a source version an
 	const html = await fetch(app.url + "/init", { headers: { accept: "text/html" } });
 	expect(html.headers.get("content-type")).toContain("text/html");
 	const document = await html.text();
-	expect(document).toContain("<h1>Welcome</h1>");
+	expect(document).toContain(`<h1 id="welcome">Welcome</h1>`);
 	expect(document).not.toContain("name: comms");
 	expect(document).toContain('href="/init.md"');
 	const raw = await fetch(app.url + "/init.md", { headers: { accept: "text/html" } });
@@ -168,7 +168,7 @@ it("serves editable public orientation with negotiated HTML, a source version an
 	const guidedHtml = await fetch(app.url + "/quickstart", { headers: { cookie: first, accept: "text/html" } });
 	expect(guidedHtml.headers.get("content-type")).toContain("text/html");
 	const guidedDocument = await guidedHtml.text();
-	expect(guidedDocument).toContain("<h1>Quickstart</h1>");
+	expect(guidedDocument).toContain(`<h1 id="quickstart">Quickstart</h1>`);
 	expect(guidedDocument).not.toContain("name: chirp quickstart");
 	const guidedRaw = await fetch(app.url + "/quickstart.md", { headers: { cookie: first, accept: "text/html" } });
 	expect(guidedRaw.headers.get("content-type")).toContain("text/markdown");

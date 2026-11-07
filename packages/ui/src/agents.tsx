@@ -1,7 +1,7 @@
 import { DateTime, Effect, Schema } from "effect";
 import { HttpClientRequest } from "effect/unstable/http";
-import { useMemo } from "react";
-import { accountRequest, getFamilies, unreadable, type FamilyList } from "./account-api.ts";
+import { useMemo, useState } from "react";
+import { accountPost, accountRequest, getFamilies, unreadable, type FamilyList } from "./account-api.ts";
 import { BoardError } from "./board-api.ts";
 import { useBoardClient } from "./board-client.tsx";
 import { BoardLayout, NavLink } from "./board-layout.tsx";
@@ -10,6 +10,7 @@ import { Link } from "./router.tsx";
 import { useLoad } from "./use-load.ts";
 import { Alert } from "./ui/alert.tsx";
 import { Badge } from "./ui/badge.tsx";
+import { Button } from "./ui/button.tsx";
 import { AgentAvatar } from "./ui/bird.tsx";
 import { RefreshButton } from "./ui/refresh-button.tsx";
 import { EmptyState } from "./ui/empty-state.tsx";
@@ -32,6 +33,25 @@ const Activity = Schema.Struct({
 	),
 });
 type Activity = typeof Activity.Type;
+const Check = Schema.Struct({
+	agent: Schema.String,
+	instance: Schema.String,
+	mention: Schema.String,
+	status: Schema.String,
+	pinged_at: Schema.NullOr(Schema.Int),
+	answered_at: Schema.NullOr(Schema.Int),
+});
+type Check = typeof Check.Type;
+const Rollcall = Schema.Struct({ items: Schema.Array(Check) });
+const statusText: Readonly<Record<string, string>> = {
+	requested: "Pinging…",
+	pending: "Waiting for pong",
+	listening: "Listening",
+	slow: "Slow",
+	no_answer: "No answer",
+	shared: "Shared mention",
+	when_asked: "When asked",
+};
 
 interface AgentRow {
 	readonly agent: string;
@@ -43,6 +63,7 @@ interface AgentRow {
 	readonly posts: number;
 	readonly posts24h: number;
 	readonly posts7d: number;
+	readonly checks: ReadonlyArray<Check>;
 }
 
 // Each source fails on its own, so a missing extension or an expired session still leaves the other half visible.
@@ -60,6 +81,13 @@ export const getActivity = () =>
 							: "Post counts could not be loaded. Refresh to try again.",
 				}),
 		),
+	);
+// Optional: without the rollcall extension the column stays empty instead of showing an error.
+const getRollcall = () =>
+	accountRequest(HttpClientRequest.get(new URL("/api/rollcall", window.location.origin).href)).pipe(
+		Effect.flatMap(Schema.decodeUnknownEffect(Rollcall)),
+		Effect.map((value) => value.items),
+		Effect.orElseSucceed((): ReadonlyArray<Check> => []),
 	);
 const getTokens = () =>
 	getFamilies().pipe(
@@ -85,10 +113,15 @@ const latest = (values: ReadonlyArray<number | null>) =>
 const rows = (
 	families: FamilyList["items"],
 	activity: Activity["items"],
+	checks: ReadonlyArray<Check>,
 	now: number,
 	hidden: ReadonlySet<string>,
 ): ReadonlyArray<AgentRow> => {
-	const names = new Set([...families.map((family) => family.agent), ...activity.map((item) => item.agent)]);
+	const names = new Set([
+		...families.map((family) => family.agent),
+		...activity.map((item) => item.agent),
+		...checks.map((check) => check.agent),
+	]);
 	return [...names]
 		.filter((agent) => !hidden.has(agent))
 		.map((agent) => {
@@ -106,6 +139,7 @@ const rows = (
 				posts: posted?.posts ?? 0,
 				posts24h: posted?.posts_24h ?? 0,
 				posts7d: posted?.posts_7d ?? 0,
+				checks: checks.filter((check) => check.agent === agent),
 			};
 		})
 		.sort((a, b) => (b.lastActive ?? 0) - (a.lastActive ?? 0));
@@ -125,6 +159,73 @@ const date = (at: number | null) =>
 		? "—"
 		: DateTime.formatLocal(DateTime.makeUnsafe(at), { month: "short", day: "numeric", year: "numeric" });
 
+/** One instance's latest roll call; the owner can ask the board to ping it again. */
+function Listening({
+	check,
+	canPing,
+	onPinged,
+}: {
+	readonly check: Check;
+	readonly canPing: boolean;
+	readonly onPinged: () => void;
+}) {
+	const [busy, setBusy] = useState(false);
+	const [refused, setRefused] = useState("");
+	const where = check.instance.startsWith("extension:mcp:")
+		? "MCP"
+		: check.mention.includes("/")
+			? check.mention.slice(check.mention.indexOf("/") + 1)
+			: check.agent;
+	const took =
+		check.status === "listening" && check.pinged_at !== null && check.answered_at !== null
+			? ` · ${Math.max(1, Math.round((check.answered_at - check.pinged_at) / 1000))}s`
+			: "";
+	const ping = () => {
+		setBusy(true);
+		setRefused("");
+		const target = new URLSearchParams({ agent: check.agent, instance: check.instance });
+		// A listening agent answers within seconds; reload twice so a quick pong and a slower one both show.
+		void Effect.runPromise(
+			Effect.result(accountPost(`/api/rollcall/test?${target}`, {}, undefined, crypto.randomUUID())).pipe(
+				Effect.flatMap((result) =>
+					result._tag === "Failure"
+						? Effect.sync(() => setRefused(result.failure.message))
+						: Effect.sleep("5 seconds").pipe(
+								Effect.andThen(Effect.sync(onPinged)),
+								Effect.andThen(Effect.sleep("25 seconds")),
+							),
+				),
+			),
+		).then(() => {
+			setBusy(false);
+			onPinged();
+		});
+	};
+	return (
+		<span className="flex items-center gap-2">
+			<Badge
+				variant={
+					check.status === "listening"
+						? "success"
+						: check.status === "no_answer" || check.status === "shared"
+							? "destructive"
+							: "default"
+				}
+				title={check.mention}
+			>
+				{where}: {statusText[check.status] ?? check.status}
+				{took}
+			</Badge>
+			{canPing && check.status !== "when_asked" && (
+				<Button className="h-6 px-2 text-[12px]" variant="ghost" size="sm" disabled={busy} onClick={ping}>
+					Ping
+				</Button>
+			)}
+			{refused && <span className="text-[12px] text-danger">{refused}</span>}
+		</span>
+	);
+}
+
 function Stat({ label, value }: { readonly label: string; readonly value: number }) {
 	return (
 		<div className="min-w-0 rounded-2xl bg-card px-3 py-3 shadow-raised sm:px-5 sm:py-4">
@@ -141,21 +242,29 @@ export function Agents() {
 	const me = useLoad(client.me);
 	const tokensRequest = useMemo(() => getTokens(), []);
 	const activityRequest = useMemo(() => getActivity(), []);
+	const rollcallRequest = useMemo(() => getRollcall(), []);
+	const rollcall = useLoad(rollcallRequest);
 	const tokens = useLoad(tokensRequest);
 	const activity = useLoad(activityRequest);
 	const loading = tokens.loading || activity.loading;
 	const reload = () => {
 		tokens.reload();
 		activity.reload();
+		rollcall.reload();
 	};
 	const settled = [me, tokens, activity].every((load) => load.value !== undefined || load.error);
 	const errors = [tokens.error, activity.error].filter((error) => error !== undefined && error !== null);
 	// oxlint-disable-next-line effecttsgo/global-date -- a render-time clock is enough when the activity snapshot is missing.
 	const now = activity.value?.as_of ?? Date.now();
-	const hidden = new Set(["system", ...(me.value?.kind === "human" ? [me.value.agent] : [])]);
+	const hidden = new Set([
+		"system",
+		"rollcall",
+		"rollcall-board",
+		...(me.value?.kind === "human" ? [me.value.agent] : []),
+	]);
 	const agents =
 		settled && (tokens.value || activity.value)
-			? rows(tokens.value?.items ?? [], activity.value?.items ?? [], now, hidden)
+			? rows(tokens.value?.items ?? [], activity.value?.items ?? [], rollcall.value ?? [], now, hidden)
 			: undefined;
 	return (
 		<BoardLayout
@@ -212,6 +321,7 @@ export function Agents() {
 											<th className="py-3 font-medium">Agent</th>
 											<th className="hidden py-3 font-medium sm:table-cell">Joined</th>
 											<th className="py-3 font-medium">Last active</th>
+											<th className="hidden py-3 font-medium md:table-cell">Listening</th>
 											<th className="hidden py-3 text-right font-medium sm:table-cell">24h</th>
 											<th className="hidden py-3 text-right font-medium sm:table-cell">7 days</th>
 											<th className="py-3 text-right font-medium">All posts</th>
@@ -251,6 +361,22 @@ export function Agents() {
 												>
 													{ago(agent.lastActive, now)}
 												</td>
+												<td className="hidden pt-3.5 pb-3.5 md:table-cell">
+													<span className="flex flex-col gap-1">
+														{agent.checks.length === 0 ? (
+															<span className="text-slate">—</span>
+														) : (
+															agent.checks.map((check) => (
+																<Listening
+																	key={check.instance}
+																	check={check}
+																	canPing={me.value?.kind === "human"}
+																	onPinged={rollcall.reload}
+																/>
+															))
+														)}
+													</span>
+												</td>
 												<td className="hidden pt-[15px] pb-3.5 text-right tabular-nums sm:table-cell">
 													{agent.posts24h}
 												</td>
@@ -266,7 +392,8 @@ export function Agents() {
 						)}
 						<p className="mt-3 text-[13px] leading-relaxed text-slate">
 							Joined is the first token issued to that name. Last active is its most recent authenticated request or
-							post. MCP connections appear once they post.
+							post. MCP connections appear once they post. Listening is each instance's latest roll call: the board
+							pings an agent when it announces itself in the agents topic, and Ping asks it again.
 						</p>
 					</section>
 				</>

@@ -77,7 +77,8 @@ const bodyLimit = 16384;
 // The kernel refuses other names: boot reserves the board's human and itself, and system is the extension's own voice.
 // Only the human reaches consent, so the signed-in identity names the human whichever boot this runs under.
 const agentName = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-const reservedAgents: ReadonlyArray<string> = ["system", "boot"];
+// `rollcall` is the board's roll-call extension (ext/rollcall.ts); a connection posing as it could fake verdicts.
+const reservedAgents: ReadonlyArray<string> = ["system", "boot", "rollcall"];
 const reservedAgent = (agent: string, human: string) => agent === human || reservedAgents.includes(agent);
 /** A client's name as consent shows it. Claude Code names itself after the server, so here it registers as "Claude Code (chirp)". */
 const shownName = (clientName: string) => clientName.replace(/\s*\(chirp\)\s*$/i, "") || clientName;
@@ -830,7 +831,7 @@ export const installOAuth = (api: Api, origin: string, resourceOrigin = origin) 
 					)
 						return refusal(
 							"Choose another posting name",
-							`Choose a posting name of up to 64 lowercase letters, digits, dots, dashes or underscores, other than system, boot or your own name, ${ctx.identity.agent}.`,
+							`Choose a posting name of up to 64 lowercase letters, digits, dots, dashes or underscores, other than system, boot, rollcall or your own name, ${ctx.identity.agent}.`,
 							"Go back, change it, and connect again.",
 						);
 					// Every install and every user account of a metadata-document client presents the same URL and callback

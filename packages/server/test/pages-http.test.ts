@@ -33,7 +33,7 @@ it("serves private Markdown with raw links, highlighting, conditional diagrams a
 	expect(response.headers.get("referrer-policy")).toBe("no-referrer");
 	expect(response.headers.get("x-content-type-options")).toBe("nosniff");
 	const body = await response.text();
-	expect(body).toContain("<h1>Guide</h1>");
+	expect(body).toContain(`<h1 id="guide">Guide</h1>`);
 	expect(body).toContain("<table>");
 	expect(body).toContain("hljs-keyword");
 	expect(body).toContain("/p/guide/index.md?raw=1");
