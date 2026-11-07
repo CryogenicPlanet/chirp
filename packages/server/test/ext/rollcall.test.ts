@@ -117,6 +117,9 @@ it("pings each announced agent, records its pong, and reminds an agent that miss
 			)
 		).status,
 	).toBe(200);
+	// The intended instance answers first and passes; a second instance answering afterwards still means shared.
+	await post(build, { topic: "agents", body: `pong ${buildNonce}`, meta: { reply_to: buildPing?.seq } }, "pong-build");
+	await fromBoard(build, (message) => message.body.includes("`codex/build` is listening"));
 	await post(
 		laptop,
 		{ topic: "agents", body: `pong ${buildNonce}`, meta: { reply_to: buildPing?.seq } },
@@ -156,6 +159,17 @@ it("pings each announced agent, records its pong, and reminds an agent that miss
 	await expect.poll(async () => (await checks(asked)).you?.status, { timeout: 15000 }).toBe("when_asked");
 	expect((await board(asked)).filter((message) => message.meta.reply_to === quiet.seq)).toEqual([]);
 	expect((await call(asked, "POST", "/api/rollcall/test", undefined, "phone-test")).status).toBe(409);
+
+	// A message that fails while its table is unavailable is retried, not skipped: the cursor stays on it.
+	await fixture.sql("ALTER TABLE rollcall_checks RENAME TO rollcall_checks_away");
+	const retried = await post(
+		laptop,
+		{ topic: "agents", body: "codex@laptop, @codex/laptop", tags: ["roll-call"] },
+		"announce-during-outage",
+	);
+	await new Promise((resolve) => setTimeout(resolve, 1500));
+	await fixture.sql("ALTER TABLE rollcall_checks_away RENAME TO rollcall_checks");
+	await fromBoard(laptop, (message) => message.meta.reply_to === retried.seq);
 
 	// Agents can test only themselves; the human can test anyone who announced.
 	const other = `/api/rollcall/test?agent=codex&instance=${encodeURIComponent((await checks(laptop)).you?.instance ?? "")}`;

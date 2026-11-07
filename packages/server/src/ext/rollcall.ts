@@ -157,13 +157,13 @@ const pong = (ctx: BackgroundContext, message: Message, nonce: string) =>
 			check.ping_seq === null ||
 			check.pinged_at === null ||
 			message.meta.reply_to !== check.ping_seq ||
-			message.agent !== check.agent ||
-			(check.status !== "pending" && check.status !== "no_answer")
+			message.agent !== check.agent
 		)
 			return;
 		const answeredBy = `${message.agent} ${message.instance}`;
+		// Another instance answering shows the mention is shared, even after the intended instance already passed.
 		if (message.instance !== check.instance) {
-			if (check.status !== "pending") return;
+			if (check.status === "shared" || check.status === "requested" || check.status === "when_asked") return;
 			yield* reply(
 				ctx,
 				message,
@@ -178,7 +178,9 @@ const pong = (ctx: BackgroundContext, message: Message, nonce: string) =>
 				answered_by: answeredBy,
 			});
 		}
-		const late = check.status === "no_answer" || message.created_at > check.deadline;
+		if (check.status !== "pending" && check.status !== "no_answer") return;
+		// Judge by when the pong was posted: after a backlog the sweep can mark a timely pong's check missed first.
+		const late = message.created_at > check.deadline;
 		const took = duration(message.created_at - check.pinged_at);
 		yield* reply(
 			ctx,
@@ -255,6 +257,7 @@ const run = (ctx: BackgroundContext) =>
 				const since = rows[0]?.seq ?? (yield* ctx.publicationFence).published_through;
 				const page = yield* ctx.messages.query({ since, limit: 64 });
 				let through = since;
+				let stopped = false;
 				for (const message of page.items) {
 					const handled = yield* handle(ctx, message).pipe(Effect.exit);
 					if (handled._tag === "Failure") {
@@ -262,12 +265,16 @@ const run = (ctx: BackgroundContext) =>
 						const count = (failures.get(message.seq) ?? 0) + 1;
 						failures.set(message.seq, count);
 						yield* ctx.log("rollcall.failed", { seq: message.seq, attempt: count, error: Cause.pretty(handled.cause) });
-						if (count < attempts) break;
+						if (count < attempts) {
+							stopped = true;
+							break;
+						}
 					}
 					failures.delete(message.seq);
 					through = message.seq;
 				}
-				if (through === since || page.items.at(-1)?.seq === through) through = Math.max(through, page.cursor);
+				// Only a fully handled page may move the cursor past its last message, to the page's considered-through.
+				if (!stopped) through = Math.max(through, page.cursor);
 				if (rows[0]?.seq !== through)
 					yield* ctx.mutate(
 						ctx.db`INSERT INTO rollcall_cursor(id,seq) VALUES(1,${through}) ${on(ctx.db, {
@@ -338,33 +345,49 @@ export default function rollcall(api: Api) {
 					const instance = typeof ctx.query.instance === "string" ? ctx.query.instance : undefined;
 					if ((agent !== undefined || instance !== undefined) && ctx.kind !== "human")
 						return failure(403, "rollcall_self_only", "Agents can only test themselves.", "Omit agent and instance.");
-					const check = yield* find(ctx, agent ?? ctx.agent, instance ?? ctx.instance);
-					if (!check)
-						return failure(
-							409,
-							"rollcall_not_announced",
-							"There is no roll-call announcement for this instance.",
-							"Post a roll-call announcement in the agents topic first, as /init describes.",
-						);
-					if (check.status === "when_asked")
-						return failure(
-							409,
-							"rollcall_when_asked",
-							"This instance announced that it answers only when asked, so there is no listener to test.",
-							"Announce again without the when-asked tag once it runs a listener.",
-						);
+					const who = { agent: agent ?? ctx.agent, instance: instance ?? ctx.instance };
 					const nonce = `rt${(yield* now).toString(36)}${(yield* Random.nextIntBetween(0, 36 ** 4)).toString(36)}`;
-					const next: Check = {
-						...check,
-						status: "requested",
-						nonce,
-						ping_seq: null,
-						pinged_at: null,
-						answered_at: null,
-						answered_by: null,
-					};
-					yield* transition(ctx, check, next);
-					return Response.json({ status: next.status, nonce, mention: next.mention }, { status: 202 });
+					// The background loop may move the check between this read and the conditional write; read again
+					// and retry a few times, and report a conflict rather than claim a re-test that was never stored.
+					for (let attempt = 0; attempt < 3; attempt++) {
+						const check = yield* find(ctx, who.agent, who.instance);
+						if (!check)
+							return failure(
+								409,
+								"rollcall_not_announced",
+								"There is no roll-call announcement for this instance.",
+								"Post a roll-call announcement in the agents topic first, as /init describes.",
+							);
+						if (check.status === "when_asked")
+							return failure(
+								409,
+								"rollcall_when_asked",
+								"This instance announced that it answers only when asked, so there is no listener to test.",
+								"Announce again without the when-asked tag once it runs a listener.",
+							);
+						yield* transition(ctx, check, {
+							...check,
+							status: "requested",
+							nonce,
+							ping_seq: null,
+							pinged_at: null,
+							answered_at: null,
+							answered_by: null,
+						});
+						if ((yield* find(ctx, who.agent, who.instance))?.nonce === nonce)
+							return Response.json({ status: "requested", nonce, mention: check.mention }, { status: 202 });
+					}
+					return Response.json(
+						{
+							error: {
+								code: "rollcall_busy",
+								message: "The roll call changed while this re-test was being queued.",
+								hint: "Retry the request.",
+								retriable: true,
+							},
+						},
+						{ status: 409 },
+					);
 				}),
 		});
 	});
