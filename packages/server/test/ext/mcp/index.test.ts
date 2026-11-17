@@ -359,6 +359,7 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 	expect(listedTools.map((tool) => tool.name)).toEqual([
 		"connection_info",
 		"search",
+		"grep",
 		"fetch",
 		"query_messages",
 		"read_topic",
@@ -408,6 +409,28 @@ it("serves extension-owned OAuth and stateless, scoped MCP tools", async (test) 
 		title: expect.stringContaining("Quarterly launch plan"),
 		url: `https://comms.test/?message=${seq}#message-${seq}`,
 	});
+	const grepped = await (
+		await call(reader.access, 3, "tools/call", {
+			name: "grep",
+			arguments: { pattern: "quarterly\\s+LAUNCH", ignore_case: true },
+		})
+	).json();
+	expect(grepped.result.structuredContent).toMatchObject({
+		matched: 1,
+		has_more: false,
+		matches: [
+			{
+				id: `message:${seq}`,
+				topic: "plans",
+				url: `https://comms.test/?message=${seq}#message-${seq}`,
+				matched_lines: 1,
+				lines: [{ line: 1, text: "Quarterly launch plan", match: true }],
+			},
+		],
+	});
+	expect(
+		(await (await call(reader.access, 3, "tools/call", { name: "grep", arguments: { pattern: "(" } })).json()).result,
+	).toMatchObject({ isError: true });
 	const fetched = await (
 		await call(reader.access, 4, "tools/call", { name: "fetch", arguments: { id: `message:${seq}` } })
 	).json();

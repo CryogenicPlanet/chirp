@@ -498,6 +498,7 @@ it("lets an existing connection request editing, keeps fs opt-in, and never bloc
 	for (const name of [
 		"connection_info",
 		"search",
+		"grep",
 		"fetch",
 		"query_messages",
 		"read_topic",
@@ -521,7 +522,7 @@ it("lets an existing connection request editing, keeps fs opt-in, and never bloc
 		"release_lock",
 	])
 		expect(hints[name], name).toEqual({ readOnlyHint: false, destructiveHint: true, openWorldHint: false });
-	expect(listed).toHaveLength(22);
+	expect(listed).toHaveLength(23);
 
 	expect((await tool("connection_info")).ok).toMatchObject({
 		posting_name: "existing-bot",

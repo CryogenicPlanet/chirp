@@ -3,6 +3,7 @@ import { Effect, Option, Schema } from "effect";
 import { HttpServerRequest } from "effect/unstable/http";
 import { policy } from "@comms/protocol/errors";
 import type { ManagedRequestContext } from "../../kernel/extension-api.ts";
+import type { Grep } from "../core/grep.ts";
 import {
 	asAgent,
 	type BoardReply,
@@ -16,6 +17,17 @@ import {
 const SearchInput = Schema.Struct({
 	query: Schema.String,
 	topic: Schema.optionalKey(Schema.String),
+	limit: Schema.optionalKey(Schema.Int),
+});
+const GrepToolInput = Schema.Struct({
+	pattern: Schema.String,
+	fixed: Schema.optionalKey(Schema.Boolean),
+	ignore_case: Schema.optionalKey(Schema.Boolean),
+	topic: Schema.optionalKey(Schema.String),
+	agent: Schema.optionalKey(Schema.String),
+	before: Schema.optionalKey(Schema.Int),
+	context: Schema.optionalKey(Schema.Int),
+	max_lines: Schema.optionalKey(Schema.Int),
 	limit: Schema.optionalKey(Schema.Int),
 });
 const FetchInput = Schema.Struct({ id: Schema.String });
@@ -263,6 +275,67 @@ export const tools = Object.freeze([
 			},
 			required: ["results"],
 			additionalProperties: false,
+		},
+		annotations: reading,
+	},
+	{
+		name: "grep",
+		title: "Grep chirp messages",
+		description:
+			"Regex search over published message bodies, like ripgrep: each line is matched on its own and messages come back newest first with their matching lines, line numbers and optional context. Exact and predictable, with no stemming or ranking: write variants or alternations (colou?r, lists?) yourself. Smart case unless ignore_case is set; fixed matches literally. When has_more is true, pass next_before as before to continue.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				pattern: {
+					type: "string",
+					minLength: 1,
+					maxLength: 500,
+					description: "JavaScript regex (Unicode mode), matched per line.",
+				},
+				fixed: { type: "boolean", description: "Match pattern as literal text." },
+				ignore_case: { type: "boolean", description: "Force case-insensitive (true) or sensitive (false)." },
+				topic: { type: "string", description: "Limit to this topic and its subtopics." },
+				agent: { type: "string", description: "Only messages by this agent name." },
+				before: { type: "integer", minimum: 1, description: "Only messages older than this sequence." },
+				context: { type: "integer", minimum: 0, maximum: 5, default: 0, description: "Lines around each match." },
+				max_lines: {
+					type: "integer",
+					minimum: 1,
+					maximum: 20,
+					default: 5,
+					description: "Matching lines shown per message.",
+				},
+				limit: { type: "integer", minimum: 1, maximum: 100, default: 20 },
+			},
+			required: ["pattern"],
+			additionalProperties: false,
+		},
+		outputSchema: {
+			type: "object",
+			properties: {
+				matches: {
+					type: "array",
+					items: {
+						type: "object",
+						properties: {
+							id: { type: "string" },
+							topic: { type: "string" },
+							agent: { type: "string" },
+							created_at: { type: "number" },
+							url: { type: "string" },
+							matched_lines: { type: "integer" },
+							lines: { type: "array", items: { type: "object" } },
+						},
+						required: ["id", "topic", "agent", "created_at", "url", "matched_lines", "lines"],
+					},
+				},
+				matched: { type: "integer" },
+				scanned: { type: "integer" },
+				has_more: { type: "boolean" },
+				next_before: { type: "integer" },
+				warning: { type: "string" },
+			},
+			required: ["matches", "matched", "scanned", "has_more"],
 		},
 		annotations: reading,
 	},
@@ -527,6 +600,7 @@ export const callTool = (
 	connection: Connection,
 	caller: Caller,
 	input: typeof ToolCall.Type,
+	grep: Grep,
 ) =>
 	Effect.gen(function* () {
 		if (input.name === "post_message") {
@@ -646,6 +720,28 @@ export const callTool = (
 					url: messageUrl(origin, message.seq),
 				})),
 			});
+		}
+		if (input.name === "grep") {
+			const args = decode(GrepToolInput, input.arguments ?? {});
+			if (Option.isNone(args)) return toolError("input_invalid", "pattern is required; see the tool's input schema");
+			const { ignore_case, max_lines, ...rest } = args.value;
+			return yield* grep(ctx, {
+				...rest,
+				...(ignore_case === undefined ? {} : { ignoreCase: ignore_case }),
+				...(max_lines === undefined ? {} : { maxLines: max_lines }),
+			}).pipe(
+				Effect.map((result) =>
+					toolResult({
+						...result,
+						matches: result.matches.map(({ seq, ...hit }) => ({
+							id: `message:${seq}`,
+							...hit,
+							url: messageUrl(origin, seq),
+						})),
+					}),
+				),
+				Effect.catchTag("GrepRefused", (error) => Effect.succeed(toolError(error.code, error.message))),
+			);
 		}
 		if (input.name === "fetch") {
 			const args = decode(FetchInput, input.arguments ?? {});

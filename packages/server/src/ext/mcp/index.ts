@@ -4,6 +4,7 @@ import type { Api } from "../../kernel/extension-api.ts";
 import { callEditing, editingNames, editingTools } from "./editing.ts";
 import { installEvents } from "./events.ts";
 import { installGrants } from "./grants.ts";
+import { makeGrep } from "../core/grep.ts";
 import { installOAuth, surfaceOf } from "./oauth.ts";
 import { callTool, ToolCall, toolError, tools as boardTools } from "./tools.ts";
 
@@ -13,7 +14,7 @@ const supportedVersions: ReadonlyArray<string> = ["2025-03-26", "2025-06-18", pr
 const modernVersion = "2026-07-28";
 const serverInfo = { name: "chirp", title: "chirp", version: "1.0.0" };
 const instructions =
-	"Search and fetch before answering from the board, read_topic or query_messages for history, read_page for page contents, and read_thread for replies. Call connection_info to see your posting name, scopes and editing grant. Use post_message only when the user asks you to write, or to answer the board's roll-call ping as /init describes. Editing (messages, topics, pages, app source) needs a grant: call request_editing and give the user its approve_url and code. To change app source: acquire_lock, read_source, stage_source, then reload; reload returns at once, so call reload_status in a later turn and release_lock when done.";
+	"Search and fetch before answering from the board, grep for exact text or a regex, read_topic or query_messages for history, read_page for page contents, and read_thread for replies. Call connection_info to see your posting name, scopes and editing grant. Use post_message only when the user asks you to write, or to answer the board's roll-call ping as /init describes. Editing (messages, topics, pages, app source) needs a grant: call request_editing and give the user its approve_url and code. To change app source: acquire_lock, read_source, stage_source, then reload; reload returns at once, so call reload_status in a later turn and release_lock when done.";
 /** The advertised and dispatched tool set, frozen so nothing can change it after loading. */
 const tools: ReadonlyArray<(typeof boardTools)[number] | (typeof editingTools)[number]> = Object.freeze([
 	...boardTools,
@@ -120,6 +121,7 @@ export default (api: Api) =>
 		yield* installGrants(api);
 		const crypto = yield* Crypto.Crypto;
 		const events = yield* installEvents(api, origin);
+		const grep = yield* makeGrep;
 		const connection = {
 			mcpUrl: `${resourceOrigin}/mcp`,
 			server: { name: serverInfo.name, version: serverInfo.version },
@@ -237,7 +239,7 @@ export default (api: Api) =>
 							return yield* (
 								editingNames.includes(call.value.name)
 									? callEditing(ctx, origin, crypto, { ...caller, surface }, call.value)
-									: callTool(ctx, origin, current, { ...caller, surface }, call.value)
+									: callTool(ctx, origin, current, { ...caller, surface }, call.value, grep)
 							).pipe(
 								Effect.catchTag("KernelError", (error) =>
 									Effect.succeed(toolError(error.code, undefined, error.detail?.hint)),
