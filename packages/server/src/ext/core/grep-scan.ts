@@ -68,19 +68,23 @@ export const scan = (job: typeof GrepJob.Type): typeof GrepScan.Type => {
 	const { rows, options } = job;
 	const matcher = compile(options.pattern, options.fixed, options.ignoreCase);
 	if (typeof matcher === "string") return { ok: false, error: matcher };
-	const timed = (text: string) => {
-		const started = performance.now();
-		const found = matcher.test(text);
-		return { found, slow: performance.now() - started > slowLineMs };
-	};
-	const scanned = rows.map((row) => {
-		const lines = row.body.split(/\r?\n/);
-		const tests = lines.map(timed);
-		return { row, lines, tests };
-	});
-	const hits = scanned.flatMap(({ row, lines, tests }) => {
-		const matched = tests.flatMap((test, index) => (test.found ? [index] : []));
-		if (matched.length === 0) return [];
+	// One message at a time: only counts and the first `limit` formatted hits are kept.
+	const hits: Array<typeof GrepHit.Type> = [];
+	let total = 0,
+		slow = false;
+	for (const row of rows) {
+		const parts = row.body.split(/\r?\n/);
+		// As in ripgrep, a final newline ends the last line rather than starting an empty one.
+		const lines = parts.length > 1 && parts.at(-1) === "" ? parts.slice(0, -1) : parts;
+		const matched = lines.flatMap((text, index) => {
+			const started = performance.now();
+			const found = matcher.test(text);
+			if (performance.now() - started > slowLineMs) slow = true;
+			return found ? [index] : [];
+		});
+		if (matched.length === 0) continue;
+		total += 1;
+		if (hits.length >= options.limit) continue;
 		const shown = new Set(
 			matched
 				.slice(0, options.maxLines)
@@ -90,26 +94,19 @@ export const scan = (job: typeof GrepJob.Type): typeof GrepScan.Type => {
 				.filter((index) => index >= 0 && index < lines.length),
 		);
 		const matches = new Set(matched);
-		return [
-			{
-				seq: row.seq,
-				topic: row.topic,
-				agent: row.agent,
-				created_at: row.created_at,
-				matched_lines: matched.length,
-				lines: [...shown]
-					.sort((a, b) => a - b)
-					.map((index) => {
-						const text = lines[index] ?? "";
-						return { line: index + 1, text: clip(text, Math.max(0, text.search(matcher))), match: matches.has(index) };
-					}),
-			},
-		];
-	});
-	return {
-		ok: true,
-		hits: hits.slice(0, options.limit),
-		total: hits.length,
-		slow: scanned.some(({ tests }) => tests.some((test) => test.slow)),
-	};
+		hits.push({
+			seq: row.seq,
+			topic: row.topic,
+			agent: row.agent,
+			created_at: row.created_at,
+			matched_lines: matched.length,
+			lines: [...shown]
+				.sort((left, right) => left - right)
+				.map((index) => {
+					const text = lines[index] ?? "";
+					return { line: index + 1, text: clip(text, Math.max(0, text.search(matcher))), match: matches.has(index) };
+				}),
+		});
+	}
+	return { ok: true, hits, total, slow };
 };

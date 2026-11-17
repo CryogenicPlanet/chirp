@@ -70,9 +70,21 @@ it("uses smart case like ripgrep: uppercase letters count, regex syntax does not
 	expect(smartCase("\\p{Lu}x", false)).toBe(true);
 	expect(smartCase("(?<Name>x)\\k<Name>", false)).toBe(true);
 	expect(smartCase("\\S", true)).toBe(false);
+	expect(smartCase("\\u006A", false)).toBe(true);
+	expect(smartCase("\\u004A", false)).toBe(false);
+	expect(smartCase("\\u{6a}\\x41", false)).toBe(false);
 	const insensitive = scan({
 		rows: [row(1, "Reading List")],
 		options: { ...options, pattern: "reading list", ignoreCase: true },
 	});
 	expect(insensitive).toMatchObject({ total: 1 });
+});
+
+it("ends the last line at a final newline, as ripgrep does, and keeps real empty lines", () => {
+	const empty = { ...options, pattern: "^$" };
+	expect(scan({ rows: [row(1, "hello\n")], options: empty })).toMatchObject({ total: 0 });
+	expect(scan({ rows: [row(1, "hello\n\n")], options: empty })).toMatchObject({
+		total: 1,
+		hits: [{ matched_lines: 1, lines: [{ line: 2, text: "", match: true }] }],
+	});
 });

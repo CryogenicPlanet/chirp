@@ -94,7 +94,10 @@ it("greps published bodies newest first, follows edits and deletes, pages, and s
 	// The app runs from this fixture's data directory, so its path names only this board's scan processes.
 	const workers = await promisify(execFile)("pgrep", ["-f", `${fixture.root}/.*grep-worker`]).then(
 		({ stdout }) => stdout.trim(),
-		() => "",
+		(error: unknown) => {
+			if (error instanceof Error && "code" in error && error.code === 1) return "";
+			throw error;
+		},
 	);
 	expect(workers).toBe("");
 

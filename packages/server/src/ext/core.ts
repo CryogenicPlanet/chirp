@@ -5,7 +5,7 @@ import { makeGrep, type GrepInput } from "./core/grep.ts";
 import { layer as pagesLayer } from "./core/pages.ts";
 import type { Api } from "../kernel/extension-api.ts";
 
-const grepParameters = new Set([
+const grepParameters: ReadonlyArray<string> = [
 	"pattern",
 	"fixed",
 	"ignore_case",
@@ -15,7 +15,7 @@ const grepParameters = new Set([
 	"context",
 	"max_lines",
 	"limit",
-]);
+];
 const integer = (value: string | undefined) =>
 	value === undefined ? undefined : /^\d{1,16}$/.test(value) ? Number(value) : -1;
 const flag = (value: string | undefined) =>
@@ -53,7 +53,7 @@ export default (api: Api) =>
 					const refused = (code: keyof typeof hints, message: string) =>
 						Response.json({ error: { code, message, hint: hints[code], retriable: false } }, { status: 400 });
 					if (
-						entries.some(([name, value]) => !grepParameters.has(name) || typeof value !== "string") ||
+						entries.some(([name, value]) => !grepParameters.includes(name) || typeof value !== "string") ||
 						fixed === null ||
 						ignoreCase === null
 					)

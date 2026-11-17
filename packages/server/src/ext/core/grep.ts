@@ -56,7 +56,20 @@ const within = (value: number | undefined, fallback: number, low: number, high: 
 
 /** ripgrep's smart case: escapes, property classes and group names are syntax, not letters the user typed. */
 export const smartCase = (pattern: string, fixed: boolean) =>
-	!/\p{Lu}/u.test(fixed ? pattern : pattern.replace(/\\[pPk]\{[^}]*\}|\\k<[^>]*>|\(\?<[A-Za-z_]\w*>|\\./gu, ""));
+	!/\p{Lu}/u.test(
+		fixed
+			? pattern
+			: pattern
+					// A code point escape stands for its character: \u006A is j, \u004A is J.
+					.replace(
+						/\\u\{([0-9a-fA-F]{1,6})\}|\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})/gu,
+						(escape, braced, unicode, hex) => {
+							const code = Number.parseInt(String(braced ?? unicode ?? hex), 16);
+							return code <= 0x10ffff ? String.fromCodePoint(code) : escape;
+						},
+					)
+					.replace(/\\[pPk]\{[^}]*\}|\\k<[^>]*>|\(\?<[A-Za-z_]\w*>|\\./gu, ""),
+	);
 
 /** Newest-first pages, each its own short snapshot, until the window is full or history ends. */
 const collect = (ctx: GrepContext, input: GrepInput, before: number) =>
